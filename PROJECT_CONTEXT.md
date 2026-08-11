@@ -16,7 +16,7 @@ exist only for authentication. Do not claim that applications, stalls, files,
 or other workflows are already persisted to MySQL. `database.md` is the
 future Supabase/PostgreSQL reference, not the running backend.
 
-## Current session progress (2026-08-10)
+## Current session progress (2026-08-12)
 
 - Added the temporary Express/MySQL authentication service under `server/`.
   It implements login, vendor registration, session lookup, logout, bcrypt
@@ -44,6 +44,29 @@ future Supabase/PostgreSQL reference, not the running backend.
   Workbench, copy the project, configure that device's local API and frontend
   env files, then run its own MySQL/API/Vite processes. This produces an
   independent local database copy, not synchronization.
+- Registration now includes a required Terms and Agreement section on
+  `src/app/pages/Register.tsx`. The tenant rules are rendered from
+  `src/app/content/tenantTerms.ts`, and account creation is blocked until the
+  user accepts them.
+- Signup feedback was improved in `Register.tsx`: validation now scrolls to
+  the first blocking field and surfaces clearer visible error messages instead
+  of failing silently when a required field or agreement checkbox is missed.
+- The vendor contract print view in `src/app/components/ContractModal.tsx`
+  was reworked into a formal multi-page lease layout based directly on the
+  scanned contract pages provided during this session. The current template is
+  intentionally aligned to the supplied page images rather than the previous
+  modern card-style document.
+- Vendor contract actions on `src/app/pages/UserDashboard.tsx` were adjusted
+  so that contract termination now opens a choice modal asking whether the
+  vendor wants to transfer the contract or terminate it outright. The old
+  separate transfer entry point in that dashboard flow was removed in favor of
+  this combined decision step.
+- Contract transfer email lookup no longer depends on legacy browser
+  `localStorage` users. A new backend route,
+  `GET /api/auth/users/by-email`, was added in `server/src/index.js`, and the
+  transfer flows in `UserDashboard.tsx` and `ApplicationDetails.tsx` now use
+  `findUserByEmail()` from `src/app/services/api.ts` so existing MySQL-backed
+  accounts can be found correctly.
 
 ## 2. Architecture
 
@@ -223,6 +246,7 @@ Only these API endpoints exist:
 | `POST /api/auth/login` | none | `{email,password}`; bcrypt-compare `profiles.password_hash`; 401 invalid; returns `{profile}` and sets JWT cookie |
 | `POST /api/auth/register` | none | vendor name/email/password/phone/address; validates required values/minimum password; 201 profile, 409 duplicate email |
 | `GET /api/auth/me` | JWT cookie | returns current profile; 401 missing/invalid/account absent |
+| `GET /api/auth/users/by-email?email=...` | JWT cookie | returns a matching profile for transfer lookup; 404 if no account exists |
 | `POST /api/auth/logout` | none | clears cookie and returns `{ok:true}` |
 
 `api.ts` uses `fetch` with `credentials: "include"`, JSON bodies, and a
@@ -273,9 +297,9 @@ Super-admin → dashboard tabs → users, map/perimeter, inventory, analytics/ar
 | File | Function and visual/UI notes |
 |---|---|
 | `pages/Login.tsx` | two-column teal brand card on large screens, single form on mobile; email/password, show-password, API errors, mock disabled Google button, demo-fill pills, guest/register links |
-| `pages/Register.tsx` | matching responsive teal/auth layout; field-level name/email/PH-phone/address/password validation; calls API, then redirect dashboard or selected stall |
+| `pages/Register.tsx` | matching responsive teal/auth layout; field-level name/email/PH-phone/address/password validation; required tenant-terms agreement; improved error focus/visibility; calls API, then redirect dashboard or selected stall |
 | `pages/GuestMapView.tsx` | public Leaflet map of legacy drawn stalls; right-side detail/registration prompt |
-| `pages/UserDashboard.tsx` | vendor mobile-first dashboard: welcome/stats, applications/notices/map tab and unread decision derivation |
+| `pages/UserDashboard.tsx` | vendor mobile-first dashboard: welcome/stats, applications/notices/map tab, unread decision derivation, and combined transfer-vs-termination contract action flow |
 | `pages/UserMapDashboard.tsx` | authenticated vendor map; colors from user application and global occupancy; stall selection/apply CTA |
 | `pages/ApplicationForm.tsx` | vendor application form, contract-date calculation, duplicate active-application guard, file metadata only |
 | `pages/ApplicationDetails.tsx` | phone-width detail view, status timeline/permit actions/withdraw and transfer/termination affordances |
@@ -293,7 +317,7 @@ Super-admin → dashboard tabs → users, map/perimeter, inventory, analytics/ar
 | `components/OfficerMapView.tsx` | map/selected-stall inspection and evidence workflow |
 | `components/AdminCheckRequestMap.tsx` | map-based inspection-request creation |
 | `components/SuperAdminMapEditor.tsx` | perimeter drawing/editing |
-| `components/StallManagementPanel.tsx` | stall management panel/contract modal; `ContractModal.tsx` supports printing |
+| `components/StallManagementPanel.tsx` | stall management panel/contract modal; `ContractModal.tsx` supports formal multi-page lease printing |
 | `components/FloorSwitcher.tsx` | two-floor segmented selector/counts |
 | `components/ProtectedRoute.tsx` | client role guard |
 | `components/Toast.tsx` | event-driven bottom-right 4-second toast stack |

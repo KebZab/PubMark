@@ -6,11 +6,10 @@ import {
   ChevronLeft, ArrowRightLeft, Store,
 } from "lucide-react";
 import {
-  saveStoredApplication,
-  updateApplicationStatus,
   addMonths,
   formatFileSize,
 } from "../components/applicationsStorage";
+import { createApplication, updateApplicationStatus as updateApplicationStatusApi } from "../services/applicationsApi";
 import { getSession, getUserById } from "../components/authStorage";
 import { updateTransferStatus, getTransferById } from "../components/transferStorage";
 import { showToast } from "../components/Toast";
@@ -102,50 +101,55 @@ export function TransferAcceptForm() {
   const contractEndPreview = startDate ? addMonths(startDate, parseInt(termMonths)) : null;
   const canSubmit = businessName.trim() && businessType && applicantAddress.trim() && startDate && !submitting;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit || !session) return;
 
     setSubmitting(true);
 
-    const contractEnd = addMonths(startDate, parseInt(termMonths));
-    const transferNote = `[Transfer] Transferred from ${transfer.fromUserName} (${transfer.fromUserEmail}). Original application: ${transfer.originalApplicationId}`;
+    try {
+      const contractEnd = addMonths(startDate, parseInt(termMonths));
+      const transferNote = `[Transfer] Transferred from ${transfer.fromUserName} (${transfer.fromUserEmail}). Original application: ${transfer.originalApplicationId}`;
 
-    // Create new application for the new owner
-    const saved = saveStoredApplication({
-      userId: session.userId,
-      stallId: transfer.stallId,
-      stallName: transfer.stallName,
-      stallSection: transfer.stallSection,
-      floorArea: transfer.floorArea,
-      applicantName: session.name,
-      applicantEmail: session.email,
-      applicantAddress: applicantAddress.trim(),
-      businessName: businessName.trim(),
-      businessType,
-      contractStart: startDate,
-      contractTermMonths: termMonths,
-      contractEnd,
-      permitFileName: permitFile?.name ?? null,
-      permitFileSize: permitFile ? formatFileSize(permitFile.size) : null,
-      additionalFileName: additionalFile?.name ?? null,
-      additionalFileSize: additionalFile ? formatFileSize(additionalFile.size) : null,
-      notes: notes ? `${notes}\n\n${transferNote}` : transferNote,
-    });
+      // Create new application for the new owner via API
+      const newApplication = await createApplication({
+        userId: session.userId,
+        stallId: transfer.stallId,
+        stallName: transfer.stallName,
+        stallSection: transfer.stallSection,
+        floorArea: transfer.floorArea,
+        applicantName: session.name,
+        applicantEmail: session.email,
+        applicantAddress: applicantAddress.trim(),
+        businessName: businessName.trim(),
+        businessType,
+        contractStart: startDate,
+        contractTermMonths: termMonths,
+        contractEnd,
+        permitFileName: permitFile?.name ?? null,
+        permitFileSize: permitFile ? formatFileSize(permitFile.size) : null,
+        additionalFileName: additionalFile?.name ?? null,
+        additionalFileSize: additionalFile ? formatFileSize(additionalFile.size) : null,
+        notes: notes ? `${notes}\n\n${transferNote}` : transferNote,
+      });
 
-    // Reject the original owner's application
-    updateApplicationStatus(
-      transfer.originalApplicationId,
-      "rejected",
-      `Ownership transferred to ${session.name} (${session.email}) on ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}.`
-    );
+      // Reject the original owner's application via API
+      await updateApplicationStatusApi(
+        transfer.originalApplicationId,
+        "rejected",
+        `Ownership transferred to ${session.name} (${session.email}) on ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}.`
+      );
 
-    // Mark transfer as accepted
-    updateTransferStatus(transfer.id, "accepted");
+      // Mark transfer as accepted (still localStorage for now, transfers domain not yet migrated)
+      updateTransferStatus(transfer.id, "accepted");
 
-    setSubmitting(false);
-    showToast("Transfer accepted! Your application is now pending admin review.", "success");
-    navigate(`/applications/${saved.id}`);
+      showToast("Transfer accepted! Your application is now pending admin review.", "success");
+      navigate(`/applications/${newApplication.id}`);
+    } catch (error) {
+      showToast(`Transfer failed: ${(error as Error).message}`, "error");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (

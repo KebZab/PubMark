@@ -46,4 +46,9 @@ export async function getCurrentProfile() {
   return apiFetch<{ profile: ApiProfile }>("/auth/me");
 }
 
+export async function findUserByEmail(email: string) {
+  const query = new URLSearchParams({ email: email.trim().toLowerCase() });
+  return apiFetch<{ profile: ApiProfile }>(`/auth/users/by-email?${query.toString()}`);
+}
+
 export { apiFetch };

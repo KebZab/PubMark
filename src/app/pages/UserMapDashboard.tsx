@@ -4,8 +4,9 @@ import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { MapPin, Store, X, ChevronLeft, ChevronRight, User, Clock, CheckCircle, AlertTriangle, Flag } from "lucide-react";
-import { getStoredStalls, type StoredStall } from "../components/stallsStorage";
-import { getStoredApplications, type StoredApplication } from "../components/applicationsStorage";
+import { useStalls, type Stall } from "../hooks/useStalls";
+import { useApplications } from "../hooks/useApplications";
+import { type Application } from "../services/applicationsApi";
 import { getSession } from "../components/authStorage";
 import { saveViolation, type ViolationCategory } from "../components/violationsStore";
 import { showToast } from "../components/Toast";
@@ -35,7 +36,7 @@ function getGeometryCentroid(geometry: any): [number, number] | null {
 }
 
 // Returns the most recent non-rejected application for a stall, if any
-function getActiveApp(stallId: string, applications: StoredApplication[]): StoredApplication | null {
+function getActiveApp(stallId: string, applications: Application[]): Application | null {
   return (
     applications
       .filter((a) => a.stallId === stallId && a.status !== "rejected")
@@ -44,7 +45,7 @@ function getActiveApp(stallId: string, applications: StoredApplication[]): Store
 }
 
 // userApp = current user's app, globalOccupied = approved by anyone
-function stallStyle(userApp: StoredApplication | null, globalOccupied: boolean, isSelected: boolean) {
+function stallStyle(userApp: Application | null, globalOccupied: boolean, isSelected: boolean) {
   if (userApp?.status === "approved") {
     return { color: isSelected ? "#4338ca" : "#6366f1", fillColor: isSelected ? "#4338ca" : "#6366f1", weight: isSelected ? 3 : 2, fillOpacity: isSelected ? 0.4 : 0.25 };
   }
@@ -57,7 +58,7 @@ function stallStyle(userApp: StoredApplication | null, globalOccupied: boolean, 
   return { color: isSelected ? "#0d9488" : "#14B8A6", fillColor: isSelected ? "#0d9488" : "#14B8A6", weight: isSelected ? 3 : 2, fillOpacity: isSelected ? 0.35 : 0.2 };
 }
 
-function stallTooltipLabel(stall: StoredStall, userApp: StoredApplication | null, globalOccupied: boolean) {
+function stallTooltipLabel(stall: Stall, userApp: Application | null, globalOccupied: boolean) {
   if (userApp?.status === "approved") return `<strong>${stall.stall_name}</strong> · Your stall`;
   if (userApp?.status === "pending") return `<strong>${stall.stall_name}</strong> · Your application pending`;
   if (globalOccupied) return `<strong>${stall.stall_name}</strong> · Occupied`;
@@ -72,11 +73,11 @@ function DrawnStallsLayer({
   selectedId,
   onSelect,
 }: {
-  stalls: StoredStall[];
-  userApplications: StoredApplication[];
-  allApplications: StoredApplication[];
+  stalls: Stall[];
+  userApplications: Application[];
+  allApplications: Application[];
   selectedId: string | null;
-  onSelect: (stall: StoredStall) => void;
+  onSelect: (stall: Stall) => void;
 }) {
   const map = useMap();
 
@@ -122,11 +123,10 @@ function FlyTo({ position }: { position: [number, number] | null }) {
 // ── Main component ────────────────────────────────────────────────────────────
 export function UserMapDashboard() {
   const navigate = useNavigate();
-  const [selected, setSelected] = useState<StoredStall | null>(null);
+  const { stalls: storedStalls } = useStalls();
+  const { applications: allApplications } = useApplications();
+  const [selected, setSelected] = useState<Stall | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [storedStalls, setStoredStalls] = useState<StoredStall[]>([]);
-  const [userApplications, setUserApplications] = useState<StoredApplication[]>([]);
-  const [allApplications, setAllApplications] = useState<StoredApplication[]>([]);
   const [flyTarget, setFlyTarget] = useState<[number, number] | null>(null);
   const [activeFloor, setActiveFloor] = useState<"1" | "2">("1");
   const [showReportModal, setShowReportModal] = useState(false);
@@ -135,12 +135,11 @@ export function UserMapDashboard() {
 
   useEffect(() => {
     const session = getSession();
-    if (!session || session.role !== "vendor" && (session.role as string) !== "user") { navigate("/", { replace: true }); return; }
-    const allApps = getStoredApplications();
-    setStoredStalls(getStoredStalls());
-    setAllApplications(allApps);
-    setUserApplications(allApps.filter((a) => a.userId === session.userId));
+    if (!session || session.role !== "vendor" && (session.role as string) !== "user") { navigate("/", { replace: true }); }
   }, [navigate]);
+
+  const session = getSession();
+  const userApplications = session ? allApplications.filter((a) => a.userId === session.userId) : [];
 
   // Filter stalls by active floor
   const floorStalls = storedStalls.filter((s) => s.floor === activeFloor);
@@ -178,7 +177,7 @@ export function UserMapDashboard() {
       })
     : floorStalls;
 
-  const handleSelectStall = (stall: StoredStall) => {
+  const handleSelectStall = (stall: Stall) => {
     if (selected?.id === stall.id) { setSelected(null); return; }
     setSelected(stall);
     const center = getGeometryCentroid(stall.geometry);

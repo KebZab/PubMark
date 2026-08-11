@@ -5,11 +5,11 @@ import {
   Building2, User, ScrollText, CheckCircle, XCircle,
   AlertCircle, Check, X, Printer,
 } from "lucide-react";
-import {
-  getApplicationById, updateApplicationStatus,
-} from "../components/applicationsStorage";
+import { useApplications } from "../hooks/useApplications";
+import { updateApplicationStatus, type Application } from "../services/applicationsApi";
 import { ContractModal, type ContractData } from "../components/ContractModal";
 import { getSession } from "../components/authStorage";
+import { showToast } from "../components/Toast";
 
 function StatusBanner({ status }: { status: "pending" | "approved" | "rejected" }) {
   if (status === "pending") {
@@ -54,9 +54,10 @@ function StatusBanner({ status }: { status: "pending" | "approved" | "rejected" 
 export function AdminApplicationDetails() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
-  const [app, setApp] = useState(() => (id ? getApplicationById(id) : null));
+  const { applications, refetch } = useApplications();
+  const app = id ? applications.find(a => a.id === id) : null;
   const [remarksInput, setRemarksInput] = useState(app?.adminRemarks ?? "");
-  const [contractApp, setContractApp] = useState<typeof app>(null);
+  const [contractApp, setContractApp] = useState<Application | null>(null);
 
   useEffect(() => {
     const session = getSession();
@@ -86,15 +87,27 @@ export function AdminApplicationDetails() {
   const dateApplied = new Date(app.dateApplied);
   const termLabel = { "6": "6 Months", "12": "1 Year", "24": "2 Years", "36": "3 Years" }[app.contractTermMonths] ?? `${app.contractTermMonths} months`;
 
-  function handleApprove() {
-    const updated = updateApplicationStatus(app!.id, "approved", remarksInput || undefined);
-    if (updated) setApp(updated);
-  }
+  const handleApprove = async () => {
+    if (!app) return;
+    try {
+      await updateApplicationStatus(app.id, "approved", remarksInput || undefined);
+      await refetch();
+      showToast("Application approved.", "success");
+    } catch (error) {
+      showToast(`Failed to approve application: ${(error as Error).message}`, "error");
+    }
+  };
 
-  function handleReject() {
-    const updated = updateApplicationStatus(app!.id, "rejected", remarksInput || undefined);
-    if (updated) setApp(updated);
-  }
+  const handleReject = async () => {
+    if (!app) return;
+    try {
+      await updateApplicationStatus(app.id, "rejected", remarksInput || undefined);
+      await refetch();
+      showToast("Application rejected.", "error");
+    } catch (error) {
+      showToast(`Failed to reject application: ${(error as Error).message}`, "error");
+    }
+  };
 
   function buildContract(): ContractData {
     return {

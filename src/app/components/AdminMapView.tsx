@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -11,20 +11,34 @@ import {
   ScrollText, User, Clock, AlertTriangle, CheckCircle, Layers,
 } from "lucide-react";
 import { FloorSwitcher } from "./FloorSwitcher";
-import {
-  getStoredStalls, saveStoredStall, deleteStoredStall,
-  updateStoredStallGeometry, updateStoredStall, type StoredStall,
-} from "./stallsStorage";
-import { getStoredApplications, type StoredApplication } from "./applicationsStorage";
-import { getPerimeter } from "./perimeterStore";
+import { useStalls } from "../hooks/useStalls";
+import { useApplications } from "../hooks/useApplications";
+import { usePerimeter } from "../hooks/usePerimeter";
+import { createStall, updateStall, updateStallGeometry, deleteStall, deleteStalls, type Stall } from "../services/stallsApi";
+import { type StoredStall } from "./stallsStorage";
+import { type Application } from "../services/applicationsApi";
 import { showToast } from "./Toast";
 
-function getActiveApp(stallId: string, applications: StoredApplication[]): StoredApplication | null {
+function getActiveApp(stallId: string, applications: Application[]): Application | null {
   return (
     applications
       .filter((a) => a.stallId === stallId && a.status !== "rejected")
       .sort((a, b) => new Date(b.dateApplied).getTime() - new Date(a.dateApplied).getTime())[0] ?? null
   );
+}
+
+function calculatePolygonArea(geometry: GeoJSON.Geometry): number {
+  if (geometry.type !== "Polygon") return 0;
+  const coords = geometry.coordinates[0];
+  let area = 0;
+  for (let i = 0; i < coords.length - 1; i++) {
+    const p1 = L.latLng(coords[i][1], coords[i][0]);
+    const p2 = L.latLng(coords[i + 1][1], coords[i + 1][0]);
+    const dx = p2.lng - p1.lng;
+    const dy = p2.lat - p1.lat;
+    area += p1.lng * p2.lat - p2.lng * p1.lat;
+  }
+  return Math.abs(area) * 40075000 * 40075000 / (360 * 360) / 2; // sq meters
 }
 
 // ── CSS ──────────────────────────────────────────────────────────────────────
@@ -77,12 +91,13 @@ interface DrawControlAPI {
 }
 
 function DrawControl({
-  initialStalls, apiRef,
+  initialStalls, apiRef, applications,
   onCreated, onEdited, onDeleted, onSelectStall,
   onToolbarHidden, onEditModeStop,
 }: {
   initialStalls: StoredStall[];
   apiRef: React.MutableRefObject<DrawControlAPI | null>;
+  applications: Application[];
   onCreated: (layer: L.Layer) => void;
   onEdited: (updates: Array<{ id: string; geometry: object }>) => void;
   onDeleted: (ids: string[]) => void;
@@ -139,7 +154,7 @@ function DrawControl({
           position: "topleft",
           draw: {
             rectangle: { shapeOptions: SHAPE_OPTS },
-            polygon: { allowIntersection: false, showArea: false, shapeOptions: SHAPE_OPTS },
+            polygon: { allowIntersection: false, showArea: true, shapeOptions: SHAPE_OPTS },
             polyline: false, marker: false, circle: false, circlemarker: false,
           },
           edit: { featureGroup: fg },
@@ -158,14 +173,14 @@ function DrawControl({
     }
 
     function stallColor(stallId: string): string {
-      const app = getActiveApp(stallId, getStoredApplications());
+      const app = getActiveApp(stallId, applications);
       if (app?.status === "approved") return "#ef4444";
       if (app?.status === "pending") return "#f59e0b";
       return "#22c55e";
     }
 
     function stallTooltip(stall: StoredStall): string {
-      const app = getActiveApp(stall.id, getStoredApplications());
+      const app = getActiveApp(stall.id, applications);
       if (app?.status === "approved") return `<strong>${stall.stall_name}</strong> · ${app.businessName} (Occupied)`;
       if (app?.status === "pending") return `<strong>${stall.stall_name}</strong> · ${app.businessName} (Pending)`;
       return `<strong>${stall.stall_name}</strong> · Vacant`;
@@ -263,7 +278,7 @@ function DrawControl({
       map.removeLayer(fg);
       apiRef.current = null;
     };
-  }, [map]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [map, applications, initialStalls]);
 
   return null;
 }
@@ -285,7 +300,7 @@ function StallContractModal({
   stall, app, onClose,
 }: {
   stall: StoredStall;
-  app: StoredApplication;
+  app: Application;
   onClose: () => void;
 }) {
   const days = app.status === "approved" ? daysUntilExpiry(app.contractEnd) : null;
@@ -527,21 +542,10 @@ function StallForm({ title, subtitle, initialValues, defaultFloor, onSave, onCan
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Floor Area</label>
-              <div className="flex gap-1 mb-1.5">
-                {[{ label: "S", value: "10 sqm", title: "Small – 10 sqm" }, { label: "M", value: "25 sqm", title: "Medium – 25 sqm" }, { label: "L", value: "50 sqm", title: "Large – 50 sqm" }].map((t) => (
-                  <button key={t.label} type="button" title={t.title} onClick={() => setFloorArea(t.value)}
-                    className={`flex-1 py-1 rounded-lg text-[11px] font-bold border transition-all ${
-                      floorArea === t.value
-                        ? "bg-[#14B8A6] text-white border-[#14B8A6]"
-                        : "bg-gray-50 text-gray-500 border-gray-200 hover:border-[#14B8A6]"
-                    }`}>
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-              <input type="text" value={floorArea} onChange={(e) => setFloorArea(e.target.value)} placeholder="e.g. 25 sqm"
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Floor Area (sq m)</label>
+              <input type="text" value={floorArea} onChange={(e) => setFloorArea(e.target.value)} placeholder="Auto-calculated from drawn shape"
                 className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#14B8A6] focus:bg-white transition-all" />
+              <p className="text-xs text-gray-500 mt-1.5">ℹ️ Calculated from the stall boundary you drew</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Business Type</label>
@@ -592,10 +596,10 @@ function PerimeterLayer({ geometry }: { geometry: object }) {
 
 // ── Main Component ───────────────────────────────────────────────────────────
 export function AdminMapView() {
-  const perimeter = getPerimeter();
-  const [storedStalls, setStoredStalls] = useState<StoredStall[]>(() => getStoredStalls());
-  const [applications, setApplications] = useState<StoredApplication[]>(() => getStoredApplications());
-  const [contractModal, setContractModal] = useState<{ stall: StoredStall; app: StoredApplication } | null>(null);
+  const { perimeter } = usePerimeter();
+  const { stalls: storedStalls, refetch } = useStalls();
+  const { applications } = useApplications();
+  const [contractModal, setContractModal] = useState<{ stall: StoredStall; app: Application } | null>(null);
   const [selectedStallId, setSelectedStallId] = useState<string | null>(null);
   const [pendingLayer, setPendingLayer] = useState<L.Layer | null>(null);
   const [editingStall, setEditingStall] = useState<StoredStall | null>(null);
@@ -605,19 +609,19 @@ export function AdminMapView() {
   const [activeFloor, setActiveFloor] = useState<"1" | "2">("1");
 
   const drawApiRef = useRef<DrawControlAPI | null>(null);
-  const floorStalls = storedStalls.filter((s) => s.floor === activeFloor);
+  const floorStalls = useMemo(() => storedStalls.filter((s) => s.floor === activeFloor), [storedStalls, activeFloor]);
   const floorStallIds = new Set(floorStalls.map((s) => s.id));
   const selectedStall = storedStalls.find((s) => s.id === selectedStallId) ?? null;
 
   const handleSelectStall = useCallback((stallId: string) => {
     setSelectedStallId(stallId);
     drawApiRef.current?.highlightStall(stallId);
-    const stall = getStoredStalls().find((s) => s.id === stallId);
+    const stall = storedStalls.find((s) => s.id === stallId);
     if (stall) {
       const center = getGeometryCentroid(stall.geometry);
       if (center) setFlyToTarget(center);
     }
-  }, []);
+  }, [storedStalls]);
 
   // Check if a layer is within the perimeter boundary
   const isWithinPerimeter = useCallback((layer: L.Layer): boolean => {
@@ -680,27 +684,26 @@ export function AdminMapView() {
     setPendingLayer(layer);
   }, [isWithinPerimeter]);
 
-  const handleFormSave = (fields: StallFields) => {
+  const handleFormSave = async (fields: StallFields) => {
     if (!pendingLayer) return;
     const geoJson = (pendingLayer as any).toGeoJSON() as GeoJSON.Feature;
-    const saved = saveStoredStall({
-      stall_name: fields.stall_name, status: "vacant", owner_name: null,
-      business_type: fields.business_type, section: fields.section,
-      floor: fields.floor, floor_area: fields.floor_area, notes: fields.notes, geometry: geoJson.geometry,
-    });
-    setStoredStalls((prev) => [...prev, saved]);
-    if (saved.floor === activeFloor) {
-      drawApiRef.current?.addStall(saved);
+    try {
+      const saved = await createStall({
+        stall_name: fields.stall_name,
+        business_type: fields.business_type, section: fields.section,
+        floor: fields.floor, floor_area: fields.floor_area, notes: fields.notes, geometry: geoJson.geometry,
+      });
+      if (saved.floor === activeFloor) {
+        drawApiRef.current?.addStall(saved);
+      }
+      await refetch();
+      setPendingLayer(null);
+    } catch (e) {
+      showToast(`Failed to create stall: ${(e as Error).message}`, "error");
     }
-    setPendingLayer(null);
   };
 
-  const refreshAll = () => {
-    setStoredStalls(getStoredStalls());
-    setApplications(getStoredApplications());
-  };
-
-  const handleEdited = useCallback((updates: Array<{ id: string; geometry: object }>) => {
+  const handleEdited = useCallback(async (updates: Array<{ id: string; geometry: object }>) => {
     // Validate each edited stall is still within perimeter
     for (const update of updates) {
       const layer = L.geoJSON({ type: "Feature", properties: {}, geometry: update.geometry as GeoJSON.Geometry });
@@ -712,32 +715,49 @@ export function AdminMapView() {
       });
       if (!isValid) {
         showToast("Stall cannot be moved outside the market perimeter boundary.", "error");
-        refreshAll(); // Revert changes by refreshing from storage
+        await refetch(); // Revert changes by refreshing from storage
         return;
       }
     }
-    updates.forEach(({ id, geometry }) => updateStoredStallGeometry(id, geometry));
-    refreshAll();
-  }, [isWithinPerimeter]);
+    try {
+      await updateStallGeometry(updates);
+      await refetch();
+    } catch (e) {
+      showToast(`Failed to update stall geometry: ${(e as Error).message}`, "error");
+      await refetch();
+    }
+  }, [isWithinPerimeter, refetch]);
 
-  const handleDeleted = useCallback((ids: string[]) => {
-    ids.forEach((id) => deleteStoredStall(id));
-    refreshAll();
-    setSelectedStallId((prev) => (prev && ids.includes(prev) ? null : prev));
-  }, []);
+  const handleDeleted = useCallback(async (ids: string[]) => {
+    try {
+      await deleteStalls(ids);
+      await refetch();
+      setSelectedStallId((prev) => (prev && ids.includes(prev) ? null : prev));
+    } catch (e) {
+      showToast(`Failed to delete stalls: ${(e as Error).message}`, "error");
+    }
+  }, [refetch]);
 
-  const handleDeleteStall = (id: string) => {
-    deleteStoredStall(id);
-    setStoredStalls((prev) => prev.filter((s) => s.id !== id));
-    setSelectedStallId(null);
-    drawApiRef.current?.highlightStall(null);
+  const handleDeleteStall = async (id: string) => {
+    try {
+      await deleteStall(id);
+      await refetch();
+      setSelectedStallId(null);
+      drawApiRef.current?.highlightStall(null);
+    } catch (e) {
+      showToast(`Failed to delete stall: ${(e as Error).message}`, "error");
+    }
   };
 
-  const handleEditInfoSave = (fields: StallFields) => {
+  const handleEditInfoSave = async (fields: StallFields) => {
     if (!editingStall) return;
-    updateStoredStall(editingStall.id, { stall_name: fields.stall_name, section: fields.section, floor: fields.floor, floor_area: fields.floor_area, business_type: fields.business_type, notes: fields.notes });
-    setStoredStalls(getStoredStalls());
-    setEditingStall(null);
+    try {
+      await updateStall(editingStall.id, { stall_name: fields.stall_name, section: fields.section, floor: fields.floor, floor_area: fields.floor_area, business_type: fields.business_type, notes: fields.notes });
+      await refetch();
+      setEditingStall(null);
+    } catch (e) {
+      showToast(`Failed to update stall: ${(e as Error).message}`, "error");
+    }
   };
 
   const handleCreateStall = () => {
@@ -796,6 +816,7 @@ export function AdminMapView() {
             key={activeFloor}
             initialStalls={floorStalls}
             apiRef={drawApiRef}
+            applications={applications}
             onCreated={handleDrawCreated}
             onEdited={handleEdited}
             onDeleted={handleDeleted}
@@ -1073,11 +1094,17 @@ export function AdminMapView() {
       </div>
 
       {/* ── Modals ────────────────────────────────────── */}
-      {pendingLayer && (
-        <StallForm title="New Stall" subtitle="Fill in the stall details"
-          defaultFloor={activeFloor}
-          onSave={handleFormSave} onCancel={() => setPendingLayer(null)} />
-      )}
+      {pendingLayer && (() => {
+        const geoJson = (pendingLayer as any).toGeoJSON() as GeoJSON.Feature;
+        const calculatedArea = calculatePolygonArea(geoJson.geometry);
+        const formattedArea = calculatedArea > 0 ? `${Math.round(calculatedArea)}` : "";
+        return (
+          <StallForm title="New Stall" subtitle="Fill in the stall details"
+            defaultFloor={activeFloor}
+            initialValues={{ floor_area: formattedArea } as Partial<StallFields>}
+            onSave={handleFormSave} onCancel={() => setPendingLayer(null)} />
+        );
+      })()}
       {editingStall && (
         <StallForm title="Edit Stall Info" subtitle="Update the stall details"
           initialValues={editingStall}

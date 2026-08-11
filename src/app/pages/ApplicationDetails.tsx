@@ -4,15 +4,13 @@ import {
   ArrowLeft, FileText, MapPin, Calendar,
   Clock, CheckCircle, XCircle, AlertCircle,
   ScrollText, User, Trash2, ChevronRight,
-  ArrowRightLeft, Mail, X, Upload,
+  ArrowRightLeft, Mail, X, Upload, Loader,
 } from "lucide-react";
-import {
-  getApplicationById, deleteStoredApplication,
-  updateApplicationPermit, formatFileSize,
-  type StoredApplication,
-} from "../components/applicationsStorage";
-import { getSession, getUserByEmail } from "../components/authStorage";
-import { getStoredStalls } from "../components/stallsStorage";
+import { useApplications } from "../hooks/useApplications";
+import { deleteApplication, type Application } from "../services/applicationsApi";
+import { findUserByEmail } from "../services/api";
+import { formatFileSize } from "../components/applicationsStorage";
+import { getSession } from "../components/authStorage";
 import {
   getTransfersByFromUserId,
   createTransferRequest,
@@ -69,7 +67,8 @@ export function ApplicationDetails() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const session = getSession();
-  const [app, setApp] = useState<StoredApplication | null>(() => (id ? getApplicationById(id) : null));
+  const { applications } = useApplications();
+  const app = id ? applications.find(a => a.id === id) : null;
   const [uploading, setUploading] = useState(false);
 
   const [showTransferModal, setShowTransferModal] = useState(false);
@@ -82,36 +81,42 @@ export function ApplicationDetails() {
       )
     : false;
 
-  function handleTransferSubmit() {
+  async function handleTransferSubmit() {
     if (!session || !app) return;
     const email = transferEmail.trim().toLowerCase();
     if (!email) { setTransferError("Please enter an email address."); return; }
     if (email === session.email.toLowerCase()) { setTransferError("You cannot transfer to yourself."); return; }
-    const targetUser = getUserByEmail(email);
-    if (!targetUser) { setTransferError("No PubMark account found with this email."); return; }
     if (getTransfersByFromUserId(session.userId).some(
       (t) => t.stallId === app.stallId && t.status === "pending"
     )) {
       setTransferError("A pending transfer already exists for this stall.");
       return;
     }
-    createTransferRequest({
-      fromUserId: session.userId,
-      fromUserName: session.name,
-      fromUserEmail: session.email,
-      toUserEmail: targetUser.email,
-      toUserId: targetUser.id,
-      toUserName: targetUser.name,
-      stallId: app.stallId,
-      stallName: app.stallName,
-      stallSection: app.stallSection,
-      stallFloor: (getStoredStalls().find((s) => s.id === app.stallId)?.floor ?? "1") as "1" | "2",
-      floorArea: app.floorArea,
-      originalApplicationId: app.id,
-    });
-    setShowTransferModal(false);
-    setTransferEmail("");
-    showToast(`Transfer offer sent to ${targetUser.name}!`, "success");
+    try {
+      const { profile: targetUser } = await findUserByEmail(email);
+      const stalls = await getStalls();
+      const stallFloor = (stalls.find((s) => s.id === app.stallId)?.floor ?? "1") as "1" | "2";
+
+      createTransferRequest({
+        fromUserId: session.userId,
+        fromUserName: session.name,
+        fromUserEmail: session.email,
+        toUserEmail: targetUser.email,
+        toUserId: targetUser.id,
+        toUserName: targetUser.name,
+        stallId: app.stallId,
+        stallName: app.stallName,
+        stallSection: app.stallSection,
+        stallFloor,
+        floorArea: app.floorArea,
+        originalApplicationId: app.id,
+      });
+      setShowTransferModal(false);
+      setTransferEmail("");
+      showToast(`Transfer offer sent to ${targetUser.name}!`, "success");
+    } catch (e) {
+      setTransferError(`Failed to initiate transfer: ${(e as Error).message}`);
+    }
   }
 
   useEffect(() => {
@@ -168,12 +173,16 @@ export function ApplicationDetails() {
     setUploading(false);
   }
 
-  function handleWithdraw() {
+  const handleWithdraw = async () => {
     if (!id) return;
-    deleteStoredApplication(id);
-    showToast("Application withdrawn.", "success");
-    navigate("/dashboard");
-  }
+    try {
+      await deleteApplication(id);
+      showToast("Application withdrawn.", "success");
+      navigate("/dashboard");
+    } catch (error) {
+      showToast(`Failed to withdraw application: ${(error as Error).message}`, "error");
+    }
+  };
 
   return (
     <div className="size-full flex flex-col bg-gray-50 max-w-md mx-auto overflow-hidden relative">

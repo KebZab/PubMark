@@ -5,11 +5,13 @@ import {
   User, Building2, CalendarDays, Clock, FileText, AlertTriangle,
   CheckCircle, MapPin, ChevronRight,
 } from "lucide-react";
-import { getStoredStalls, type StoredStall } from "../components/stallsStorage";
-import { getStoredApplications, type StoredApplication } from "../components/applicationsStorage";
+import { useStalls, type Stall } from "../hooks/useStalls";
+import { useApplications } from "../hooks/useApplications";
+import { type StoredStall } from "../components/stallsStorage";
+import { type Application } from "../services/applicationsApi";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-function getActiveApp(stallId: string, apps: StoredApplication[]): StoredApplication | null {
+function getActiveApp(stallId: string, apps: Application[]): Application | null {
   return (
     apps
       .filter((a) => a.stallId === stallId && a.status !== "rejected")
@@ -34,7 +36,7 @@ function ContractModal({
   stall, app, onClose,
 }: {
   stall: StoredStall;
-  app: StoredApplication;
+  app: Application;
   onClose: () => void;
 }) {
   const days = daysUntilExpiry(app.contractEnd);
@@ -236,10 +238,10 @@ export function StallManagement() {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<"all" | "vacant" | "pending" | "occupied">("all");
-  const [contractModal, setContractModal] = useState<{ stall: StoredStall; app: StoredApplication } | null>(null);
+  const [contractModal, setContractModal] = useState<{ stall: any; app: Application } | null>(null);
 
-  const stalls = useMemo(() => getStoredStalls(), []);
-  const applications = useMemo(() => getStoredApplications(), []);
+  const { stalls } = useStalls();
+  const { applications } = useApplications();
 
   const enriched = useMemo(() =>
     stalls.map((stall) => ({ stall, app: getActiveApp(stall.id, applications) })),

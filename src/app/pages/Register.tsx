@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate, useSearchParams, Link } from "react-router";
-import { MapPin, UserPlus, Eye, EyeOff } from "lucide-react";
+import { MapPin, UserPlus, Eye, EyeOff, FileText } from "lucide-react";
 import { setSession } from "../components/authStorage";
 import { registerVendor } from "../services/api";
+import { tenantTermsIntro, tenantTermsSections, tenantTermsTitle } from "../content/tenantTerms";
 
 export function Register() {
   const navigate = useNavigate();
@@ -18,9 +19,12 @@ export function Register() {
     confirmPassword: "",
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const fieldRefs = useRef<Record<string, HTMLInputElement | HTMLTextAreaElement | null>>({});
 
   function validatePhone(value: string) {
     const digits = value.replace(/\D/g, "");
@@ -41,6 +45,7 @@ export function Register() {
     else if (form.password.length < 6) errs.password = "Password must be at least 6 characters.";
     if (!form.confirmPassword) errs.confirmPassword = "Please confirm your password.";
     else if (form.password !== form.confirmPassword) errs.confirmPassword = "Passwords do not match.";
+    if (!acceptedTerms) errs.acceptedTerms = "You must agree to the Terms and Agreement before creating an account.";
     return errs;
   }
 
@@ -49,21 +54,43 @@ export function Register() {
     setErrors((prev) => ({ ...prev, [field]: errs[field] ?? "" }));
   }
 
+  function focusFirstError(errs: Record<string, string>) {
+    const fieldOrder = ["name", "email", "phone", "address", "password", "confirmPassword", "acceptedTerms"];
+    const firstInvalidField = fieldOrder.find((field) => errs[field]);
+    if (!firstInvalidField) return;
+    const element = fieldRefs.current[firstInvalidField];
+    if (!element) return;
+    element.scrollIntoView({ behavior: "smooth", block: "center" });
+    if ("focus" in element) {
+      window.setTimeout(() => element.focus(), 150);
+    }
+  }
+
   function handlePhoneChange(value: string) {
     // Only allow digits and common formatting chars
     const cleaned = value.replace(/[^\d]/g, "").slice(0, 11);
     setForm((prev) => ({ ...prev, phone: cleaned }));
+    setSubmitError("");
   }
 
   function handleChange(field: string, value: string) {
     setForm((prev) => ({ ...prev, [field]: value }));
+    setSubmitError("");
+  }
+
+  function handleTermsChange(checked: boolean) {
+    setAcceptedTerms(checked);
+    setSubmitError("");
+    setErrors((prev) => ({ ...prev, acceptedTerms: checked ? "" : prev.acceptedTerms ?? "" }));
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setSubmitError("");
     const errs = validate();
     if (Object.keys(errs).length > 0) {
       setErrors(errs);
+      focusFirstError(errs);
       return;
     }
     setSubmitting(true);
@@ -81,7 +108,11 @@ export function Register() {
     }
     } catch (err) {
       setSubmitting(false);
-      setErrors((prev) => ({ ...prev, email: err instanceof Error ? err.message : "Unable to create the account." }));
+      const message = err instanceof Error ? err.message : "Unable to create the account.";
+      setSubmitError(message);
+      setErrors((prev) => ({ ...prev, email: message }));
+      fieldRefs.current.email?.scrollIntoView({ behavior: "smooth", block: "center" });
+      window.setTimeout(() => fieldRefs.current.email?.focus(), 150);
     }
   }
 
@@ -140,10 +171,19 @@ export function Register() {
           </p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            {submitError && (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {submitError}
+              </div>
+            )}
+
             {/* Full Name */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Full Name</label>
               <input
+                ref={(element) => {
+                  fieldRefs.current.name = element;
+                }}
                 type="text"
                 value={form.name}
                 onChange={(e) => handleChange("name", e.target.value)}
@@ -158,6 +198,9 @@ export function Register() {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Email Address</label>
               <input
+                ref={(element) => {
+                  fieldRefs.current.email = element;
+                }}
                 type="email"
                 value={form.email}
                 onChange={(e) => handleChange("email", e.target.value)}
@@ -175,6 +218,9 @@ export function Register() {
                 <span className="text-gray-400 font-normal ml-1.5 text-[11px]">PH mobile (e.g. 09171234567)</span>
               </label>
               <input
+                ref={(element) => {
+                  fieldRefs.current.phone = element;
+                }}
                 type="text"
                 inputMode="numeric"
                 value={form.phone}
@@ -199,6 +245,9 @@ export function Register() {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Address</label>
               <textarea
+                ref={(element) => {
+                  fieldRefs.current.address = element;
+                }}
                 value={form.address}
                 onChange={(e) => handleChange("address", e.target.value)}
                 onBlur={() => handleBlur("address")}
@@ -214,6 +263,9 @@ export function Register() {
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Password</label>
               <div className="relative">
                 <input
+                  ref={(element) => {
+                    fieldRefs.current.password = element;
+                  }}
                   type={showPassword ? "text" : "password"}
                   value={form.password}
                   onChange={(e) => handleChange("password", e.target.value)}
@@ -237,6 +289,9 @@ export function Register() {
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Confirm Password</label>
               <div className="relative">
                 <input
+                  ref={(element) => {
+                    fieldRefs.current.confirmPassword = element;
+                  }}
                   type={showConfirm ? "text" : "password"}
                   value={form.confirmPassword}
                   onChange={(e) => handleChange("confirmPassword", e.target.value)}
@@ -253,6 +308,71 @@ export function Register() {
                 </button>
               </div>
               {errors.confirmPassword && <p className="text-red-500 text-xs mt-1">{errors.confirmPassword}</p>}
+            </div>
+
+            <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+              <div className="flex items-start gap-3 px-4 py-4 bg-gradient-to-r from-teal-50 to-white border-b border-gray-200">
+                <div className="w-10 h-10 rounded-xl bg-teal-100 text-teal-700 flex items-center justify-center shrink-0">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-900">Terms and Agreement</h2>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Please read and accept the rules below before creating your account.
+                  </p>
+                </div>
+              </div>
+
+              <div className="px-4 py-4">
+                <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-4 h-72 overflow-y-auto space-y-4 text-sm text-gray-700">
+                  <div className="text-center border-b border-dashed border-gray-300 pb-4">
+                    {tenantTermsIntro.map((line) => (
+                      <p key={line} className="leading-6 first:font-semibold">
+                        {line}
+                      </p>
+                    ))}
+                    <h3 className="mt-4 text-sm font-bold text-gray-900">{tenantTermsTitle}</h3>
+                  </div>
+
+                  {tenantTermsSections.map((section) => (
+                    <div key={section.number} className="space-y-2">
+                      <p className="leading-6">
+                        <span className="font-semibold text-gray-900 mr-2">{section.number}</span>
+                        {section.text}
+                      </p>
+                      {section.bullets && (
+                        <ul className="space-y-2 pl-6 list-disc">
+                          {section.bullets.map((bullet) => (
+                            <li key={bullet} className="leading-6">
+                              {bullet}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <label className="mt-4 flex items-start gap-3">
+                  <input
+                    ref={(element) => {
+                      fieldRefs.current.acceptedTerms = element;
+                    }}
+                    type="checkbox"
+                    checked={acceptedTerms}
+                    onChange={(e) => handleTermsChange(e.target.checked)}
+                    className="mt-1 h-4 w-4 rounded border-gray-300 text-[#14B8A6] focus:ring-[#14B8A6]"
+                  />
+                  <span className="text-sm text-gray-700 leading-6">
+                    I have read and agree to the Terms and Agreement, including all policies, rules, and regulations for tenants to comply.
+                  </span>
+                </label>
+                {errors.acceptedTerms && (
+                  <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                    {errors.acceptedTerms}
+                  </div>
+                )}
+              </div>
             </div>
 
             <button

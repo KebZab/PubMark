@@ -12,7 +12,7 @@ import {
 import {
   getCheckRequests, updateCheckRequestStatus, type OfficerCheckRequest, type CompletionFile,
 } from "../components/checkRequestsStore";
-import { getStoredStalls } from "../components/stallsStorage";
+import { useStalls } from "../hooks/useStalls";
 import { getSession, clearSession, type PubMarkSession } from "../components/authStorage";
 import { OfficerMapView } from "../components/OfficerMapView";
 import { showToast } from "../components/Toast";
@@ -58,6 +58,7 @@ interface EvidenceFile {
 
 export function OfficerDashboard() {
   const navigate = useNavigate();
+  const { stalls } = useStalls();
   const [session, setSession] = useState<PubMarkSession | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
   const [violations, setViolations] = useState<Violation[]>([]);
@@ -72,8 +73,6 @@ export function OfficerDashboard() {
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const evidenceRef = useRef<HTMLInputElement>(null);
-
-  const stalls = getStoredStalls();
 
   const [newForm, setNewForm] = useState({
     stallId: "",

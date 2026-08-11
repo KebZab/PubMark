@@ -4,8 +4,9 @@ import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { MapPin, Store, X, LogIn, UserPlus, User, ChevronRight } from "lucide-react";
-import { getStoredStalls, type StoredStall } from "../components/stallsStorage";
-import { getStoredApplications, type StoredApplication } from "../components/applicationsStorage";
+import { useStalls, type Stall } from "../hooks/useStalls";
+import { useApplications } from "../hooks/useApplications";
+import { type Application } from "../services/applicationsApi";
 import { FloorSwitcher } from "../components/FloorSwitcher";
 
 const MAP_CSS = `
@@ -24,7 +25,7 @@ function getGeometryCentroid(geometry: any): [number, number] | null {
   return null;
 }
 
-function getApprovedApp(stallId: string, apps: StoredApplication[]): StoredApplication | null {
+function getApprovedApp(stallId: string, apps: Application[]): Application | null {
   return apps.find((a) => a.stallId === stallId && a.status === "approved") ?? null;
 }
 
@@ -34,10 +35,10 @@ function DrawnStallsLayer({
   selectedId,
   onSelect,
 }: {
-  stalls: StoredStall[];
-  applications: StoredApplication[];
+  stalls: Stall[];
+  applications: Application[];
   selectedId: string | null;
-  onSelect: (stall: StoredStall) => void;
+  onSelect: (stall: Stall) => void;
 }) {
   const map = useMap();
   useEffect(() => {
@@ -79,21 +80,16 @@ function FlyTo({ position }: { position: [number, number] | null }) {
 
 export function GuestMapView() {
   const navigate = useNavigate();
-  const [stalls, setStalls] = useState<StoredStall[]>([]);
-  const [applications, setApplications] = useState<StoredApplication[]>([]);
-  const [selected, setSelected] = useState<StoredStall | null>(null);
+  const { stalls, loading } = useStalls();
+  const { applications } = useApplications();
+  const [selected, setSelected] = useState<Stall | null>(null);
   const [flyTarget, setFlyTarget] = useState<[number, number] | null>(null);
   const [showLoginPrompt, setShowLoginPrompt] = useState<string | null>(null);
   const [activeFloor, setActiveFloor] = useState<"1" | "2">("1");
 
-  useEffect(() => {
-    setStalls(getStoredStalls());
-    setApplications(getStoredApplications());
-  }, []);
-
   const floorStalls = stalls.filter((s) => s.floor === activeFloor);
 
-  function handleSelectStall(stall: StoredStall) {
+  function handleSelectStall(stall: Stall) {
     if (selected?.id === stall.id) { setSelected(null); return; }
     setSelected(stall);
     const center = getGeometryCentroid(stall.geometry);

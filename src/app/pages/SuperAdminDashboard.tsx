@@ -11,8 +11,12 @@ import {
   getAllUsers, deleteUser, updateUser, registerUser,
   type PubMarkUser, type UserRole, getSession,
 } from "../components/authStorage";
-import { getStoredStalls, updateStoredStall } from "../components/stallsStorage";
-import { getStoredApplications, updateApplicationStatus, type StoredApplication } from "../components/applicationsStorage";
+import { useStalls } from "../hooks/useStalls";
+import { usePerimeter } from "../hooks/usePerimeter";
+import { importStalls, updateStall } from "../services/stallsApi";
+import { updateStoredStall, getStoredStalls } from "../components/stallsStorage";
+import { useApplications } from "../hooks/useApplications";
+import { updateApplicationStatus, type Application } from "../services/applicationsApi";
 import { getViolations, assignOfficer, type Violation } from "../components/violationsStore";
 import {
   getViolationRequests,
@@ -23,7 +27,6 @@ import {
 } from "../components/violationRequestStore";
 import { getCheckRequests, type OfficerCheckRequest } from "../components/checkRequestsStore";
 import { getTerminationRequests, updateTerminationStatus, type TerminationRequest } from "../components/terminationRequestsStore";
-import { getPerimeter } from "../components/perimeterStore";
 import { DashboardLayout } from "../components/DashboardLayout";
 import { SuperAdminMapEditor } from "../components/SuperAdminMapEditor";
 import { showToast } from "../components/Toast";
@@ -110,8 +113,7 @@ export function SuperAdminDashboard() {
   const [assigningRequest, setAssigningRequest] = useState<string | null>(null);
   const [editingStall, setEditingStall] = useState<string | null>(null);
   const [editStallData, setEditStallData] = useState<{ status: string; business_type: string }>({ status: "", business_type: "" });
-  const [applications, setApplications] = useState<StoredApplication[]>([]);
-  const [selectedApplication, setSelectedApplication] = useState<StoredApplication | null>(null);
+  const [selectedApplication, setSelectedApplication] = useState<Application | null>(null);
   const [expandedViolation, setExpandedViolation] = useState<string | null>(null);
   const [showStallMap, setShowStallMap] = useState(false);
   const [reportSubTab, setReportSubTab] = useState<"violations" | "inspections" | "terminations">("violations");
@@ -120,12 +122,13 @@ export function SuperAdminDashboard() {
   const [reportSearch, setReportSearch] = useState("");
   const [reportStatusFilter, setReportStatusFilter] = useState("all");
 
-  const stalls = getStoredStalls();
+  const { stalls, refetch: refetchStalls } = useStalls();
+  const { applications, refetch: refetchApplications } = useApplications();
+  const { perimeter } = usePerimeter();
   const violations = getViolations();
 
   useEffect(() => {
     setUsers(getAllUsers());
-    setApplications(getStoredApplications());
   }, []);
 
   useEffect(() => {
@@ -271,7 +274,7 @@ export function SuperAdminDashboard() {
     if (!stall) return;
     createViolationRequest({
       stallId: stall.id,
-      stallName: stall.name,
+      stallName: stall.stall_name,
       requestedBy: session.userId,
       requestedByName: session.name,
       reason: requestReason,
@@ -330,7 +333,21 @@ export function SuperAdminDashboard() {
     navigate(paths[newTab]);
   }
 
-  const perimeter = getPerimeter();
+  const handleImportStalls = async () => {
+    const localStalls = getStoredStalls();
+    if (localStalls.length === 0) {
+      showToast("No stalls to import", "info");
+      return;
+    }
+    try {
+      await importStalls(localStalls);
+      showToast(`Successfully imported ${localStalls.length} stall(s) to MySQL`, "success");
+      localStorage.removeItem("pubmark_stalls");
+      await refetchStalls();
+    } catch (error) {
+      showToast(`Import failed: ${(error as Error).message}`, "error");
+    }
+  };
 
   const openCheckRequestsCount = checkRequests.filter((r) => r.status === "pending").length;
 
@@ -675,6 +692,21 @@ export function SuperAdminDashboard() {
         {/* Stalls tab */}
         {tab === "stalls" && (
           <>
+            {getStoredStalls().length > 0 && (
+              <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 flex items-start gap-3 mb-4">
+                <AlertTriangle className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-blue-800">Migrate stalls to database</p>
+                  <p className="text-xs text-blue-700 mt-0.5">You have stalls in browser storage. Import them to MySQL to ensure they persist across devices.</p>
+                </div>
+                <button
+                  onClick={handleImportStalls}
+                  className="flex-shrink-0 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition-colors"
+                >
+                  Import Now
+                </button>
+              </div>
+            )}
             {!perimeter ? (
               <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3">
                 <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
@@ -775,13 +807,18 @@ export function SuperAdminDashboard() {
                             {editingStall === s.id ? (
                               <>
                                 <button
-                                  onClick={() => {
-                                    updateStoredStall(s.id, {
-                                      status: editStallData.status as "vacant" | "occupied" | "unavailable",
-                                      business_type: editStallData.business_type,
-                                    });
-                                    setEditingStall(null);
-                                    showToast("Stall updated successfully.", "success");
+                                  onClick={async () => {
+                                    try {
+                                      await updateStall(s.id, {
+                                        status: editStallData.status as "vacant" | "occupied" | "unavailable",
+                                        business_type: editStallData.business_type,
+                                      });
+                                      await refetchStalls();
+                                      setEditingStall(null);
+                                      showToast("Stall updated successfully.", "success");
+                                    } catch (error) {
+                                      showToast(`Failed to update stall: ${(error as Error).message}`, "error");
+                                    }
                                   }}
                                   className="px-2 py-1 bg-green-500 text-white rounded-lg text-[10px] font-semibold hover:bg-green-600 transition-colors"
                                 >
@@ -1019,11 +1056,15 @@ export function SuperAdminDashboard() {
                 {selectedApplication.status === "pending" && (
                   <div className="p-4 border-t border-gray-100 flex gap-3 flex-shrink-0">
                     <button
-                      onClick={() => {
-                        updateApplicationStatus(selectedApplication.id, "rejected");
-                        setApplications(getStoredApplications());
-                        setSelectedApplication(null);
-                        showToast("Application rejected.", "error");
+                      onClick={async () => {
+                        try {
+                          await updateApplicationStatus(selectedApplication.id, "rejected");
+                          await refetchApplications();
+                          setSelectedApplication(null);
+                          showToast("Application rejected.", "error");
+                        } catch (error) {
+                          showToast(`Failed to reject application: ${(error as Error).message}`, "error");
+                        }
                       }}
                       className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2"
                     >
@@ -1031,11 +1072,15 @@ export function SuperAdminDashboard() {
                       Reject
                     </button>
                     <button
-                      onClick={() => {
-                        updateApplicationStatus(selectedApplication.id, "approved");
-                        setApplications(getStoredApplications());
-                        setSelectedApplication(null);
-                        showToast("Application approved.", "success");
+                      onClick={async () => {
+                        try {
+                          await updateApplicationStatus(selectedApplication.id, "approved");
+                          await refetchApplications();
+                          setSelectedApplication(null);
+                          showToast("Application approved.", "success");
+                        } catch (error) {
+                          showToast(`Failed to approve application: ${(error as Error).message}`, "error");
+                        }
                       }}
                       className="flex-1 py-2.5 bg-green-500 hover:bg-green-600 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2"
                     >

@@ -4,8 +4,9 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { X, AlertTriangle, MapPin, Send, ChevronDown } from "lucide-react";
 import { FloorSwitcher } from "./FloorSwitcher";
-import { getStoredStalls, type StoredStall } from "./stallsStorage";
-import { getStoredApplications, type StoredApplication } from "./applicationsStorage";
+import { useStalls, type Stall } from "../hooks/useStalls";
+import { useApplications } from "../hooks/useApplications";
+import { type Application } from "../services/applicationsApi";
 import {
   saveCheckRequest,
   type RequestPriority,
@@ -13,7 +14,7 @@ import {
 import { getAllUsers } from "./authStorage";
 import { showToast } from "./Toast";
 
-function getActiveApp(stallId: string, applications: StoredApplication[]): StoredApplication | null {
+function getActiveApp(stallId: string, applications: Application[]): Application | null {
   return (
     applications
       .filter((a) => a.stallId === stallId && a.status !== "rejected")
@@ -23,11 +24,13 @@ function getActiveApp(stallId: string, applications: StoredApplication[]): Store
 
 function StallMarkers({
   stalls,
+  applications,
   currentFloor,
   selectedStallId,
   onSelectStall,
 }: {
-  stalls: StoredStall[];
+  stalls: Stall[];
+  applications: Application[];
   currentFloor: "1" | "2";
   selectedStallId: string | null;
   onSelectStall: (stallId: string) => void;
@@ -35,8 +38,6 @@ function StallMarkers({
   const map = useMap();
 
   useEffect(() => {
-    const applications = getStoredApplications();
-
     function stallColor(stallId: string): string {
       const app = getActiveApp(stallId, applications);
       if (app?.status === "approved") return "#ef4444";
@@ -44,7 +45,7 @@ function StallMarkers({
       return "#22c55e";
     }
 
-    function stallTooltip(stall: StoredStall): string {
+    function stallTooltip(stall: Stall): string {
       const app = getActiveApp(stall.id, applications);
       if (app?.status === "approved") return `<strong>${stall.stall_name}</strong> · ${app.businessName} (Occupied)`;
       if (app?.status === "pending") return `<strong>${stall.stall_name}</strong> · ${app.businessName} (Pending)`;
@@ -83,7 +84,7 @@ function StallMarkers({
         }
       });
     };
-  }, [map, stalls, currentFloor, selectedStallId, onSelectStall]);
+  }, [map, stalls, applications, currentFloor, selectedStallId, onSelectStall]);
 
   return null;
 }
@@ -95,7 +96,8 @@ interface Props {
 }
 
 export function AdminCheckRequestMap({ userId, userName, onRequestCreated }: Props) {
-  const [stalls, setStalls] = useState<StoredStall[]>([]);
+  const { stalls } = useStalls();
+  const { applications } = useApplications();
   const [activeFloor, setActiveFloor] = useState<"1" | "2">("1");
   const [selectedStallId, setSelectedStallId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -111,10 +113,6 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }: Pro
     1: stalls.filter((s) => s.floor === "1").length,
     2: stalls.filter((s) => s.floor === "2").length,
   };
-
-  useEffect(() => {
-    setStalls(getStoredStalls());
-  }, []);
 
   function handleStallClick(stallId: string) {
     setSelectedStallId(stallId);
@@ -196,6 +194,7 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }: Pro
           />
           <StallMarkers
             stalls={stalls}
+            applications={applications}
             currentFloor={activeFloor}
             selectedStallId={selectedStallId}
             onSelectStall={handleStallClick}

@@ -35,9 +35,11 @@ import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { getAnnouncements, type Announcement } from "../components/announcementsStore";
-import { getStoredStalls, type StoredStall } from "../components/stallsStorage";
-import { getStoredApplications, type StoredApplication } from "../components/applicationsStorage";
-import { getSession, clearSession, getUserByEmail, type PubMarkSession } from "../components/authStorage";
+import { useStalls } from "../hooks/useStalls";
+import { useApplications } from "../hooks/useApplications";
+import { type Application } from "../services/applicationsApi";
+import { getSession, clearSession, type PubMarkSession } from "../components/authStorage";
+import { findUserByEmail } from "../services/api";
 import { showToast } from "../components/Toast";
 import { FloorSwitcher } from "../components/FloorSwitcher";
 import {
@@ -49,7 +51,7 @@ import {
 } from "../components/transferStorage";
 import { saveTerminationRequest } from "../components/terminationRequestsStore";
 
-function getActiveApp(stallId: string, applications: StoredApplication[]): StoredApplication | null {
+function getActiveApp(stallId: string, applications: Application[]): Application | null {
   return (
     applications
       .filter((a) => a.stallId === stallId && a.status !== "rejected")
@@ -59,7 +61,7 @@ function getActiveApp(stallId: string, applications: StoredApplication[]): Store
 
 type Tab = "home" | "applications" | "announcements" | "map";
 
-function MiniDrawnStallsLayer({ stalls, applications }: { stalls: StoredStall[]; applications: StoredApplication[] }) {
+function MiniDrawnStallsLayer({ stalls, applications }: { stalls: any[]; applications: Application[] }) {
   const map = useMap();
   useEffect(() => {
     const layers: L.GeoJSON[] = [];
@@ -97,14 +99,9 @@ const typeConfig = {
 };
 
 function MapTabContent({ navigate }: { navigate: (path: string) => void }) {
-  const [storedStalls, setStoredStalls] = useState<StoredStall[]>([]);
-  const [applications, setApplications] = useState<StoredApplication[]>([]);
+  const { stalls: storedStalls } = useStalls();
+  const { applications } = useApplications();
   const [activeFloor, setActiveFloor] = useState<"1" | "2">("1");
-
-  useEffect(() => {
-    setStoredStalls(getStoredStalls());
-    setApplications(getStoredApplications());
-  }, []);
 
   const floorStalls = storedStalls.filter((s) => s.floor === activeFloor);
   const floorCounts = {
@@ -220,7 +217,8 @@ export function UserDashboard() {
   const [session, setSession] = useState<PubMarkSession | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("home");
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
-  const [applications, setApplications] = useState<StoredApplication[]>([]);
+  const { applications } = useApplications();
+  const { stalls } = useStalls();
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [appSortField, setAppSortField] = useState<"date" | "stall" | "status">("date");
@@ -228,13 +226,14 @@ export function UserDashboard() {
 
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [terminateAccountConfirm, setTerminateAccountConfirm] = useState(false);
-  const [terminateContractModal, setTerminateContractModal] = useState<StoredApplication | null>(null);
+  const [contractActionModal, setContractActionModal] = useState<Application | null>(null);
+  const [terminateContractModal, setTerminateContractModal] = useState<Application | null>(null);
   const [terminateReason, setTerminateReason] = useState("");
 
   // Transfer states
   const [incomingTransfers, setIncomingTransfers] = useState<TransferRequest[]>([]);
   const [outgoingTransfers, setOutgoingTransfers] = useState<TransferRequest[]>([]);
-  const [transferModal, setTransferModal] = useState<StoredApplication | null>(null);
+  const [transferModal, setTransferModal] = useState<Application | null>(null);
   const [transferEmail, setTransferEmail] = useState("");
   const [transferError, setTransferError] = useState("");
   const [transferSubmitting, setTransferSubmitting] = useState(false);
@@ -249,8 +248,6 @@ export function UserDashboard() {
     const s = getSession();
     if (!s) return;
     setAnnouncements(getAnnouncements());
-    const allApps = getStoredApplications();
-    setApplications(allApps.filter((a) => a.userId === s.userId));
     setIncomingTransfers(
       getTransfersByToEmail(s.email).filter((t) => t.status === "pending")
     );
@@ -267,22 +264,24 @@ export function UserDashboard() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  const userApplications = session ? applications.filter((a) => a.userId === session.userId) : [];
+
   const stats = {
-    total: applications.length,
-    pending: applications.filter((a) => a.status === "pending").length,
-    approved: applications.filter((a) => a.status === "approved").length,
-    rejected: applications.filter((a) => a.status === "rejected").length,
+    total: userApplications.length,
+    pending: userApplications.filter((a) => a.status === "pending").length,
+    approved: userApplications.filter((a) => a.status === "approved").length,
+    rejected: userApplications.filter((a) => a.status === "rejected").length,
   };
 
   const seenDecisions: string[] = (() => {
     try { return JSON.parse(localStorage.getItem("pubmark_seen_decisions") ?? "[]"); } catch { return []; }
   })();
-  const unreadDecisions = applications.filter(
+  const unreadDecisions = userApplications.filter(
     (a) => a.status !== "pending" && !seenDecisions.includes(a.id)
   ).length;
 
   const unreadAnnouncements = announcements.length;
-  const pendingPermitUploads = applications.filter((a) => a.status === "approved" && !a.permitFileName).length;
+  const pendingPermitUploads = userApplications.filter((a) => a.status === "approved" && !a.permitFileName).length;
   const totalBadge = unreadDecisions + unreadAnnouncements + incomingTransfers.length + pendingPermitUploads;
 
   const switchTab = (tab: Tab) => {
@@ -290,7 +289,7 @@ export function UserDashboard() {
     setShowDropdown(false);
   };
 
-  function sortApplications(apps: StoredApplication[]): StoredApplication[] {
+  function sortApplications(apps: Application[]): Application[] {
     const sorted = [...apps];
     sorted.sort((a, b) => {
       let comparison = 0;
@@ -316,20 +315,18 @@ export function UserDashboard() {
     }
   }
 
-  function handleInitiateTransfer(app: StoredApplication) {
+  function handleInitiateTransfer(app: Application) {
     setTransferModal(app);
     setTransferEmail("");
     setTransferError("");
+    setContractActionModal(null);
   }
 
-  function handleTransferSubmit() {
+  async function handleTransferSubmit() {
     if (!session || !transferModal) return;
     const email = transferEmail.trim().toLowerCase();
     if (!email) { setTransferError("Please enter an email address."); return; }
     if (email === session.email.toLowerCase()) { setTransferError("You cannot transfer to yourself."); return; }
-
-    const targetUser = getUserByEmail(email);
-    if (!targetUser) { setTransferError("No PubMark account found with this email."); return; }
 
     // Check existing pending transfer for this stall
     const existingPending = getTransfersByFromUserId(session.userId).find(
@@ -341,27 +338,36 @@ export function UserDashboard() {
     }
 
     setTransferSubmitting(true);
-    createTransferRequest({
-      fromUserId: session.userId,
-      fromUserName: session.name,
-      fromUserEmail: session.email,
-      toUserEmail: targetUser.email,
-      toUserId: targetUser.id,
-      toUserName: targetUser.name,
-      stallId: transferModal.stallId,
-      stallName: transferModal.stallName,
-      stallSection: transferModal.stallSection,
-      stallFloor: (getStoredStalls().find((s) => s.id === transferModal.stallId)?.floor ?? "1") as "1" | "2",
-      floorArea: transferModal.floorArea,
-      originalApplicationId: transferModal.id,
-    });
+    try {
+      const { profile: targetUser } = await findUserByEmail(email);
+      const stalls = await (await import("../services/stallsApi")).getStalls();
+      const stallFloor = (stalls.find((s) => s.id === transferModal.stallId)?.floor ?? "1") as "1" | "2";
 
-    setTransferSubmitting(false);
-    setTransferModal(null);
-    setTransferEmail("");
-    showToast(`Transfer offer sent to ${targetUser.name}!`, "success");
-    // Refresh outgoing transfers
-    setOutgoingTransfers(getTransfersByFromUserId(session.userId));
+      createTransferRequest({
+        fromUserId: session.userId,
+        fromUserName: session.name,
+        fromUserEmail: session.email,
+        toUserEmail: targetUser.email,
+        toUserId: targetUser.id,
+        toUserName: targetUser.name,
+        stallId: transferModal.stallId,
+        stallName: transferModal.stallName,
+        stallSection: transferModal.stallSection,
+        stallFloor,
+        floorArea: transferModal.floorArea,
+        originalApplicationId: transferModal.id,
+      });
+
+      setTransferModal(null);
+      setTransferEmail("");
+      showToast(`Transfer offer sent to ${targetUser.name}!`, "success");
+      // Refresh outgoing transfers
+      setOutgoingTransfers(getTransfersByFromUserId(session.userId));
+    } catch (error) {
+      setTransferError(error instanceof Error ? error.message : "Failed to find the account.");
+    } finally {
+      setTransferSubmitting(false);
+    }
   }
 
   function handleDeclineTransfer(transferId: string) {
@@ -744,7 +750,7 @@ export function UserDashboard() {
 
             {applications.length > 0 ? (
               <div className="space-y-3">
-                {sortApplications(applications).map((app) => {
+                {sortApplications(userApplications).map((app) => {
                   const outgoing = outgoingTransfers.find(
                     (t) => t.originalApplicationId === app.id && t.status === "pending"
                   );
@@ -801,18 +807,14 @@ export function UserDashboard() {
                             Upload Permit
                           </button>
                         )}
-                        {app.status === "approved" && !outgoing && (
-                          <button
-                            onClick={() => handleInitiateTransfer(app)}
-                            className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-purple-50 text-purple-700 border border-purple-200 rounded-lg text-xs font-medium hover:bg-purple-100 transition-colors"
-                          >
-                            <ArrowRightLeft className="w-3.5 h-3.5" />
-                            Transfer
-                          </button>
-                        )}
                         {app.status === "approved" && (
                           <button
-                            onClick={() => { setTerminateContractModal(app); setTerminateReason(""); }}
+                            onClick={() => {
+                              setContractActionModal(app);
+                              setTerminateReason("");
+                              setTransferError("");
+                              setTransferEmail("");
+                            }}
                             className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-red-50 text-red-600 border border-red-200 rounded-lg text-xs font-medium hover:bg-red-100 transition-colors"
                           >
                             <FileX className="w-3.5 h-3.5" />
@@ -1048,6 +1050,70 @@ export function UserDashboard() {
                   )}
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Contract Action Choice Modal ───────────────── */}
+      {contractActionModal && (
+        <div className="absolute inset-0 z-[2000] flex items-center justify-center bg-black/50 backdrop-blur-sm px-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+            <div className="bg-gradient-to-r from-slate-700 to-slate-800 px-5 py-4 flex items-center justify-between">
+              <div>
+                <p className="text-white font-semibold text-sm">Contract Request</p>
+                <p className="text-slate-200 text-xs">{contractActionModal.stallName}</p>
+              </div>
+              <button
+                onClick={() => setContractActionModal(null)}
+                className="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center"
+              >
+                <X className="w-4 h-4 text-white" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3">
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs text-gray-700 leading-relaxed">
+                Do you want to transfer this contract to another PubMark user, or submit a request to terminate it?
+              </div>
+
+              {outgoingTransfers.some(
+                (t) => t.originalApplicationId === contractActionModal.id && t.status === "pending"
+              ) ? (
+                <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 text-xs text-purple-700 leading-relaxed">
+                  A transfer request for this contract is already pending. You can wait for the recipient to respond, or submit a termination request instead.
+                </div>
+              ) : (
+                <button
+                  onClick={() => handleInitiateTransfer(contractActionModal)}
+                  className="w-full flex items-center gap-3 bg-purple-50 border border-purple-200 rounded-xl p-4 text-left hover:bg-purple-100 transition-colors"
+                >
+                  <div className="w-9 h-9 bg-purple-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <ArrowRightLeft className="w-4 h-4 text-purple-600" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-gray-900">Transfer Contract</p>
+                    <p className="text-xs text-gray-500 mt-0.5">Send this contract to another registered user.</p>
+                  </div>
+                </button>
+              )}
+
+              <button
+                onClick={() => {
+                  setTerminateContractModal(contractActionModal);
+                  setContractActionModal(null);
+                  setTerminateReason("");
+                }}
+                className="w-full flex items-center gap-3 bg-red-50 border border-red-200 rounded-xl p-4 text-left hover:bg-red-100 transition-colors"
+              >
+                <div className="w-9 h-9 bg-red-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <FileX className="w-4 h-4 text-red-600" />
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-gray-900">Terminate Contract</p>
+                  <p className="text-xs text-gray-500 mt-0.5">Send a termination request to the admin for review.</p>
+                </div>
+              </button>
             </div>
           </div>
         </div>

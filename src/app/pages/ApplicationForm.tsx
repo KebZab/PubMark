@@ -3,12 +3,12 @@ import { useNavigate, useParams } from "react-router";
 import {
   Upload, X, FileText, Check, ScrollText,
   User, Building2, MapPin, CalendarDays, Clock,
-  ChevronLeft,
+  ChevronLeft, Loader,
 } from "lucide-react";
-import { getStoredStalls } from "../components/stallsStorage";
-import {
-  saveStoredApplication, getStoredApplications, addMonths, formatFileSize,
-} from "../components/applicationsStorage";
+import { useStalls } from "../hooks/useStalls";
+import { useApplications } from "../hooks/useApplications";
+import { createApplication } from "../services/applicationsApi";
+import { addMonths, formatFileSize } from "../components/applicationsStorage";
 import { getSession, getUserById } from "../components/authStorage";
 import { showToast } from "../components/Toast";
 
@@ -42,6 +42,8 @@ function Divider() {
 export function ApplicationForm() {
   const navigate = useNavigate();
   const { stallId } = useParams<{ stallId: string }>();
+  const { stalls, loading: stallsLoading } = useStalls();
+  const { applications, loading: appsLoading } = useApplications();
 
   const session = getSession();
   const userProfile = session ? getUserById(session.userId) : null;
@@ -54,12 +56,14 @@ export function ApplicationForm() {
   const [applicantAddress, setApplicantAddress] = useState(userProfile?.address ?? "");
   const [startDate, setStartDate] = useState("");
   const [termMonths, setTermMonths] = useState("12");
+  const [submitting, setSubmitting] = useState(false);
 
-  const stall = stallId ? getStoredStalls().find((s) => s.id === stallId) : null;
+  const loading = stallsLoading || appsLoading;
+  const stall = stallId ? stalls.find((s) => s.id === stallId) : null;
 
   // Check for existing active application on this stall by this user
   const existingApp = stallId && session
-    ? getStoredApplications().find(
+    ? applications.find(
         (a) => a.stallId === stallId && a.userId === session.userId && a.status !== "rejected"
       ) ?? null
     : null;
@@ -71,7 +75,7 @@ export function ApplicationForm() {
   const contractEndPreview = startDate ? addMonths(startDate, parseInt(termMonths)) : null;
   const canSubmit = !existingApp && businessName.trim() && businessType && applicantAddress.trim() && startDate;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit || !session) return;
 
@@ -80,29 +84,37 @@ export function ApplicationForm() {
       showToast("Invalid contract start date. Please select a valid date.", "error");
       return;
     }
-    const saved = saveStoredApplication({
-      userId: session.userId,
-      stallId: stallId ?? "",
-      stallName: stall?.stall_name ?? `Stall ${stallId}`,
-      stallSection: stall?.section ?? "",
-      floorArea: stall?.floor_area ?? "",
-      applicantName: session.name,
-      applicantEmail: session.email,
-      applicantAddress: applicantAddress.trim(),
-      businessName: businessName.trim(),
-      businessType,
-      contractStart: startDate,
-      contractTermMonths: termMonths,
-      contractEnd,
-      permitFileName: permitFile?.name ?? null,
-      permitFileSize: permitFile ? formatFileSize(permitFile.size) : null,
-      additionalFileName: additionalFile?.name ?? null,
-      additionalFileSize: additionalFile ? formatFileSize(additionalFile.size) : null,
-      notes,
-    });
 
-    showToast("Application submitted successfully!", "success");
-    navigate(`/applications/${saved.id}`);
+    setSubmitting(true);
+    try {
+      const saved = await createApplication({
+        userId: session.userId,
+        stallId: stallId ?? "",
+        stallName: stall?.stall_name ?? `Stall ${stallId}`,
+        stallSection: stall?.section ?? "",
+        floorArea: stall?.floor_area ?? "",
+        applicantName: session.name,
+        applicantEmail: session.email,
+        applicantAddress: applicantAddress.trim(),
+        businessName: businessName.trim(),
+        businessType,
+        contractStart: startDate,
+        contractTermMonths: termMonths,
+        contractEnd,
+        permitFileName: permitFile?.name ?? null,
+        permitFileSize: permitFile ? formatFileSize(permitFile.size) : null,
+        additionalFileName: additionalFile?.name ?? null,
+        additionalFileSize: additionalFile ? formatFileSize(additionalFile.size) : null,
+        notes,
+      });
+
+      showToast("Application submitted successfully!", "success");
+      navigate(`/applications/${saved.id}`);
+    } catch (error) {
+      showToast(`Failed to submit application: ${(error as Error).message}`, "error");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -134,7 +146,16 @@ export function ApplicationForm() {
       </div>
 
       <div className="max-w-2xl mx-auto px-4 py-6">
-        <form onSubmit={handleSubmit} className="space-y-6">
+        {loading && (
+          <div className="flex items-center justify-center h-64">
+            <div className="flex flex-col items-center gap-3">
+              <Loader className="w-6 h-6 text-teal-600 animate-spin" />
+              <p className="text-sm text-gray-600">Loading stall information...</p>
+            </div>
+          </div>
+        )}
+        {!loading && (
+          <form onSubmit={handleSubmit} className="space-y-6">
 
           {/* Duplicate warning */}
           {existingApp && (
@@ -385,14 +406,15 @@ export function ApplicationForm() {
             </button>
             <button
               type="submit"
-              disabled={!canSubmit}
+              disabled={!canSubmit || submitting}
               className="sm:flex-[2] bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white px-6 py-3.5 rounded-xl font-medium shadow-lg shadow-teal-500/30 hover:shadow-xl hover:shadow-teal-500/40 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <ScrollText className="w-4 h-4" />
-              Submit Application &amp; Contract
+              {submitting ? <Loader className="w-4 h-4 animate-spin" /> : <ScrollText className="w-4 h-4" />}
+              {submitting ? "Submitting..." : "Submit Application & Contract"}
             </button>
           </div>
         </form>
+        )}
       </div>
     </div>
   );

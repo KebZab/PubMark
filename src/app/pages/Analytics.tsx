@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { BarChart3, Users, Store, FileText, AlertTriangle } from "lucide-react";
-import { getStoredApplications } from "../components/applicationsStorage";
-import { getStoredStalls } from "../components/stallsStorage";
+import { useApplications } from "../hooks/useApplications";
+import { useStalls } from "../hooks/useStalls";
 import { getAllUsers, getSession } from "../components/authStorage";
 import { getViolations } from "../components/violationsStore";
 import { DashboardLayout } from "../components/DashboardLayout";
@@ -149,8 +149,8 @@ export function Analytics() {
   const session = getSession()!;
   const [period, setPeriod] = useState<"6m" | "12m">("6m");
 
-  const applications = getStoredApplications();
-  const stalls = getStoredStalls();
+  const { applications } = useApplications();
+  const { stalls } = useStalls();
   const users = getAllUsers();
   const violations = getViolations();
 

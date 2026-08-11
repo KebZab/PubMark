@@ -4,8 +4,10 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { X, AlertTriangle, Camera, Upload, Paperclip, Store, User } from "lucide-react";
 import { FloorSwitcher } from "./FloorSwitcher";
-import { getStoredStalls, type StoredStall } from "./stallsStorage";
-import { getStoredApplications, type StoredApplication } from "./applicationsStorage";
+import { useStalls } from "../hooks/useStalls";
+import { type StoredStall } from "./stallsStorage";
+import { useApplications } from "../hooks/useApplications";
+import { type Application } from "../services/applicationsApi";
 import {
   saveViolation, type ViolationCategory,
 } from "./violationsStore";
@@ -17,7 +19,7 @@ const CATEGORIES: ViolationCategory[] = [
   "Permit Expired", "Other",
 ];
 
-function getActiveApp(stallId: string, applications: StoredApplication[]): StoredApplication | null {
+function getActiveApp(stallId: string, applications: Application[]): Application | null {
   return (
     applications
       .filter((a) => a.stallId === stallId && a.status !== "rejected")
@@ -38,11 +40,13 @@ interface EvidenceFile {
 
 function StallMarkers({
   stalls,
+  applications,
   currentFloor,
   selectedStallId,
   onSelectStall,
 }: {
   stalls: StoredStall[];
+  applications: Application[];
   currentFloor: "1" | "2";
   selectedStallId: string | null;
   onSelectStall: (stallId: string) => void;
@@ -50,7 +54,6 @@ function StallMarkers({
   const map = useMap();
 
   useEffect(() => {
-    const applications = getStoredApplications();
     const layersMap = new Map<string, L.Path[]>();
 
     function stallColor(stallId: string): string {
@@ -60,7 +63,7 @@ function StallMarkers({
       return "#22c55e";
     }
 
-    function stallTooltip(stall: StoredStall): string {
+    function stallTooltip(stall: any): string {
       const app = getActiveApp(stall.id, applications);
       if (app?.status === "approved") return `<strong>${stall.stall_name}</strong> · ${app.businessName} (Occupied)`;
       if (app?.status === "pending") return `<strong>${stall.stall_name}</strong> · ${app.businessName} (Pending)`;
@@ -115,7 +118,8 @@ export function OfficerMapView({
   officerId: string;
   officerName: string;
 }) {
-  const [stalls] = useState<StoredStall[]>(() => getStoredStalls());
+  const { stalls } = useStalls();
+  const { applications } = useApplications();
   const [currentFloor, setCurrentFloor] = useState<"1" | "2">("1");
   const [selectedStallId, setSelectedStallId] = useState<string | null>(null);
   const [showReportModal, setShowReportModal] = useState(false);
@@ -129,7 +133,6 @@ export function OfficerMapView({
   const [evidence, setEvidence] = useState<EvidenceFile[]>([]);
 
   const selectedStall = selectedStallId ? stalls.find((s) => s.id === selectedStallId) : null;
-  const applications = getStoredApplications();
   const selectedApp = selectedStallId ? getActiveApp(selectedStallId, applications) : null;
 
   const handleSelectStall = useCallback((stallId: string) => {
@@ -206,6 +209,7 @@ export function OfficerMapView({
         />
         <StallMarkers
           stalls={stalls}
+          applications={applications}
           currentFloor={currentFloor}
           selectedStallId={selectedStallId}
           onSelectStall={handleSelectStall}

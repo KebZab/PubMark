@@ -35,12 +35,10 @@ import {
   deleteAnnouncement,
   type Announcement,
 } from "../components/announcementsStore";
-import {
-  getStoredApplications,
-  updateApplicationStatus,
-  type StoredApplication,
-} from "../components/applicationsStorage";
-import { getStoredStalls, type StoredStall } from "../components/stallsStorage";
+import { useApplications } from "../hooks/useApplications";
+import { updateApplicationStatus, type Application } from "../services/applicationsApi";
+import { useStalls, type Stall } from "../hooks/useStalls";
+import { type StoredStall } from "../components/stallsStorage";
 import { getSession, getAllUsers, type PubMarkUser } from "../components/authStorage";
 import { getViolations, assignOfficer, type Violation } from "../components/violationsStore";
 import { getViolationRequests, createViolationRequest, assignRequestToOfficer, type ViolationCheckRequest } from "../components/violationRequestStore";
@@ -95,9 +93,9 @@ export function AdminDashboard() {
     setTab(getTabFromURL(location.pathname));
   }, [location.pathname]);
 
-  const [applications, setApplications] = useState<StoredApplication[]>(() => getStoredApplications());
-  const [selectedApp, setSelectedApp] = useState<StoredApplication | null>(null);
-  const [contractApp, setContractApp] = useState<StoredApplication | null>(null);
+  const { applications, refetch } = useApplications();
+  const [selectedApp, setSelectedApp] = useState<Application | null>(null);
+  const [contractApp, setContractApp] = useState<Application | null>(null);
   const [remarksInput, setRemarksInput] = useState("");
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [showForm, setShowForm] = useState(false);
@@ -130,9 +128,7 @@ export function AdminDashboard() {
     if (!session || session.role !== "admin") { navigate("/", { replace: true }); }
   }, [navigate]);
 
-  const refreshApps = () => setApplications(getStoredApplications());
-
-  const storedStalls = getStoredStalls();
+  const { stalls: storedStalls } = useStalls();
   const approvedStallIds = new Set(applications.filter((a) => a.status === "approved").map((a) => a.stallId));
   const totalStalls = storedStalls.length;
   const occupiedCount = storedStalls.filter((s) => approvedStallIds.has(s.id)).length;
@@ -148,23 +144,31 @@ export function AdminDashboard() {
     vacant: vacantCount,
   };
 
-  function handleApprove(id: string) {
-    updateApplicationStatus(id, "approved", remarksInput || undefined);
-    refreshApps();
-    if (selectedApp?.id === id) setSelectedApp((prev) => prev ? { ...prev, status: "approved", adminRemarks: remarksInput } : null);
-    setRemarksInput("");
-    showToast("Application approved.", "success");
-  }
+  const handleApprove = async (id: string) => {
+    try {
+      await updateApplicationStatus(id, "approved", remarksInput || undefined);
+      await refetch();
+      if (selectedApp?.id === id) setSelectedApp((prev) => prev ? { ...prev, status: "approved", adminRemarks: remarksInput } : null);
+      setRemarksInput("");
+      showToast("Application approved.", "success");
+    } catch (error) {
+      showToast(`Failed to approve application: ${(error as Error).message}`, "error");
+    }
+  };
 
-  function handleReject(id: string) {
-    updateApplicationStatus(id, "rejected", remarksInput || undefined);
-    refreshApps();
-    if (selectedApp?.id === id) setSelectedApp((prev) => prev ? { ...prev, status: "rejected", adminRemarks: remarksInput } : null);
-    setRemarksInput("");
-    showToast("Application rejected.", "error");
-  }
+  const handleReject = async (id: string) => {
+    try {
+      await updateApplicationStatus(id, "rejected", remarksInput || undefined);
+      await refetch();
+      if (selectedApp?.id === id) setSelectedApp((prev) => prev ? { ...prev, status: "rejected", adminRemarks: remarksInput } : null);
+      setRemarksInput("");
+      showToast("Application rejected.", "error");
+    } catch (error) {
+      showToast(`Failed to reject application: ${(error as Error).message}`, "error");
+    }
+  };
 
-  function buildContract(app: StoredApplication): ContractData {
+  function buildContract(app: Application): ContractData {
     return {
       applicationId: app.id,
       stallName: app.stallName,
@@ -185,7 +189,7 @@ export function AdminDashboard() {
       setAnnouncements(getAnnouncements());
     }
     if (tab === "applications" || tab === "dashboard") {
-      refreshApps();
+      refetch();
     }
     if (tab === "violations") {
       setViolationsList(getViolations());
@@ -226,7 +230,7 @@ export function AdminDashboard() {
     }
   }
 
-  function sortApplications(apps: StoredApplication[]): StoredApplication[] {
+  function sortApplications(apps: Application[]): Application[] {
     const sorted = [...apps];
     sorted.sort((a, b) => {
       let comparison = 0;
@@ -1628,7 +1632,7 @@ export function AdminDashboard() {
                 <div className="h-64 border border-gray-300 rounded-xl overflow-hidden relative bg-gray-100">
                   {/* Simple stall selector list */}
                   <div className="h-full overflow-y-auto p-3 space-y-2">
-                    {getStoredStalls().map((stall) => (
+                    {storedStalls.map((stall) => (
                       <button
                         key={stall.id}
                         onClick={() => setSelectedStallForRequest(stall)}
