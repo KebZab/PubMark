@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { X, Printer, ScrollText } from "lucide-react";
 
 export interface ContractData {
@@ -12,6 +13,18 @@ export interface ContractData {
   startDate: string;
   endDate: string;
   approvedDate: string;
+  contractTermMonths: string;
+}
+
+const TERM_TEXT: Record<string, string> = {
+  "6": "six (6) months",
+  "12": "one (1) year",
+  "24": "two (2) years",
+  "36": "three (3) years",
+};
+
+function formatTermText(months: string) {
+  return TERM_TEXT[months] ?? `${months} month(s)`;
 }
 
 interface ContractModalProps {
@@ -99,7 +112,7 @@ function ContractPage({
     >
       <div className="min-h-[1122px] w-full px-[68px] py-[54px] print:min-h-0">
         {children}
-        <div className="mt-10 text-center text-[14px]">-{pageNumber}-</div>
+        <div className="mt-10 text-center text-[14px] print:break-before-avoid">-{pageNumber}-</div>
       </div>
     </section>
   );
@@ -114,10 +127,11 @@ export function ContractModal({ contract, onClose }: ContractModalProps) {
   const startDate = formatMediumDate(contract.startDate);
   const endDate = formatMediumDate(contract.endDate);
   const businessType = toTitleCase(contract.businessType || "business");
+  const termText = formatTermText(contract.contractTermMonths);
 
-  return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-[9999] animate-in fade-in duration-200">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[95vh] overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
+  return createPortal(
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-[9999] animate-in fade-in duration-200 print:static print:block print:p-0 print:bg-transparent print:backdrop-blur-none">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[95vh] overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 print:max-h-none print:overflow-visible print:shadow-none print:rounded-none print:block">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-gray-50 print:hidden">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 bg-gradient-to-br from-[#14B8A6] to-[#0d9488] rounded-xl flex items-center justify-center">
@@ -145,17 +159,15 @@ export function ContractModal({ contract, onClose }: ContractModalProps) {
           </div>
         </div>
 
-        <div className="overflow-y-auto flex-1 bg-[#f5f1e8] print:bg-white">
+        <div className="overflow-y-auto flex-1 bg-[#f5f1e8] print:bg-white print:overflow-visible print:h-auto">
           <div className="mx-auto max-w-[920px] px-6 py-8 print:px-0 print:py-0">
             <style>{`
               @media print {
                 @page { size: A4; margin: 12mm; }
+                #root { display: none !important; }
                 body * { visibility: hidden; }
                 .contract-root, .contract-root * { visibility: visible; }
                 .contract-root {
-                  position: absolute;
-                  left: 0;
-                  top: 0;
                   width: 100%;
                   background: white;
                 }
@@ -333,7 +345,7 @@ export function ContractModal({ contract, onClose }: ContractModalProps) {
                 <ArticleHeading article="ARTICLE III" title="TERM OF LEASE" />
 
                 <NumberedClause number="1." title="TERM-">
-                  Unless earlier terminated for reasons specified herein, the term of the leased Agreement shall be for one (1) year to
+                  Unless earlier terminated for reasons specified herein, the term of the leased Agreement shall be for {termText} to
                   start on <InlineBlank value={startDate} className="min-w-[180px]" /> And end at noontime on{" "}
                   <InlineBlank value={endDate} className="min-w-[180px]" />, subject to negotiation subject to the LESSEE having the option
                   of the first refusal.
@@ -446,6 +458,7 @@ export function ContractModal({ contract, onClose }: ContractModalProps) {
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

@@ -122,6 +122,7 @@ export function AdminApplicationDetails() {
       startDate: app!.contractStart,
       endDate: app!.contractEnd,
       approvedDate: new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+      contractTermMonths: app!.contractTermMonths,
     };
   }
 
