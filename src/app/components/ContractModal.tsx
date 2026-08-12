@@ -1,3 +1,4 @@
+import { Fragment, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X, Printer, ScrollText } from "lucide-react";
 
@@ -77,7 +78,7 @@ function NumberedClause({
 }: {
   number: string;
   title: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <div className="mb-5 break-inside-avoid">
@@ -103,7 +104,7 @@ function ContractPage({
   children,
 }: {
   pageNumber: number;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <section
@@ -129,7 +130,9 @@ export function ContractModal({ contract, onClose }: ContractModalProps) {
   const businessType = toTitleCase(contract.businessType || "business");
   const termText = formatTermText(contract.contractTermMonths);
 
-  return createPortal(
+  return (
+    <Fragment>
+      {createPortal(
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-[9999] animate-in fade-in duration-200 print:static print:block print:p-0 print:bg-transparent print:backdrop-blur-none">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[95vh] overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 print:max-h-none print:overflow-visible print:shadow-none print:rounded-none print:block">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-gray-50 print:hidden">
@@ -460,5 +463,7 @@ export function ContractModal({ contract, onClose }: ContractModalProps) {
       </div>
     </div>,
     document.body
+  )}
+    </Fragment>
   );
 }

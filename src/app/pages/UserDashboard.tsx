@@ -34,7 +34,7 @@ import {
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { getAnnouncements, type Announcement } from "../components/announcementsStore";
+import { getAnnouncements, type Announcement } from "../services/announcementsApi";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
 import { type Application } from "../services/applicationsApi";
@@ -50,11 +50,24 @@ import {
   type TransferRequest,
 } from "../components/transferStorage";
 import { saveTerminationRequest } from "../components/terminationRequestsStore";
+import {
+  formatPermitDeadline,
+  getApplicationDisplayStatus,
+  parsePermitDeadlineMeta,
+} from "../components/permitDeadline";
+
+type VendorApplicationDisplayStatus = "pending" | "approved" | "rejected" | "terminated";
+
+function getVendorStatusLabel(status: VendorApplicationDisplayStatus): string {
+  return status === "terminated"
+    ? "Terminated"
+    : status.charAt(0).toUpperCase() + status.slice(1);
+}
 
 function getActiveApp(stallId: string, applications: Application[]): Application | null {
   return (
     applications
-      .filter((a) => a.stallId === stallId && a.status !== "rejected")
+      .filter((a) => a.stallId === stallId && (a.status === "pending" || a.status === "approved"))
       .sort((a, b) => new Date(b.dateApplied).getTime() - new Date(a.dateApplied).getTime())[0] ?? null
   );
 }
@@ -247,12 +260,30 @@ export function UserDashboard() {
   useEffect(() => {
     const s = getSession();
     if (!s) return;
-    setAnnouncements(getAnnouncements());
     setIncomingTransfers(
       getTransfersByToEmail(s.email).filter((t) => t.status === "pending")
     );
     setOutgoingTransfers(getTransfersByFromUserId(s.userId));
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!session) return;
+
+    let cancelled = false;
+    async function loadAnnouncements() {
+      try {
+        const nextAnnouncements = await getAnnouncements();
+        if (!cancelled) setAnnouncements(nextAnnouncements);
+      } catch (error) {
+        if (!cancelled) showToast(`Failed to load announcements: ${(error as Error).message}`, "error");
+      }
+    }
+
+    void loadAnnouncements();
+    return () => {
+      cancelled = true;
+    };
+  }, [session, activeTab]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -656,34 +687,39 @@ export function UserDashboard() {
                 {applications
                   .sort((a, b) => new Date(b.dateApplied).getTime() - new Date(a.dateApplied).getTime())
                   .slice(0, 3)
-                  .map((app) => (
-                  <div
-                    key={app.id}
-                    className="bg-white rounded-xl border border-gray-200 p-3.5 shadow-sm flex items-center gap-3"
-                  >
-                    <div className="w-9 h-9 bg-teal-50 rounded-xl flex items-center justify-center flex-shrink-0">
-                      <FileText className="w-4 h-4 text-[#14B8A6]" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold text-gray-900 truncate">{app.stallName}</p>
-                      <p className="text-[10px] text-gray-400">Applied {new Date(app.dateApplied).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</p>
-                    </div>
-                    <span
-                      className={`flex-shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
-                        app.status === "pending"
-                          ? "bg-amber-50 text-amber-700 ring-1 ring-amber-600/20"
-                          : app.status === "approved"
-                          ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-600/20"
-                          : "bg-red-50 text-red-700 ring-1 ring-red-600/20"
-                      }`}
-                    >
-                      {app.status === "pending" && <Clock className="w-2.5 h-2.5" />}
-                      {app.status === "approved" && <CheckCircle className="w-2.5 h-2.5" />}
-                      {app.status === "rejected" && <XCircle className="w-2.5 h-2.5" />}
-                      {app.status.charAt(0).toUpperCase() + app.status.slice(1)}
-                    </span>
-                  </div>
-                ))}
+                  .map((app) => {
+                    const displayStatus = getApplicationDisplayStatus(app);
+                    return (
+                      <div
+                        key={app.id}
+                        className="bg-white rounded-xl border border-gray-200 p-3.5 shadow-sm flex items-center gap-3"
+                      >
+                        <div className="w-9 h-9 bg-teal-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                          <FileText className="w-4 h-4 text-[#14B8A6]" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-gray-900 truncate">{app.stallName}</p>
+                          <p className="text-[10px] text-gray-400">Applied {new Date(app.dateApplied).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</p>
+                        </div>
+                        <span
+                          className={`flex-shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
+                            displayStatus === "pending"
+                              ? "bg-amber-50 text-amber-700 ring-1 ring-amber-600/20"
+                              : displayStatus === "approved"
+                              ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-600/20"
+                              : displayStatus === "terminated"
+                              ? "bg-slate-100 text-slate-700 ring-1 ring-slate-500/20"
+                              : "bg-red-50 text-red-700 ring-1 ring-red-600/20"
+                          }`}
+                        >
+                          {displayStatus === "pending" && <Clock className="w-2.5 h-2.5" />}
+                          {displayStatus === "approved" && <CheckCircle className="w-2.5 h-2.5" />}
+                          {(displayStatus === "rejected" || displayStatus === "terminated") && <XCircle className="w-2.5 h-2.5" />}
+                          {getVendorStatusLabel(displayStatus)}
+                        </span>
+                      </div>
+                    );
+                  })}
               </div>
             </div>
           </div>
@@ -754,6 +790,8 @@ export function UserDashboard() {
                   const outgoing = outgoingTransfers.find(
                     (t) => t.originalApplicationId === app.id && t.status === "pending"
                   );
+                  const displayStatus = getApplicationDisplayStatus(app);
+                  const permitMeta = parsePermitDeadlineMeta(app.adminRemarks);
                   return (
                     <div
                       key={app.id}
@@ -768,20 +806,27 @@ export function UserDashboard() {
                             <p className="font-semibold text-gray-900 text-sm truncate">{app.stallName}</p>
                             <span
                               className={`flex-shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
-                                app.status === "pending"
+                                displayStatus === "pending"
                                   ? "bg-amber-50 text-amber-700 ring-1 ring-amber-600/20"
-                                  : app.status === "approved"
+                                  : displayStatus === "approved"
                                   ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-600/20"
+                                  : displayStatus === "terminated"
+                                  ? "bg-slate-100 text-slate-700 ring-1 ring-slate-500/20"
                                   : "bg-red-50 text-red-700 ring-1 ring-red-600/20"
                               }`}
                             >
-                              {app.status === "pending" && <Clock className="w-3 h-3" />}
-                              {app.status === "approved" && <CheckCircle className="w-3 h-3" />}
-                              {app.status === "rejected" && <XCircle className="w-3 h-3" />}
-                              {app.status.charAt(0).toUpperCase() + app.status.slice(1)}
+                              {displayStatus === "pending" && <Clock className="w-3 h-3" />}
+                              {displayStatus === "approved" && <CheckCircle className="w-3 h-3" />}
+                              {(displayStatus === "rejected" || displayStatus === "terminated") && <XCircle className="w-3 h-3" />}
+                              {getVendorStatusLabel(displayStatus)}
                             </span>
                           </div>
                           <p className="text-xs text-gray-400 mt-0.5">Applied {new Date(app.dateApplied).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</p>
+                          {displayStatus === "approved" && !app.permitFileName && permitMeta.permitDeadlineAt && (
+                            <p className="text-[10px] text-amber-700 mt-1">
+                              Permit due {formatPermitDeadline(permitMeta.permitDeadlineAt)}
+                            </p>
+                          )}
                           {outgoing && (
                             <div className="mt-1 flex items-center gap-1.5 text-[10px] text-purple-600">
                               <ArrowRightLeft className="w-3 h-3" />
@@ -1028,18 +1073,22 @@ export function UserDashboard() {
                           Cancel
                         </button>
                         <button
-                          onClick={() => {
+                          onClick={async () => {
                             if (!session) return;
-                            saveTerminationRequest({
-                              type: "account",
-                              vendorId: session.userId,
-                              vendorName: session.name,
-                              vendorEmail: session.email,
-                              reason: "User-initiated account termination request",
-                            });
-                            setTerminateAccountConfirm(false);
-                            setShowProfileModal(false);
-                            showToast("Account termination request submitted.", "success");
+                            try {
+                              await saveTerminationRequest({
+                                type: "account",
+                                vendorId: session.userId,
+                                vendorName: session.name,
+                                vendorEmail: session.email,
+                                reason: "User-initiated account termination request",
+                              });
+                              setTerminateAccountConfirm(false);
+                              setShowProfileModal(false);
+                              showToast("Account termination request submitted.", "success");
+                            } catch (error) {
+                              showToast(`Failed to submit termination request: ${(error as Error).message}`, "error");
+                            }
                           }}
                           className="flex-1 py-2 bg-red-500 text-white rounded-xl text-xs font-semibold hover:bg-red-600 transition-colors"
                         >
@@ -1163,20 +1212,24 @@ export function UserDashboard() {
                 Cancel
               </button>
               <button
-                onClick={() => {
+                onClick={async () => {
                   if (!session || !terminateContractModal) return;
-                  saveTerminationRequest({
-                    type: "contract",
-                    vendorId: session.userId,
-                    vendorName: session.name,
-                    vendorEmail: session.email,
-                    stallId: terminateContractModal.stallId,
-                    stallName: terminateContractModal.stallName,
-                    reason: terminateReason.trim() || "No reason provided",
-                  });
-                  setTerminateContractModal(null);
-                  setTerminateReason("");
-                  showToast("Contract termination request submitted.", "success");
+                  try {
+                    await saveTerminationRequest({
+                      type: "contract",
+                      vendorId: session.userId,
+                      vendorName: session.name,
+                      vendorEmail: session.email,
+                      stallId: terminateContractModal.stallId,
+                      stallName: terminateContractModal.stallName,
+                      reason: terminateReason.trim() || "No reason provided",
+                    });
+                    setTerminateContractModal(null);
+                    setTerminateReason("");
+                    showToast("Contract termination request submitted.", "success");
+                  } catch (error) {
+                    showToast(`Failed to submit termination request: ${(error as Error).message}`, "error");
+                  }
                 }}
                 className="flex-1 py-2.5 bg-red-500 text-white rounded-xl text-sm font-semibold hover:bg-red-600 transition-colors"
               >

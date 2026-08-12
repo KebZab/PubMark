@@ -68,6 +68,43 @@ future Supabase/PostgreSQL reference, not the running backend.
   `findUserByEmail()` from `src/app/services/api.ts` so existing MySQL-backed
   accounts can be found correctly.
 
+### Additional progress (2026-08-13)
+
+- Contract termination handling was extended so admin and super-admin approval
+  of a termination request now also updates the related approved application
+  record instead of leaving the vendor-side application in the wrong state.
+- Vendor-facing application status rendering was corrected so approved
+  terminations and permit-deadline enforcement now display as `Terminated`
+  instead of showing `Rejected` in the UI.
+- Added permit-deadline metadata helpers in
+  `src/app/components/permitDeadline.ts` so approval remarks can safely carry
+  permit deadline, last update, and termination markers without losing the
+  readable admin remarks text already shown in the app.
+- Added admin permit-deadline controls for approved vendor applications that
+  still lack a submitted business permit. Admins can now set an initial
+  submission deadline and move that deadline later when needed.
+- Added permit workflow support in the frontend application API layer,
+  including permit-related fields on application records and a dedicated
+  permit update route used by the admin and vendor flows.
+- Extended `server/src/index.js` so the temporary backend parses permit
+  metadata, maps it into application responses, exposes a permit patch
+  endpoint, and automatically terminates approved applications whose permit
+  deadline has passed without submission.
+- Updated the relevant admin and vendor screens, including
+  `AdminDashboard.tsx`, `AdminApplicationDetails.tsx`,
+  `ApplicationDetails.tsx`, and `UserDashboard.tsx`, so they show the new
+  permit deadline state and use the corrected terminated display behavior.
+- Registration page layout in `src/app/pages/Register.tsx` was refined to fix
+  the form overflowing outside the viewport. The form now keeps its content
+  within the screen bounds while preserving the existing visual style.
+- The registration scroll behavior was also adjusted so the top name fields do
+  not disappear when navigating the form on smaller screens; the form column
+  now starts from the top instead of centering the entire panel vertically.
+- No cross-platform packaging implementation was added yet. The recommended
+  path discussed in this session was to keep the web app installable as a PWA
+  and add Capacitor later if a true downloadable mobile app package such as an
+  Android APK is required.
+
 ## 2. Architecture
 
 ```text

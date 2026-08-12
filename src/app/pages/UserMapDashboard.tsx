@@ -184,31 +184,35 @@ export function UserMapDashboard() {
     if (center) setFlyTarget(center);
   };
 
-  const handleSubmitReport = () => {
+  const handleSubmitReport = async () => {
     if (!selected || !reportDescription.trim()) return;
     const session = getSession();
     if (!session) return;
 
     const globalApp = getActiveApp(selected.id, allApplications);
 
-    saveViolation({
-      stallId: selected.id,
-      stallName: selected.stall_name,
-      vendorName: globalApp?.applicantName || "Unknown",
-      officerId: "user_seeded_003", // Default officer
-      officerName: "Carlos Reyes",
-      category: reportCategory,
-      description: reportDescription.trim(),
-      status: "open",
-      evidence: [],
-      remarks: `Reported by: ${session.name} (${session.email})`,
-    });
+    try {
+      await saveViolation({
+        stallId: selected.id,
+        stallName: selected.stall_name,
+        vendorName: globalApp?.applicantName || "Unknown",
+        officerId: "44444444-4444-4444-8444-444444444444",
+        officerName: "Carlos Reyes",
+        category: reportCategory,
+        description: reportDescription.trim(),
+        status: "open",
+        evidence: [],
+        remarks: `Reported by: ${session.name} (${session.email})`,
+      });
 
-    showToast("Report submitted successfully.", "success");
-    setShowReportModal(false);
-    setReportCategory("Other");
-    setReportDescription("");
-    setSelected(null);
+      showToast("Report submitted successfully.", "success");
+      setShowReportModal(false);
+      setReportCategory("Other");
+      setReportDescription("");
+      setSelected(null);
+    } catch (error) {
+      showToast(`Failed to submit report: ${(error as Error).message}`, "error");
+    }
   };
 
   return (

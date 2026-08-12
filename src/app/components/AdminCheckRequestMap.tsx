@@ -11,7 +11,7 @@ import {
   saveCheckRequest,
   type RequestPriority,
 } from "./checkRequestsStore";
-import { getAllUsers } from "./authStorage";
+import { listUsers, type ApiProfile } from "../services/api";
 import { showToast } from "./Toast";
 
 function getActiveApp(stallId: string, applications: Application[]): Application | null {
@@ -105,14 +105,32 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }: Pro
   const [reason, setReason] = useState("");
   const [notes, setNotes] = useState("");
   const [assignedOfficer, setAssignedOfficer] = useState("");
+  const [officers, setOfficers] = useState<ApiProfile[]>([]);
 
-  const officers = getAllUsers().filter((u) => u.role === "officer");
   const selectedStall = stalls.find((s) => s.id === selectedStallId) ?? null;
 
   const floorCounts = {
     1: stalls.filter((s) => s.floor === "1").length,
     2: stalls.filter((s) => s.floor === "2").length,
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadOfficers() {
+      try {
+        const response = await listUsers("officer");
+        if (cancelled) return;
+        setOfficers(response.users);
+        setAssignedOfficer((current) => current || response.users[0]?.id || "");
+      } catch (error) {
+        if (!cancelled) showToast(`Failed to load officers: ${(error as Error).message}`, "error");
+      }
+    }
+    void loadOfficers();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function handleStallClick(stallId: string) {
     setSelectedStallId(stallId);
@@ -123,32 +141,35 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }: Pro
     setAssignedOfficer(officers[0]?.id ?? "");
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     if (!selectedStall) return;
     if (!reason.trim()) {
       showToast("Please provide a reason for the check request.", "error");
       return;
     }
 
-    const officer = officers.find((o) => o.id === assignedOfficer);
-    saveCheckRequest({
-      stallId: selectedStall.id,
-      stallName: selectedStall.stall_name,
-      requestedBy: userId,
-      requestedByName: userName,
-      assignedTo: assignedOfficer || null,
-      assignedToName: officer?.name ?? null,
-      priority,
-      reason: reason.trim(),
-      notes: notes.trim(),
-      status: "pending",
-      completionNotes: "",
-    });
+    try {
+      await saveCheckRequest({
+        stallId: selectedStall.id,
+        stallName: selectedStall.stall_name,
+        requestedBy: userId,
+        requestedByName: userName,
+        assignedTo: assignedOfficer || null,
+        assignedToName: officers.find((o) => o.id === assignedOfficer)?.name ?? null,
+        priority,
+        reason: reason.trim(),
+        notes: notes.trim(),
+        status: "pending",
+        completionNotes: "",
+      });
 
-    showToast("Officer check request created.", "success");
-    setShowForm(false);
-    setSelectedStallId(null);
-    if (onRequestCreated) onRequestCreated();
+      showToast("Officer check request created.", "success");
+      setShowForm(false);
+      setSelectedStallId(null);
+      if (onRequestCreated) onRequestCreated();
+    } catch (error) {
+      showToast(`Failed to create check request: ${(error as Error).message}`, "error");
+    }
   }
 
   const PRIORITY_OPTIONS: { value: RequestPriority; label: string; color: string }[] = [

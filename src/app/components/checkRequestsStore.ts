@@ -1,3 +1,5 @@
+import { apiFetch } from "../services/api";
+
 export type RequestStatus = "pending" | "completed" | "cancelled";
 export type RequestPriority = "low" | "normal" | "high" | "urgent";
 
@@ -24,59 +26,66 @@ export interface OfficerCheckRequest {
   completionNotes: string;
   completionSummary: string;
   completionFiles: CompletionFile[];
+  requestSource?: "check" | "violation";
 }
 
-const KEY = "pubmark_check_requests";
-
-export function getCheckRequests(): OfficerCheckRequest[] {
-  try {
-    const raw = localStorage.getItem(KEY);
-    return raw ? (JSON.parse(raw) as OfficerCheckRequest[]) : [];
-  } catch {
-    return [];
-  }
+export async function getCheckRequests(): Promise<OfficerCheckRequest[]> {
+  const response = await apiFetch<{ requests: OfficerCheckRequest[] }>("/check-requests");
+  return response.requests;
 }
 
-export function saveCheckRequest(
+export async function saveCheckRequest(
   data: Omit<OfficerCheckRequest, "id" | "createdAt" | "completedAt" | "completionSummary" | "completionFiles">
-): OfficerCheckRequest {
-  const requests = getCheckRequests();
-  const request: OfficerCheckRequest = {
-    ...data,
-    id: `req_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-    createdAt: new Date().toISOString(),
-    completedAt: null,
-    completionSummary: "",
-    completionFiles: [],
-  };
-  requests.unshift(request);
-  localStorage.setItem(KEY, JSON.stringify(requests));
-  return request;
+): Promise<OfficerCheckRequest> {
+  const response = await apiFetch<{ request: OfficerCheckRequest }>("/check-requests", {
+    method: "POST",
+    body: JSON.stringify({
+      stallId: data.stallId,
+      assignedTo: data.assignedTo,
+      priority: data.priority,
+      reason: data.reason,
+      notes: data.notes,
+    }),
+  });
+  return response.request;
 }
 
-export function updateCheckRequestStatus(
+export async function upsertCheckRequest(request: OfficerCheckRequest): Promise<OfficerCheckRequest> {
+  const response = await apiFetch<{ request: OfficerCheckRequest }>(`/check-requests/${request.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      assignedTo: request.assignedTo,
+      priority: request.priority,
+      reason: request.reason,
+      notes: request.notes,
+      status: request.status,
+      completionNotes: request.completionNotes,
+      completionSummary: request.completionSummary,
+      completionFiles: request.completionFiles,
+    }),
+  });
+  return response.request;
+}
+
+export async function updateCheckRequestStatus(
   id: string,
   status: RequestStatus,
   completionNotes?: string,
   completionSummary?: string,
   completionFiles?: CompletionFile[]
-): OfficerCheckRequest | null {
-  const requests = getCheckRequests();
-  const idx = requests.findIndex((r) => r.id === id);
-  if (idx === -1) return null;
-  requests[idx] = {
-    ...requests[idx],
-    status,
-    completionNotes: completionNotes ?? requests[idx].completionNotes,
-    completionSummary: completionSummary ?? requests[idx].completionSummary,
-    completionFiles: completionFiles ?? requests[idx].completionFiles,
-    completedAt: status !== "pending" ? new Date().toISOString() : null,
-  };
-  localStorage.setItem(KEY, JSON.stringify(requests));
-  return requests[idx];
+): Promise<OfficerCheckRequest> {
+  const response = await apiFetch<{ request: OfficerCheckRequest }>(`/check-requests/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status,
+      completionNotes,
+      completionSummary,
+      completionFiles,
+    }),
+  });
+  return response.request;
 }
 
-export function deleteCheckRequest(id: string): void {
-  const requests = getCheckRequests().filter((r) => r.id !== id);
-  localStorage.setItem(KEY, JSON.stringify(requests));
+export async function deleteCheckRequest(id: string): Promise<void> {
+  await apiFetch<{ ok: true }>(`/check-requests/${id}`, { method: "DELETE" });
 }

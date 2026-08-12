@@ -148,29 +148,33 @@ export function OfficerMapView({
     setShowReportModal(true);
   }
 
-  function handleSubmitViolation() {
+  async function handleSubmitViolation() {
     if (!selectedStallId || !form.description.trim()) {
       showToast("Please fill in all required fields.", "error");
       return;
     }
     const stall = stalls.find((s) => s.id === selectedStallId);
-    saveViolation({
-      stallId: selectedStallId,
-      stallName: stall?.stall_name ?? selectedStallId,
-      vendorName: form.vendorName || selectedApp?.applicantName || "Unknown",
-      officerId,
-      officerName,
-      category: form.category,
-      description: form.description,
-      status: "open",
-      evidence,
-      remarks: form.remarks,
-    });
-    showToast("Violation reported successfully.", "success");
-    setShowReportModal(false);
-    setSelectedStallId(null);
-    setForm({ vendorName: "", category: "Health Violation", description: "", remarks: "" });
-    setEvidence([]);
+    try {
+      await saveViolation({
+        stallId: selectedStallId,
+        stallName: stall?.stall_name ?? selectedStallId,
+        vendorName: form.vendorName || selectedApp?.applicantName || "Unknown",
+        officerId,
+        officerName,
+        category: form.category,
+        description: form.description,
+        status: "open",
+        evidence,
+        remarks: form.remarks,
+      });
+      showToast("Violation reported successfully.", "success");
+      setShowReportModal(false);
+      setSelectedStallId(null);
+      setForm({ vendorName: "", category: "Health Violation", description: "", remarks: "" });
+      setEvidence([]);
+    } catch (error) {
+      showToast(`Failed to report violation: ${(error as Error).message}`, "error");
+    }
   }
 
   function handleAddEvidence(e: React.ChangeEvent<HTMLInputElement>) {

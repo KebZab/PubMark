@@ -41,24 +41,36 @@ export function CheckRequests() {
   const [selectedRequest, setSelectedRequest] = useState<OfficerCheckRequest | null>(null);
 
   useEffect(() => {
-    refreshRequests();
+    void refreshRequests();
   }, []);
 
-  function refreshRequests() {
-    setRequests(getCheckRequests());
+  async function refreshRequests() {
+    try {
+      setRequests(await getCheckRequests());
+    } catch (error) {
+      showToast(`Failed to load requests: ${(error as Error).message}`, "error");
+    }
   }
 
-  function handleDelete(id: string) {
-    deleteCheckRequest(id);
-    refreshRequests();
-    showToast("Request deleted.", "success");
+  async function handleDelete(id: string) {
+    try {
+      await deleteCheckRequest(id);
+      await refreshRequests();
+      showToast("Request deleted.", "success");
+    } catch (error) {
+      showToast(`Failed to delete request: ${(error as Error).message}`, "error");
+    }
   }
 
-  function handleCancel(id: string) {
-    updateCheckRequestStatus(id, "cancelled");
-    refreshRequests();
-    setSelectedRequest(null);
-    showToast("Request cancelled.", "success");
+  async function handleCancel(id: string) {
+    try {
+      await updateCheckRequestStatus(id, "cancelled");
+      await refreshRequests();
+      setSelectedRequest(null);
+      showToast("Request cancelled.", "success");
+    } catch (error) {
+      showToast(`Failed to cancel request: ${(error as Error).message}`, "error");
+    }
   }
 
   const stats = {

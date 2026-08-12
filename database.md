@@ -10,7 +10,8 @@
 1. [System Overview](#system-overview)
 2. [Role Summary](#role-summary)
 3. [System Flow](#system-flow)
-4. [Data Stores (localStorage → Supabase)](#data-stores)
+4. [Session Progress - August 13, 2026](#session-progress---august-13-2026)
+5. [Data Stores (localStorage → Supabase)](#data-stores)
    - [users](#1-users)
    - [sessions](#2-sessions)
    - [stalls](#3-stalls)
@@ -24,9 +25,9 @@
    - [inventory](#11-inventory)
    - [archive](#12-archive)
    - [market_perimeter](#13-market_perimeter)
-5. [UI/Ephemeral State Keys](#uiephemeral-state-keys)
-6. [Entity Relationships](#entity-relationships)
-7. [Supabase Migration Notes](#supabase-migration-notes)
+6. [UI/Ephemeral State Keys](#uiephemeral-state-keys)
+7. [Entity Relationships](#entity-relationships)
+8. [Supabase Migration Notes](#supabase-migration-notes)
 
 ---
 
@@ -127,6 +128,76 @@ SUPER ADMIN
   └─► Manage Archive (restore or delete archived records)
         └─ archiveStore: pubmark_archive
 ```
+
+---
+
+## Session Progress - August 13, 2026
+
+This section summarizes the major implementation work completed during the current development session.
+
+### Backend / Database Progress
+
+- Announcements were moved from browser `localStorage` into the backend database.
+- New API routes were added for announcements:
+  - `GET /api/announcements`
+  - `POST /api/announcements`
+  - `DELETE /api/announcements/:id`
+- The backend now auto-creates and seeds the `announcements` table with default records when needed.
+- Officer/admin request flow was migrated to database-backed API routes:
+  - `GET/POST/PATCH/DELETE /api/check-requests`
+  - `GET/POST/PATCH /api/violation-requests`
+  - `GET/POST/PATCH /api/violations`
+  - `GET/POST/PATCH /api/termination-requests`
+  - `GET /api/users`
+- Supporting database helpers were added for:
+  - `check_requests`
+  - `check_request_files`
+  - `violation_requests`
+  - `violations`
+  - `violation_evidence`
+  - `termination_requests`
+- Legacy request migration was added so old browser-stored data can be imported into the database.
+- Violation requests are now mirrored into `check_requests` so officer completion reports can appear in admin inspection reports.
+
+### Frontend Progress
+
+- Admin and vendor announcements now load from the API instead of local browser storage.
+- Officer check requests, violation requests, violations, and termination requests were migrated to API-backed stores.
+- The following frontend data modules were updated to use the database:
+  - `src/app/services/announcementsApi.ts`
+  - `src/app/components/checkRequestsStore.ts`
+  - `src/app/components/violationRequestStore.ts`
+  - `src/app/components/violationsStore.ts`
+  - `src/app/components/terminationRequestsStore.ts`
+- Admin and Super Admin dashboards were updated so reports and requests load from API data.
+- Dashboard report loaders were hardened so one failing endpoint no longer hides all report sections.
+- Officer completion flow was updated so:
+  - completion reports are submitted to the database
+  - linked violation requests are marked completed
+  - refreshed request lists come from API state instead of stale local values
+- Officer violation submission was fixed to await the API response before refreshing the UI.
+- Analytics was fixed to load violations asynchronously from the API instead of treating the API call like a local array.
+
+### Application / Contract Workflow Progress
+
+- Permit deadline handling was added for approved vendor applications missing a business permit.
+- Admin can set and later move the business permit submission deadline.
+- Applications can now be auto-terminated when the permit deadline expires without compliance.
+- Termination approval logic was updated so approved termination actions mark the contract as terminated rather than appearing rejected in the vendor flow.
+- Contract printing work continued through `ContractModal`, including type fixes to prevent route crashes from the modal component.
+
+### UI / UX Fixes Completed
+
+- Registration layout issues were addressed so the form no longer overflows the visible screen.
+- Registration scrolling issues were addressed so upper form fields remain reachable.
+- Officer request visibility issues were investigated and moved toward API-backed synchronization.
+- Reports and request visibility for Admin and Super Admin were improved after the local-to-database migration.
+
+### Current Notes
+
+- The core reports data is now confirmed to exist in the database.
+- Remaining issues are now mostly frontend integration issues rather than missing backend persistence.
+- If another page still breaks after the storage migration, check first for any old synchronous store usage that now needs `await` and state loading.
 
 ---
 

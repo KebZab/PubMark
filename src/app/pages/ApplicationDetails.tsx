@@ -7,8 +7,9 @@ import {
   ArrowRightLeft, Mail, X, Upload, Loader,
 } from "lucide-react";
 import { useApplications } from "../hooks/useApplications";
-import { deleteApplication, type Application } from "../services/applicationsApi";
+import { deleteApplication, updateApplicationPermit, type Application } from "../services/applicationsApi";
 import { findUserByEmail } from "../services/api";
+import { getStalls } from "../services/stallsApi";
 import { formatFileSize } from "../components/applicationsStorage";
 import { getSession } from "../components/authStorage";
 import {
@@ -16,6 +17,13 @@ import {
   createTransferRequest,
 } from "../components/transferStorage";
 import { showToast } from "../components/Toast";
+import {
+  formatPermitDeadline,
+  getApplicationDisplayStatus,
+  parsePermitDeadlineMeta,
+} from "../components/permitDeadline";
+
+type VendorApplicationDisplayStatus = "pending" | "approved" | "rejected" | "terminated";
 
 const STATUS_CONFIG = {
   pending: {
@@ -48,7 +56,26 @@ const STATUS_CONFIG = {
     iconColor: "text-red-600",
     badge: "bg-red-100 text-red-700",
   },
-};
+  terminated: {
+    icon: XCircle,
+    label: "Terminated",
+    desc: "This contract has been terminated after admin approval.",
+    bg: "bg-slate-50",
+    border: "border-slate-200",
+    iconBg: "bg-slate-100",
+    iconColor: "text-slate-600",
+    badge: "bg-slate-100 text-slate-700",
+  },
+} satisfies Record<VendorApplicationDisplayStatus, {
+  icon: typeof Clock;
+  label: string;
+  desc: string;
+  bg: string;
+  border: string;
+  iconBg: string;
+  iconColor: string;
+  badge: string;
+}>;
 
 const TERM_MAP: Record<string, string> = {
   "6": "6 Months", "12": "1 Year", "24": "2 Years", "36": "3 Years",
@@ -67,7 +94,7 @@ export function ApplicationDetails() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const session = getSession();
-  const { applications } = useApplications();
+  const { applications, setApplications } = useApplications();
   const app = id ? applications.find(a => a.id === id) : null;
   const [uploading, setUploading] = useState(false);
 
@@ -157,20 +184,25 @@ export function ApplicationDetails() {
     );
   }
 
-  const cfg = STATUS_CONFIG[app.status];
+  const displayStatus = getApplicationDisplayStatus(app);
+  const permitMeta = parsePermitDeadlineMeta(app.adminRemarks);
+  const cfg = STATUS_CONFIG[displayStatus];
   const StatusIcon = cfg.icon;
   const termLabel = TERM_MAP[app.contractTermMonths] ?? `${app.contractTermMonths} months`;
   const dateApplied = new Date(app.dateApplied);
 
-  function handlePermitUpload(file: File) {
+  async function handlePermitUpload(file: File) {
     if (!id || !app) return;
     setUploading(true);
-    const updated = updateApplicationPermit(id, file.name, formatFileSize(file.size));
-    if (updated) {
-      setApp(updated);
+    try {
+      const updated = await updateApplicationPermit(id, file.name, formatFileSize(file.size));
+      setApplications((current) => current.map((item) => item.id === updated.id ? updated : item));
       showToast("Business permit uploaded successfully!", "success");
+    } catch (error) {
+      showToast(`Failed to upload business permit: ${(error as Error).message}`, "error");
+    } finally {
+      setUploading(false);
     }
-    setUploading(false);
   }
 
   const handleWithdraw = async () => {
@@ -224,6 +256,15 @@ export function ApplicationDetails() {
               <p className="text-xs text-gray-600 mt-0.5 leading-snug">{cfg.desc}</p>
             </div>
           </div>
+
+          {displayStatus === "approved" && !app.permitFileName && permitMeta.permitDeadlineAt && (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+              <p className="text-sm font-semibold text-amber-900">Business permit deadline</p>
+              <p className="text-xs text-amber-700 mt-1 leading-snug">
+                Submit your business permit on or before {formatPermitDeadline(permitMeta.permitDeadlineAt)} to keep this approved application active.
+              </p>
+            </div>
+          )}
 
           {/* Stall info */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-4">
@@ -299,17 +340,17 @@ export function ApplicationDetails() {
               <div className="flex gap-3">
                 <div className="flex items-start">
                   <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                    app.status !== "pending" ? "bg-[#14B8A6]" : "bg-gray-200"
+                    displayStatus !== "pending" ? "bg-[#14B8A6]" : "bg-gray-200"
                   }`}>
-                    <div className={`w-2 h-2 rounded-full ${app.status !== "pending" ? "bg-white" : "bg-gray-400"}`} />
+                    <div className={`w-2 h-2 rounded-full ${displayStatus !== "pending" ? "bg-white" : "bg-gray-400"}`} />
                   </div>
                 </div>
                 <div className="flex-1 pt-1">
-                  <p className={`text-sm font-semibold ${app.status !== "pending" ? "text-gray-900" : "text-gray-400"}`}>
-                    {app.status === "approved" ? "Approved" : app.status === "rejected" ? "Rejected" : "Under Review"}
+                  <p className={`text-sm font-semibold ${displayStatus !== "pending" ? "text-gray-900" : "text-gray-400"}`}>
+                    {displayStatus === "approved" ? "Approved" : displayStatus === "terminated" ? "Terminated" : displayStatus === "rejected" ? "Rejected" : "Under Review"}
                   </p>
                   <p className="text-xs text-gray-400 mt-0.5">
-                    {app.status === "pending" ? "Awaiting admin decision" : "Decision has been made"}
+                    {displayStatus === "pending" ? "Awaiting admin decision" : "Decision has been made"}
                   </p>
                 </div>
               </div>
@@ -413,11 +454,15 @@ export function ApplicationDetails() {
               <AlertCircle className="w-4 h-4 text-[#14B8A6]" />
               <h2 className="text-sm font-semibold text-gray-800">Admin Remarks</h2>
             </div>
-            {app.adminRemarks ? (
+            {permitMeta.visibleRemarks ? (
               <div className={`rounded-xl p-3 border ${
-                app.status === "approved" ? "bg-emerald-50 border-emerald-200" : "bg-red-50 border-red-200"
+                displayStatus === "approved"
+                  ? "bg-emerald-50 border-emerald-200"
+                  : displayStatus === "terminated"
+                  ? "bg-slate-50 border-slate-200"
+                  : "bg-red-50 border-red-200"
               }`}>
-                <p className="text-sm text-gray-700 leading-relaxed">{app.adminRemarks}</p>
+                <p className="text-sm text-gray-700 leading-relaxed">{permitMeta.visibleRemarks}</p>
               </div>
             ) : (
               <div className="bg-gray-50 rounded-xl p-4 text-center border border-gray-100">

@@ -10,6 +10,7 @@ export interface ApiProfile {
   address?: string;
   phone?: string;
   department?: string;
+  createdAt?: string;
 }
 
 export class ApiConfigurationError extends Error {
@@ -49,6 +50,13 @@ export async function getCurrentProfile() {
 export async function findUserByEmail(email: string) {
   const query = new URLSearchParams({ email: email.trim().toLowerCase() });
   return apiFetch<{ profile: ApiProfile }>(`/auth/users/by-email?${query.toString()}`);
+}
+
+export async function listUsers(role?: UserRole) {
+  const query = new URLSearchParams();
+  if (role) query.set("role", role);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiFetch<{ users: ApiProfile[] }>(`/users${suffix}`);
 }
 
 export { apiFetch };

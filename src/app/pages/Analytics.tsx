@@ -1,10 +1,11 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { BarChart3, Users, Store, FileText, AlertTriangle } from "lucide-react";
 import { useApplications } from "../hooks/useApplications";
 import { useStalls } from "../hooks/useStalls";
 import { getAllUsers, getSession } from "../components/authStorage";
-import { getViolations } from "../components/violationsStore";
+import { getViolations, type Violation } from "../components/violationsStore";
 import { DashboardLayout } from "../components/DashboardLayout";
+import { showToast } from "../components/Toast";
 
 const TEAL = "#14B8A6";
 const GREEN = "#10b981";
@@ -148,11 +149,20 @@ function DonutChart({ data, colors, size = 150 }: {
 export function Analytics() {
   const session = getSession()!;
   const [period, setPeriod] = useState<"6m" | "12m">("6m");
+  const [violations, setViolations] = useState<Violation[]>([]);
 
   const { applications } = useApplications();
   const { stalls } = useStalls();
   const users = getAllUsers();
-  const violations = getViolations();
+
+  useEffect(() => {
+    void getViolations()
+      .then(setViolations)
+      .catch((error) => {
+        showToast(`Failed to load analytics violations: ${(error as Error).message}`, "error");
+        setViolations([]);
+      });
+  }, []);
 
   const monthCount = period === "6m" ? 6 : 12;
 

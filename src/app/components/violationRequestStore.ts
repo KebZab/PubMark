@@ -1,3 +1,5 @@
+import { apiFetch } from "../services/api";
+
 export interface ViolationCheckRequest {
   id: string;
   stallId: string;
@@ -12,60 +14,43 @@ export interface ViolationCheckRequest {
   completedAt: string | null;
 }
 
-const KEY = "pubmark_violation_requests";
-
-export function getViolationRequests(): ViolationCheckRequest[] {
-  try {
-    const raw = localStorage.getItem(KEY);
-    return raw ? (JSON.parse(raw) as ViolationCheckRequest[]) : [];
-  } catch {
-    return [];
-  }
+export async function getViolationRequests(): Promise<ViolationCheckRequest[]> {
+  const response = await apiFetch<{ requests: ViolationCheckRequest[] }>("/violation-requests");
+  return response.requests;
 }
 
-export function createViolationRequest(
+export async function createViolationRequest(
   data: Omit<ViolationCheckRequest, "id" | "createdAt" | "completedAt" | "status">
-): ViolationCheckRequest {
-  const requests = getViolationRequests();
-  const request: ViolationCheckRequest = {
-    ...data,
-    id: `vreq_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-    status: "pending",
-    createdAt: new Date().toISOString(),
-    completedAt: null,
-  };
-  requests.unshift(request);
-  localStorage.setItem(KEY, JSON.stringify(requests));
-  return request;
+): Promise<ViolationCheckRequest> {
+  const response = await apiFetch<{ request: ViolationCheckRequest }>("/violation-requests", {
+    method: "POST",
+    body: JSON.stringify({
+      stallId: data.stallId,
+      reason: data.reason,
+    }),
+  });
+  return response.request;
 }
 
-export function assignRequestToOfficer(
+export async function assignRequestToOfficer(
   requestId: string,
   officerId: string,
-  officerName: string
-): ViolationCheckRequest | null {
-  const requests = getViolationRequests();
-  const idx = requests.findIndex((r) => r.id === requestId);
-  if (idx === -1) return null;
-  requests[idx] = {
-    ...requests[idx],
-    status: "assigned",
-    assignedOfficerId: officerId,
-    assignedOfficerName: officerName,
-  };
-  localStorage.setItem(KEY, JSON.stringify(requests));
-  return requests[idx];
+  _officerName: string
+): Promise<ViolationCheckRequest> {
+  const response = await apiFetch<{ request: ViolationCheckRequest }>(`/violation-requests/${requestId}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      assignedOfficerId: officerId,
+      status: "assigned",
+    }),
+  });
+  return response.request;
 }
 
-export function completeViolationRequest(requestId: string): ViolationCheckRequest | null {
-  const requests = getViolationRequests();
-  const idx = requests.findIndex((r) => r.id === requestId);
-  if (idx === -1) return null;
-  requests[idx] = {
-    ...requests[idx],
-    status: "completed",
-    completedAt: new Date().toISOString(),
-  };
-  localStorage.setItem(KEY, JSON.stringify(requests));
-  return requests[idx];
+export async function completeViolationRequest(requestId: string): Promise<ViolationCheckRequest> {
+  const response = await apiFetch<{ request: ViolationCheckRequest }>(`/violation-requests/${requestId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "completed" }),
+  });
+  return response.request;
 }

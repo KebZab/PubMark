@@ -23,6 +23,9 @@ export interface Application {
   status: "pending" | "approved" | "rejected";
   adminRemarks: string;
   dateApplied: string;
+  permitDeadlineAt?: string | null;
+  permitDeadlineUpdatedAt?: string | null;
+  permitTerminatedAt?: string | null;
 }
 
 export async function getApplications(): Promise<Application[]> {
@@ -57,6 +60,32 @@ export async function updateApplicationStatus(id: string, status: "approved" | "
   const result = await apiFetch<{ application: Application }>(`/applications/${id}`, {
     method: "PATCH",
     body: JSON.stringify({ status, adminRemarks }),
+  });
+  return result.application;
+}
+
+export async function updateApplicationAdmin(
+  id: string,
+  data: {
+    status?: "approved" | "rejected";
+    adminRemarks?: string;
+  },
+): Promise<Application> {
+  const result = await apiFetch<{ application: Application }>(`/applications/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+  return result.application;
+}
+
+export async function updateApplicationPermit(
+  id: string,
+  permitFileName: string,
+  permitFileSize: string,
+): Promise<Application> {
+  const result = await apiFetch<{ application: Application }>(`/applications/${id}/permit`, {
+    method: "PATCH",
+    body: JSON.stringify({ permitFileName, permitFileSize }),
   });
   return result.application;
 }

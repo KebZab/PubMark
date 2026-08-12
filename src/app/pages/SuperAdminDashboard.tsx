@@ -17,6 +17,8 @@ import { importStalls, updateStall } from "../services/stallsApi";
 import { updateStoredStall, getStoredStalls } from "../components/stallsStorage";
 import { useApplications } from "../hooks/useApplications";
 import { updateApplicationStatus, type Application } from "../services/applicationsApi";
+import { listUsers, type ApiProfile } from "../services/api";
+import { migrateLegacyRequests } from "../services/legacyRequestMigration";
 import { getViolations, assignOfficer, type Violation } from "../components/violationsStore";
 import {
   getViolationRequests,
@@ -30,6 +32,7 @@ import { getTerminationRequests, updateTerminationStatus, type TerminationReques
 import { DashboardLayout } from "../components/DashboardLayout";
 import { SuperAdminMapEditor } from "../components/SuperAdminMapEditor";
 import { showToast } from "../components/Toast";
+import { buildPermitDeadlineRemarks, parsePermitDeadlineMeta } from "../components/permitDeadline";
 
 const ROLE_COLORS: Record<UserRole, string> = {
   super_admin: "bg-purple-100 text-purple-700",
@@ -121,24 +124,135 @@ export function SuperAdminDashboard() {
   const [terminationActionConfirm, setTerminationActionConfirm] = useState<{ id: string; action: "approved" | "rejected"; name: string; type: string } | null>(null);
   const [reportSearch, setReportSearch] = useState("");
   const [reportStatusFilter, setReportStatusFilter] = useState("all");
+  const [requestOfficers, setRequestOfficers] = useState<ApiProfile[]>([]);
 
   const { stalls, refetch: refetchStalls } = useStalls();
   const { applications, refetch: refetchApplications } = useApplications();
   const { perimeter } = usePerimeter();
-  const violations = getViolations();
+  const [allViolations, setAllViolations] = useState<Violation[]>([]);
 
   useEffect(() => {
-    setUsers(getAllUsers());
+    void loadUsers();
   }, []);
+
+  async function loadUsers() {
+    try {
+      const response = await listUsers();
+      setUsers(response.users.map((user) => ({
+        id: user.id,
+        email: user.email,
+        passwordHash: "",
+        name: user.name,
+        address: user.address || "",
+        phone: user.phone || "",
+        role: user.role,
+        department: user.department,
+        createdAt: user.createdAt || "",
+      })));
+    } catch (error) {
+      showToast(`Failed to load users: ${(error as Error).message}`, "error");
+    }
+  }
+
+  async function loadRequestData() {
+    const [violationRequestsResult, officerRequestsResult, officersResult, allUsersResult] = await Promise.allSettled([
+      getViolationRequests(),
+      getCheckRequests(),
+      listUsers("officer"),
+      listUsers(),
+    ]);
+
+    if (violationRequestsResult.status === "fulfilled") {
+      setCheckRequests(violationRequestsResult.value);
+    }
+    if (officerRequestsResult.status === "fulfilled") {
+      setMapRequests(officerRequestsResult.value);
+    }
+    if (officersResult.status === "fulfilled") {
+      setRequestOfficers(officersResult.value.users);
+    }
+
+    if (allUsersResult.status === "fulfilled") {
+      try {
+        await migrateLegacyRequests(session.userId, allUsersResult.value.users);
+        const [nextViolationRequestsResult, nextOfficerRequestsResult] = await Promise.allSettled([
+          getViolationRequests(),
+          getCheckRequests(),
+        ]);
+        if (nextViolationRequestsResult.status === "fulfilled") {
+          setCheckRequests(nextViolationRequestsResult.value);
+        }
+        if (nextOfficerRequestsResult.status === "fulfilled") {
+          setMapRequests(nextOfficerRequestsResult.value);
+        }
+      } catch (error) {
+        showToast(`Failed to migrate request data: ${(error as Error).message}`, "error");
+      }
+    }
+
+    const firstError = [violationRequestsResult, officerRequestsResult, officersResult, allUsersResult].find(
+      (result): result is PromiseRejectedResult => result.status === "rejected"
+    );
+    if (firstError) {
+      showToast(`Some request data could not be loaded: ${String(firstError.reason instanceof Error ? firstError.reason.message : firstError.reason)}`, "error");
+    }
+  }
 
   useEffect(() => {
     if (tab === "violations") {
-      setViolationsList(getViolations());
-      setMapRequests(getCheckRequests());
-      setTerminationsList(getTerminationRequests());
+      void (async () => {
+        const [violationsResult, checkRequestsResult, terminationsResult, allUsersResult] = await Promise.allSettled([
+          getViolations(),
+          getCheckRequests(),
+          getTerminationRequests(),
+          listUsers(),
+        ]);
+
+        if (violationsResult.status === "fulfilled") {
+          setViolationsList(violationsResult.value);
+          setAllViolations(violationsResult.value);
+        }
+        if (checkRequestsResult.status === "fulfilled") {
+          setMapRequests(checkRequestsResult.value);
+        }
+        if (terminationsResult.status === "fulfilled") {
+          setTerminationsList(terminationsResult.value);
+        }
+
+        if (allUsersResult.status === "fulfilled") {
+          try {
+            await migrateLegacyRequests(session.userId, allUsersResult.value.users);
+            const [nextViolationsResult, nextCheckRequestsResult, nextTerminationsResult] = await Promise.allSettled([
+              getViolations(),
+              getCheckRequests(),
+              getTerminationRequests(),
+            ]);
+            if (nextViolationsResult.status === "fulfilled") {
+              setViolationsList(nextViolationsResult.value);
+              setAllViolations(nextViolationsResult.value);
+            }
+            if (nextCheckRequestsResult.status === "fulfilled") {
+              setMapRequests(nextCheckRequestsResult.value);
+            }
+            if (nextTerminationsResult.status === "fulfilled") {
+              setTerminationsList(nextTerminationsResult.value);
+            }
+          } catch (error) {
+            showToast(`Failed to migrate reports data: ${(error as Error).message}`, "error");
+          }
+        }
+
+        const firstError = [violationsResult, checkRequestsResult, terminationsResult, allUsersResult].find(
+          (result): result is PromiseRejectedResult => result.status === "rejected"
+        );
+        if (firstError) {
+          showToast(`Some report data could not be loaded: ${String(firstError.reason instanceof Error ? firstError.reason.message : firstError.reason)}`, "error");
+        }
+      })();
     } else if (tab === "check-requests") {
-      setCheckRequests(getViolationRequests());
-      setMapRequests(getCheckRequests());
+      void loadRequestData();
+    } else if (tab === "users") {
+      void loadUsers();
     }
   }, [tab]);
 
@@ -178,7 +292,7 @@ export function SuperAdminDashboard() {
     vendors: users.filter((u) => u.role === "vendor").length,
     officers: users.filter((u) => u.role === "officer").length,
     admins: users.filter((u) => u.role === "admin" || u.role === "super_admin").length,
-    openViolations: violations.filter((v) => v.status === "open").length,
+    openViolations: allViolations.filter((v) => v.status === "open").length,
     pendingApps: applications.filter((a) => a.status === "pending").length,
     occupiedStalls: stalls.filter((s) => s.status === "occupied").length,
   };
@@ -254,54 +368,112 @@ export function SuperAdminDashboard() {
     showToast("User deleted.", "success");
   }
 
-  function handleAssignOfficer(violationId: string, officerId: string) {
-    const officer = users.find((u) => u.id === officerId);
-    if (!officer) return;
-    const updated = assignOfficer(violationId, officerId, officer.name);
-    if (updated) {
-      setViolationsList(getViolations());
-      setAssigningViolation(null);
-      showToast(`Officer "${officer.name}" assigned to violation.`, "success");
+  async function handleTerminationDecision() {
+    if (!terminationActionConfirm) return;
+
+    try {
+      const request = terminationsList.find((item) => item.id === terminationActionConfirm.id);
+
+      if (
+        terminationActionConfirm.action === "approved" &&
+        request?.type === "contract" &&
+        request.stallId
+      ) {
+        const activeContract = applications
+          .filter(
+            (application) =>
+              application.userId === request.vendorId &&
+              application.stallId === request.stallId &&
+              application.status === "approved"
+          )
+          .sort((a, b) => new Date(b.dateApplied).getTime() - new Date(a.dateApplied).getTime())[0];
+
+        if (activeContract) {
+          const terminationRemarks = buildPermitDeadlineRemarks(
+            parsePermitDeadlineMeta(activeContract.adminRemarks).visibleRemarks || "Contract terminated by super admin approval.",
+            {
+              permitTerminatedAt: new Date().toISOString(),
+            }
+          );
+          await updateApplicationStatus(activeContract.id, "rejected", terminationRemarks);
+          await refetchApplications();
+        }
+      }
+
+      await updateTerminationStatus(terminationActionConfirm.id, terminationActionConfirm.action as "approved" | "rejected");
+      setTerminationsList(await getTerminationRequests());
+      showToast(
+        terminationActionConfirm.action === "approved"
+          ? "Termination request approved."
+          : "Termination request rejected.",
+        terminationActionConfirm.action === "approved" ? "success" : "error"
+      );
+      setTerminationActionConfirm(null);
+    } catch (error) {
+      showToast(`Failed to process termination request: ${(error as Error).message}`, "error");
     }
   }
 
-  function handleCreateRequest() {
+  async function handleAssignOfficer(violationId: string, officerId: string) {
+    const officer = users.find((u) => u.id === officerId);
+    if (!officer) return;
+    try {
+      await assignOfficer(violationId, officerId, officer.name);
+      const refreshed = await getViolations();
+      setViolationsList(refreshed);
+      setAllViolations(refreshed);
+      setAssigningViolation(null);
+      showToast(`Officer "${officer.name}" assigned to violation.`, "success");
+    } catch (error) {
+      showToast(`Failed to assign violation: ${(error as Error).message}`, "error");
+    }
+  }
+
+  async function handleCreateRequest() {
     if (!selectedStallForRequest || !requestReason.trim()) {
       showToast("Please select a stall and provide a reason.", "error");
       return;
     }
     const stall = stalls.find((s) => s.id === selectedStallForRequest);
     if (!stall) return;
-    createViolationRequest({
-      stallId: stall.id,
-      stallName: stall.stall_name,
-      requestedBy: session.userId,
-      requestedByName: session.name,
-      reason: requestReason,
-    });
-    setCheckRequests(getViolationRequests());
-    setShowRequestModal(false);
-    setSelectedStallForRequest(null);
-    setRequestReason("");
-    showToast("Check request created successfully.", "success");
-  }
-
-  function handleAssignRequestOfficer(requestId: string, officerId: string) {
-    const officer = users.find((u) => u.id === officerId);
-    if (!officer) return;
-    const updated = assignRequestToOfficer(requestId, officerId, officer.name);
-    if (updated) {
-      setCheckRequests(getViolationRequests());
-      setAssigningRequest(null);
-      showToast(`Officer "${officer.name}" assigned to check request.`, "success");
+    try {
+      await createViolationRequest({
+        stallId: stall.id,
+        stallName: stall.stall_name,
+        requestedBy: session.userId,
+        requestedByName: session.name,
+        reason: requestReason,
+      });
+      await loadRequestData();
+      setShowRequestModal(false);
+      setSelectedStallForRequest(null);
+      setRequestReason("");
+      showToast("Check request created successfully.", "success");
+    } catch (error) {
+      showToast(`Failed to create request: ${(error as Error).message}`, "error");
     }
   }
 
-  function handleCompleteRequest(requestId: string) {
-    const updated = completeViolationRequest(requestId);
-    if (updated) {
-      setCheckRequests(getViolationRequests());
+  async function handleAssignRequestOfficer(requestId: string, officerId: string) {
+    const officer = requestOfficers.find((u) => u.id === officerId);
+    if (!officer) return;
+    try {
+      await assignRequestToOfficer(requestId, officerId, officer.name);
+      await loadRequestData();
+      setAssigningRequest(null);
+      showToast(`Officer "${officer.name}" assigned to check request.`, "success");
+    } catch (error) {
+      showToast(`Failed to assign request: ${(error as Error).message}`, "error");
+    }
+  }
+
+  async function handleCompleteRequest(requestId: string) {
+    try {
+      await completeViolationRequest(requestId);
+      await loadRequestData();
       showToast("Check request marked as completed.", "success");
+    } catch (error) {
+      showToast(`Failed to complete request: ${(error as Error).message}`, "error");
     }
   }
 
@@ -1119,7 +1291,14 @@ export function SuperAdminDashboard() {
                 Inspection Reports ({mapRequests.filter(r => r.status === "completed" && r.completionSummary).length})
               </button>
               <button
-                onClick={() => { setReportSubTab("terminations"); setReportSearch(""); setReportStatusFilter("all"); setTerminationsList(getTerminationRequests()); }}
+                onClick={() => {
+                  setReportSubTab("terminations");
+                  setReportSearch("");
+                  setReportStatusFilter("all");
+                  void getTerminationRequests().then(setTerminationsList).catch((error) => {
+                    showToast(`Failed to load termination requests: ${(error as Error).message}`, "error");
+                  });
+                }}
                 className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all relative ${reportSubTab === "terminations" ? "bg-white text-red-600 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
               >
                 Termination Requests
@@ -1494,7 +1673,7 @@ export function SuperAdminDashboard() {
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                       {checkRequests.map((req) => {
-                        const officers = users.filter((u) => u.role === "officer");
+                        const officers = requestOfficers;
                         return (
                           <tr key={req.id} className="hover:bg-gray-50 transition-colors">
                             <td className="px-4 py-3">
@@ -1844,17 +2023,7 @@ export function SuperAdminDashboard() {
                 Cancel
               </button>
               <button
-                onClick={() => {
-                  updateTerminationStatus(terminationActionConfirm.id, terminationActionConfirm.action as "approved" | "rejected");
-                  setTerminationsList(getTerminationRequests());
-                  showToast(
-                    terminationActionConfirm.action === "approved"
-                      ? "Termination request approved."
-                      : "Termination request rejected.",
-                    terminationActionConfirm.action === "approved" ? "success" : "error"
-                  );
-                  setTerminationActionConfirm(null);
-                }}
+                onClick={handleTerminationDecision}
                 className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-colors text-white ${terminationActionConfirm.action === "approved" ? "bg-green-600 hover:bg-green-700" : "bg-gray-500 hover:bg-gray-600"}`}
               >
                 {terminationActionConfirm.action === "approved" ? "Yes, Approve" : "Yes, Reject"}

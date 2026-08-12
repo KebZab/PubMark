@@ -12,6 +12,7 @@ import {
 import {
   getCheckRequests, updateCheckRequestStatus, type OfficerCheckRequest, type CompletionFile,
 } from "../components/checkRequestsStore";
+import { getViolationRequests, completeViolationRequest } from "../components/violationRequestStore";
 import { useStalls } from "../hooks/useStalls";
 import { getSession, clearSession, type PubMarkSession } from "../components/authStorage";
 import { OfficerMapView } from "../components/OfficerMapView";
@@ -46,6 +47,57 @@ function formatDate(iso: string) {
     month: "short", day: "numeric", year: "numeric",
     hour: "2-digit", minute: "2-digit",
   });
+}
+
+async function loadOfficerCheckRequests(officerId: string, officerName: string): Promise<OfficerCheckRequest[]> {
+  const normalizedOfficerName = officerName.trim().toLowerCase();
+  const allCheckRequests = await getCheckRequests();
+  const allViolationRequests = await getViolationRequests();
+  const assignedRequests = allCheckRequests.filter((request) => {
+    const assignedName = request.assignedToName?.trim().toLowerCase() ?? "";
+    return (
+      request.assignedTo === officerId ||
+      (!!normalizedOfficerName && assignedName === normalizedOfficerName) ||
+      (!request.assignedTo && !request.assignedToName)
+    );
+  });
+  const syncedIds = new Set(assignedRequests.map((request) => request.id));
+  const legacyAdminRequests = allViolationRequests
+    .filter((request) => {
+      const assignedName = request.assignedOfficerName?.trim().toLowerCase() ?? "";
+      return (
+        request.assignedOfficerId === officerId ||
+        (!!normalizedOfficerName && assignedName === normalizedOfficerName) ||
+        (!request.assignedOfficerId && !request.assignedOfficerName)
+      );
+    })
+    .filter((request) => !syncedIds.has(request.id))
+    .map<OfficerCheckRequest>((request) => ({
+      id: request.id,
+      stallId: request.stallId,
+      stallName: request.stallName,
+      requestedBy: request.requestedBy,
+      requestedByName: request.requestedByName,
+      assignedTo: request.assignedOfficerId ?? null,
+      assignedToName: request.assignedOfficerName ?? null,
+      priority: "normal",
+      reason: request.reason,
+      notes: "",
+      status: request.status === "completed" ? "completed" : "pending",
+      createdAt: request.createdAt,
+      completedAt: request.completedAt,
+      completionNotes: "",
+      completionSummary: "",
+      completionFiles: [],
+      requestSource: "violation",
+    }));
+
+  return [
+    ...assignedRequests.map((request) => ({ ...request, requestSource: "check" as const })),
+    ...legacyAdminRequests,
+  ].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
 }
 
 type Tab = "dashboard" | "map" | "requests" | "log";
@@ -105,11 +157,16 @@ export function OfficerDashboard() {
   }, [navigate]);
 
   useEffect(() => {
-    setViolations(getViolations());
     const s = getSession();
+    void getViolations().then(setViolations).catch((error) => {
+      showToast(`Failed to load violations: ${(error as Error).message}`, "error");
+    });
     if (s) {
-      const all = getCheckRequests();
-      setCheckRequests(all.filter((r) => r.assignedTo === s.userId));
+      void loadOfficerCheckRequests(s.userId, s.name)
+        .then(setCheckRequests)
+        .catch((error) => {
+          showToast(`Failed to load check requests: ${(error as Error).message}`, "error");
+        });
     }
   }, [activeTab]);
 
@@ -152,29 +209,33 @@ export function OfficerDashboard() {
     e.target.value = "";
   }
 
-  function handleSubmitViolation() {
+  async function handleSubmitViolation() {
     if (!newForm.stallId || !newForm.description.trim()) {
       showToast("Please fill in all required fields.", "error");
       return;
     }
     const stall = stalls.find((s) => s.id === newForm.stallId);
-    saveViolation({
-      stallId: newForm.stallId,
-      stallName: stall?.stall_name ?? newForm.stallId,
-      vendorName: newForm.vendorName || "Unknown",
-      officerId: session!.userId,
-      officerName: session!.name,
-      category: newForm.category,
-      description: newForm.description,
-      status: "open",
-      evidence: newEvidence,
-      remarks: newForm.remarks,
-    });
-    setViolations(getViolations());
-    setShowNewForm(false);
-    setNewForm({ stallId: "", vendorName: "", category: "Health Violation", description: "", remarks: "" });
-    setNewEvidence([]);
-    showToast("Request recorded.", "success");
+    try {
+      await saveViolation({
+        stallId: newForm.stallId,
+        stallName: stall?.stall_name ?? newForm.stallId,
+        vendorName: newForm.vendorName || "Unknown",
+        officerId: session!.userId,
+        officerName: session!.name,
+        category: newForm.category,
+        description: newForm.description,
+        status: "open",
+        evidence: newEvidence,
+        remarks: newForm.remarks,
+      });
+      setViolations(await getViolations());
+      setShowNewForm(false);
+      setNewForm({ stallId: "", vendorName: "", category: "Health Violation", description: "", remarks: "" });
+      setNewEvidence([]);
+      showToast("Request recorded.", "success");
+    } catch (error) {
+      showToast(`Failed to record request: ${(error as Error).message}`, "error");
+    }
   }
 
   function handleAddResolveEvidence(e: React.ChangeEvent<HTMLInputElement>) {
@@ -189,32 +250,35 @@ export function OfficerDashboard() {
     e.target.value = "";
   }
 
-  function handleResolve() {
+  async function handleResolve() {
     if (!resolveModal) return;
-    if (resolveModal.action === "ongoing") {
-      if (!resolveRemarks.trim() && resolveEvidence.length === 0) {
-        showToast("Please add a status note or proof image.", "error");
-        return;
+    try {
+      if (resolveModal.action === "ongoing") {
+        if (!resolveRemarks.trim() && resolveEvidence.length === 0) {
+          showToast("Please add a status note or proof image.", "error");
+          return;
+        }
+        await addOngoingUpdate(resolveModal.id, resolveRemarks, resolveEvidence);
+      } else {
+        if (resolveEvidence.length === 0) {
+          showToast("Please upload at least one proof image.", "error");
+          return;
+        }
+        await updateViolationStatus(resolveModal.id, resolveModal.action, resolveRemarks, resolveEvidence);
       }
-      addOngoingUpdate(resolveModal.id, resolveRemarks, resolveEvidence);
-    } else {
-      if (resolveEvidence.length === 0) {
-        showToast("Please upload at least one proof image.", "error");
-        return;
+      const refreshed = await getViolations();
+      setViolations(refreshed);
+      if (selectedViolation?.id === resolveModal.id) {
+        setSelectedViolation(refreshed.find((v) => v.id === resolveModal.id) ?? null);
       }
-      updateViolationStatus(resolveModal.id, resolveModal.action, resolveRemarks, resolveEvidence);
+      const actionLabel = resolveModal.action === "ongoing" ? "marked as ongoing" : resolveModal.action;
+      setResolveModal(null);
+      setResolveRemarks("");
+      setResolveEvidence([]);
+      showToast(`Request ${actionLabel}.`, "success");
+    } catch (error) {
+      showToast(`Failed to update request: ${(error as Error).message}`, "error");
     }
-    setViolations(getViolations());
-    if (selectedViolation?.id === resolveModal.id) {
-      setSelectedViolation(
-        getViolations().find((v) => v.id === resolveModal.id) ?? null
-      );
-    }
-    const actionLabel = resolveModal.action === "ongoing" ? "marked as ongoing" : resolveModal.action;
-    setResolveModal(null);
-    setResolveRemarks("");
-    setResolveEvidence([]);
-    showToast(`Request ${actionLabel}.`, "success");
   }
 
   const switchTab = (tab: Tab) => {
@@ -870,28 +934,32 @@ export function OfficerDashboard() {
                 Cancel
               </button>
               <button
-                onClick={() => {
+                onClick={async () => {
                   if (!reqViolationForm.description.trim()) {
                     showToast("Please describe the violation.", "error");
                     return;
                   }
-                  saveViolation({
-                    stallId: reqViolationModal.stallId,
-                    stallName: reqViolationModal.stallName,
-                    vendorName: "Unknown",
-                    officerId: session!.userId,
-                    officerName: session!.name,
-                    category: reqViolationForm.category,
-                    description: reqViolationForm.description,
-                    status: "open",
-                    evidence: reqViolEvidence,
-                    remarks: "",
-                  });
-                  setViolations(getViolations());
-                  setReqViolationModal(null);
-                  setReqViolationForm({ category: "Other", description: "" });
-                  setReqViolEvidence([]);
-                  showToast("Violation reported successfully.", "success");
+                  try {
+                    await saveViolation({
+                      stallId: reqViolationModal.stallId,
+                      stallName: reqViolationModal.stallName,
+                      vendorName: "Unknown",
+                      officerId: session!.userId,
+                      officerName: session!.name,
+                      category: reqViolationForm.category,
+                      description: reqViolationForm.description,
+                      status: "open",
+                      evidence: reqViolEvidence,
+                      remarks: "",
+                    });
+                    setViolations(await getViolations());
+                    setReqViolationModal(null);
+                    setReqViolationForm({ category: "Other", description: "" });
+                    setReqViolEvidence([]);
+                    showToast("Violation reported successfully.", "success");
+                  } catch (error) {
+                    showToast(`Failed to report violation: ${(error as Error).message}`, "error");
+                  }
                 }}
                 className="flex-1 py-2.5 bg-gradient-to-r from-red-500 to-orange-500 text-white rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-1.5"
               >
@@ -1169,16 +1237,30 @@ export function OfficerDashboard() {
                 Cancel
               </button>
               <button
-                onClick={() => {
+                onClick={async () => {
                   if (!completeSummary.trim()) { showToast("Please provide a summary report.", "error"); return; }
                   if (completeFiles.length === 0) { showToast("Please attach at least one photo.", "error"); return; }
-                  updateCheckRequestStatus(completeModal, "completed", "", completeSummary.trim(), completeFiles);
-                  const s = getSession();
-                  if (s) setCheckRequests(getCheckRequests().filter((x) => x.assignedTo === s.userId));
-                  setCompleteModal(null);
-                  setCompleteSummary("");
-                  setCompleteFiles([]);
-                  showToast("Request completed and report submitted.", "success");
+                  try {
+                    const activeRequest = checkRequests.find((request) => request.id === completeModal);
+                    if (!activeRequest) {
+                      showToast("Request not found.", "error");
+                      return;
+                    }
+                    await updateCheckRequestStatus(completeModal, "completed", "", completeSummary.trim(), completeFiles);
+                    if (activeRequest.requestSource === "violation") {
+                      await completeViolationRequest(completeModal);
+                    }
+                    const s = getSession();
+                    if (s) {
+                      setCheckRequests(await loadOfficerCheckRequests(s.userId, s.name));
+                    }
+                    setCompleteModal(null);
+                    setCompleteSummary("");
+                    setCompleteFiles([]);
+                    showToast("Request completed and report submitted.", "success");
+                  } catch (error) {
+                    showToast(`Failed to complete request: ${(error as Error).message}`, "error");
+                  }
                 }}
                 className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-green-500 hover:bg-green-600 text-white transition-colors"
               >

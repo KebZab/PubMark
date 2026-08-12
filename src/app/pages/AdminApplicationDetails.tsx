@@ -6,12 +6,19 @@ import {
   AlertCircle, Check, X, Printer,
 } from "lucide-react";
 import { useApplications } from "../hooks/useApplications";
-import { updateApplicationStatus, type Application } from "../services/applicationsApi";
+import { updateApplicationAdmin, type Application } from "../services/applicationsApi";
 import { ContractModal, type ContractData } from "../components/ContractModal";
 import { getSession } from "../components/authStorage";
 import { showToast } from "../components/Toast";
+import {
+  buildPermitDeadlineRemarks,
+  formatPermitDeadline,
+  getApplicationDisplayStatus,
+  parsePermitDeadlineMeta,
+  toDateTimeLocalValue,
+} from "../components/permitDeadline";
 
-function StatusBanner({ status }: { status: "pending" | "approved" | "rejected" }) {
+function StatusBanner({ status }: { status: "pending" | "approved" | "rejected" | "terminated" }) {
   if (status === "pending") {
     return (
       <div className="bg-gradient-to-r from-amber-50 to-amber-100 rounded-xl p-5 border border-amber-200 flex flex-col sm:flex-row items-start sm:items-center gap-4">
@@ -38,6 +45,19 @@ function StatusBanner({ status }: { status: "pending" | "approved" | "rejected" 
       </div>
     );
   }
+  if (status === "terminated") {
+    return (
+      <div className="bg-gradient-to-r from-slate-50 to-slate-100 rounded-xl p-5 border border-slate-200 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+        <div className="w-11 h-11 bg-white rounded-xl flex items-center justify-center shadow-sm flex-shrink-0">
+          <XCircle className="w-6 h-6 text-slate-600" />
+        </div>
+        <div className="flex-1">
+          <h3 className="text-base font-semibold text-gray-900 mb-0.5">Application Terminated</h3>
+          <p className="text-sm text-gray-700">The permit deadline passed without submission, so the approval was terminated.</p>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="bg-gradient-to-r from-red-50 to-red-100 rounded-xl p-5 border border-red-200 flex flex-col sm:flex-row items-start sm:items-center gap-4">
       <div className="w-11 h-11 bg-white rounded-xl flex items-center justify-center shadow-sm flex-shrink-0">
@@ -56,13 +76,21 @@ export function AdminApplicationDetails() {
   const { id } = useParams<{ id: string }>();
   const { applications, refetch } = useApplications();
   const app = id ? applications.find(a => a.id === id) : null;
-  const [remarksInput, setRemarksInput] = useState(app?.adminRemarks ?? "");
+  const [remarksInput, setRemarksInput] = useState("");
+  const [permitDeadlineInput, setPermitDeadlineInput] = useState("");
   const [contractApp, setContractApp] = useState<Application | null>(null);
 
   useEffect(() => {
     const session = getSession();
     if (!session || session.role !== "admin") { navigate("/", { replace: true }); }
   }, [navigate]);
+
+  useEffect(() => {
+    if (!app) return;
+    const meta = parsePermitDeadlineMeta(app.adminRemarks);
+    setRemarksInput(meta.visibleRemarks);
+    setPermitDeadlineInput(toDateTimeLocalValue(meta.permitDeadlineAt));
+  }, [app]);
 
   if (!app) {
     return (
@@ -84,13 +112,24 @@ export function AdminApplicationDetails() {
     );
   }
 
+  const displayStatus = getApplicationDisplayStatus(app);
+  const permitMeta = parsePermitDeadlineMeta(app.adminRemarks);
   const dateApplied = new Date(app.dateApplied);
   const termLabel = { "6": "6 Months", "12": "1 Year", "24": "2 Years", "36": "3 Years" }[app.contractTermMonths] ?? `${app.contractTermMonths} months`;
 
   const handleApprove = async () => {
     if (!app) return;
+    if (!app.permitFileName && !permitDeadlineInput) {
+      showToast("Set a business permit deadline before approving this application.", "error");
+      return;
+    }
     try {
-      await updateApplicationStatus(app.id, "approved", remarksInput || undefined);
+      await updateApplicationAdmin(app.id, {
+        status: "approved",
+        adminRemarks: buildPermitDeadlineRemarks(remarksInput, {
+          permitDeadlineAt: !app.permitFileName && permitDeadlineInput ? new Date(permitDeadlineInput).toISOString() : null,
+        }),
+      });
       await refetch();
       showToast("Application approved.", "success");
     } catch (error) {
@@ -101,11 +140,34 @@ export function AdminApplicationDetails() {
   const handleReject = async () => {
     if (!app) return;
     try {
-      await updateApplicationStatus(app.id, "rejected", remarksInput || undefined);
+      await updateApplicationAdmin(app.id, {
+        status: "rejected",
+        adminRemarks: buildPermitDeadlineRemarks(remarksInput),
+      });
       await refetch();
       showToast("Application rejected.", "error");
     } catch (error) {
       showToast(`Failed to reject application: ${(error as Error).message}`, "error");
+    }
+  };
+
+  const handleSavePermitDeadline = async () => {
+    if (!app) return;
+    if (!permitDeadlineInput) {
+      showToast("Choose a new permit deadline first.", "error");
+      return;
+    }
+    try {
+      await updateApplicationAdmin(app.id, {
+        adminRemarks: buildPermitDeadlineRemarks(remarksInput, {
+          permitDeadlineAt: new Date(permitDeadlineInput).toISOString(),
+          permitDeadlineUpdatedAt: new Date().toISOString(),
+        }),
+      });
+      await refetch();
+      showToast("Permit deadline updated.", "success");
+    } catch (error) {
+      showToast(`Failed to update permit deadline: ${(error as Error).message}`, "error");
     }
   };
 
@@ -146,16 +208,17 @@ export function AdminApplicationDetails() {
           </div>
         </div>
         <span className={`flex-shrink-0 px-3 py-1 rounded-full text-xs font-semibold ml-2 ${
-          app.status === "pending" ? "bg-amber-100 text-amber-700"
-          : app.status === "approved" ? "bg-emerald-100 text-emerald-700"
+          displayStatus === "pending" ? "bg-amber-100 text-amber-700"
+          : displayStatus === "approved" ? "bg-emerald-100 text-emerald-700"
+          : displayStatus === "terminated" ? "bg-slate-100 text-slate-700"
           : "bg-red-100 text-red-700"
         }`}>
-          {app.status.charAt(0).toUpperCase() + app.status.slice(1)}
+          {displayStatus.charAt(0).toUpperCase() + displayStatus.slice(1)}
         </span>
       </div>
 
       <div className="max-w-4xl mx-auto p-4 sm:p-6 space-y-5">
-        <StatusBanner status={app.status} />
+        <StatusBanner status={displayStatus} />
 
         {/* Two-column layout on larger screens */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -257,6 +320,33 @@ export function AdminApplicationDetails() {
           </div>
         </div>
 
+        {app.status === "approved" && !app.permitFileName && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 space-y-3">
+            <div>
+              <p className="text-sm font-semibold text-amber-900">Business Permit Deadline</p>
+              <p className="text-xs text-amber-700 mt-1">
+                {permitMeta.permitDeadlineAt
+                  ? `Current deadline: ${formatPermitDeadline(permitMeta.permitDeadlineAt)}`
+                  : "No deadline set yet."}
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <input
+                type="datetime-local"
+                value={permitDeadlineInput}
+                onChange={(e) => setPermitDeadlineInput(e.target.value)}
+                className="flex-1 px-4 py-3 bg-white border border-amber-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+              />
+              <button
+                onClick={handleSavePermitDeadline}
+                className="px-4 py-3 bg-amber-500 text-white rounded-xl text-sm font-semibold hover:bg-amber-600 transition-colors"
+              >
+                Move Deadline
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Applicant notes */}
         {app.notes && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
@@ -279,7 +369,7 @@ export function AdminApplicationDetails() {
               app.status === "approved" ? "bg-emerald-50 border-emerald-200 text-emerald-800"
               : "bg-red-50 border-red-200 text-red-800"
             }`}>
-              {app.adminRemarks || <span className="italic text-gray-400">No remarks provided.</span>}
+              {permitMeta.visibleRemarks || <span className="italic text-gray-400">No remarks provided.</span>}
             </div>
           ) : (
             <>
@@ -290,6 +380,22 @@ export function AdminApplicationDetails() {
                 rows={3}
                 className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#14B8A6] resize-none transition-all mb-4"
               />
+              {!app.permitFileName && (
+                <div className="mb-4">
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                    Business Permit Deadline
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={permitDeadlineInput}
+                    onChange={(e) => setPermitDeadlineInput(e.target.value)}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#14B8A6]"
+                  />
+                  <p className="text-xs text-gray-400 mt-2">
+                    Required when approving an application that still has no uploaded business permit.
+                  </p>
+                </div>
+              )}
               <div className="flex flex-col sm:flex-row gap-3">
                 <button
                   onClick={handleApprove}

@@ -122,10 +122,10 @@ export function Register() {
     }`;
 
   return (
-    <div className="size-full bg-gradient-to-br from-teal-50 via-white to-teal-50 flex items-center justify-center p-6">
-      <div className="w-full max-w-5xl bg-white rounded-2xl shadow-2xl overflow-hidden grid lg:grid-cols-2">
+    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-teal-50 via-white to-teal-50 flex items-stretch lg:items-center justify-center p-3 sm:p-4 lg:p-6">
+      <div className="w-full min-w-0 max-w-5xl bg-white rounded-2xl shadow-2xl overflow-hidden grid lg:grid-cols-2 lg:max-h-[calc(100vh-3rem)]">
         {/* Left Panel */}
-        <div className="hidden lg:flex bg-gradient-to-br from-[#0d9488] to-[#0f766e] p-12 flex-col justify-between relative overflow-hidden">
+        <div className="hidden lg:flex min-w-0 bg-gradient-to-br from-[#0d9488] to-[#0f766e] p-12 flex-col justify-between relative overflow-hidden">
           <div className="absolute -top-16 -right-16 w-64 h-64 bg-white/10 rounded-full" />
           <div className="absolute -bottom-16 -left-16 w-64 h-64 bg-white/10 rounded-full" />
           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-white/5 rounded-full" />
@@ -157,7 +157,7 @@ export function Register() {
         </div>
 
         {/* Right — Form */}
-        <div className="p-8 lg:p-10 flex flex-col justify-center overflow-y-auto max-h-screen">
+        <div className="min-w-0 min-h-0 p-4 sm:p-6 lg:p-10 flex flex-col justify-start overflow-y-auto max-h-[100svh] lg:max-h-[calc(100vh-3rem)]">
           <div className="lg:hidden flex items-center gap-2 mb-6">
             <div className="w-9 h-9 bg-[#14B8A6] rounded-xl flex items-center justify-center">
               <MapPin className="w-5 h-5 text-white" />
@@ -170,7 +170,7 @@ export function Register() {
             Register for PubMark{stallId && " to apply for your selected stall"}
           </p>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="w-full min-w-0 space-y-4">
             {submitError && (
               <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                 {submitError}
@@ -310,7 +310,7 @@ export function Register() {
               {errors.confirmPassword && <p className="text-red-500 text-xs mt-1">{errors.confirmPassword}</p>}
             </div>
 
-            <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+            <div className="w-full min-w-0 rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
               <div className="flex items-start gap-3 px-4 py-4 bg-gradient-to-r from-teal-50 to-white border-b border-gray-200">
                 <div className="w-10 h-10 rounded-xl bg-teal-100 text-teal-700 flex items-center justify-center shrink-0">
                   <FileText className="w-5 h-5" />
@@ -324,7 +324,7 @@ export function Register() {
               </div>
 
               <div className="px-4 py-4">
-                <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-4 h-72 overflow-y-auto space-y-4 text-sm text-gray-700">
+                <div className="w-full min-w-0 rounded-xl border border-gray-200 bg-gray-50 px-4 py-4 h-64 sm:h-72 overflow-y-auto space-y-4 text-sm text-gray-700">
                   <div className="text-center border-b border-dashed border-gray-300 pb-4">
                     {tenantTermsIntro.map((line) => (
                       <p key={line} className="leading-6 first:font-semibold">

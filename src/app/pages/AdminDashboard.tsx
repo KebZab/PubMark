@@ -31,21 +31,29 @@ import { StallManagementPanel } from "../components/StallManagementPanel";
 import { ContractModal, type ContractData } from "../components/ContractModal";
 import {
   getAnnouncements,
-  addAnnouncement,
+  createAnnouncement,
   deleteAnnouncement,
   type Announcement,
-} from "../components/announcementsStore";
+} from "../services/announcementsApi";
 import { useApplications } from "../hooks/useApplications";
-import { updateApplicationStatus, type Application } from "../services/applicationsApi";
+import { updateApplicationAdmin, updateApplicationStatus, type Application } from "../services/applicationsApi";
 import { useStalls, type Stall } from "../hooks/useStalls";
 import { type StoredStall } from "../components/stallsStorage";
 import { getSession, getAllUsers, type PubMarkUser } from "../components/authStorage";
+import { listUsers, type ApiProfile } from "../services/api";
+import { migrateLegacyRequests } from "../services/legacyRequestMigration";
 import { getViolations, assignOfficer, type Violation } from "../components/violationsStore";
 import { getViolationRequests, createViolationRequest, assignRequestToOfficer, type ViolationCheckRequest } from "../components/violationRequestStore";
 import { getCheckRequests, type OfficerCheckRequest } from "../components/checkRequestsStore";
 import { getTerminationRequests, updateTerminationStatus, type TerminationRequest } from "../components/terminationRequestsStore";
 import { DashboardLayout } from "../components/DashboardLayout";
 import { showToast } from "../components/Toast";
+import {
+  buildPermitDeadlineRemarks,
+  formatPermitDeadline,
+  parsePermitDeadlineMeta,
+  toDateTimeLocalValue,
+} from "../components/permitDeadline";
 
 type Tab = "dashboard" | "stalls" | "applications" | "announcements" | "stall-management" | "violations" | "check-requests";
 
@@ -68,6 +76,16 @@ function formatDate(isoString: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function getAssignedOfficerName(req: ViolationCheckRequest | OfficerCheckRequest): string {
+  return "assignedOfficerName" in req
+    ? req.assignedOfficerName || "Not assigned"
+    : req.assignedToName || "Not assigned";
+}
+
+function isMapCheckRequest(req: ViolationCheckRequest | OfficerCheckRequest): req is OfficerCheckRequest {
+  return "priority" in req;
 }
 
 export function AdminDashboard() {
@@ -93,7 +111,7 @@ export function AdminDashboard() {
     setTab(getTabFromURL(location.pathname));
   }, [location.pathname]);
 
-  const { applications, refetch } = useApplications();
+  const { applications, refetch: refetchApplications } = useApplications();
   const [selectedApp, setSelectedApp] = useState<Application | null>(null);
   const [contractApp, setContractApp] = useState<Application | null>(null);
   const [remarksInput, setRemarksInput] = useState("");
@@ -118,10 +136,13 @@ export function AdminDashboard() {
   const [terminationActionConfirm, setTerminationActionConfirm] = useState<{ id: string; action: "approved" | "rejected"; name: string; type: string } | null>(null);
   const [reportSearch, setReportSearch] = useState("");
   const [reportStatusFilter, setReportStatusFilter] = useState("all");
+  const [permitDeadlineInput, setPermitDeadlineInput] = useState("");
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [selectedStallForRequest, setSelectedStallForRequest] = useState<StoredStall | null>(null);
   const [requestReason, setRequestReason] = useState("");
   const [assigningRequest, setAssigningRequest] = useState<string | null>(null);
+  const [requestOfficers, setRequestOfficers] = useState<ApiProfile[]>([]);
+  const [allViolations, setAllViolations] = useState<Violation[]>([]);
 
   useEffect(() => {
     const session = getSession();
@@ -144,11 +165,35 @@ export function AdminDashboard() {
     vacant: vacantCount,
   };
 
+  useEffect(() => {
+    if (!selectedApp) {
+      setPermitDeadlineInput("");
+      return;
+    }
+    const meta = parsePermitDeadlineMeta(selectedApp.adminRemarks);
+    setRemarksInput(meta.visibleRemarks);
+    setPermitDeadlineInput(toDateTimeLocalValue(meta.permitDeadlineAt));
+  }, [selectedApp]);
+
   const handleApprove = async (id: string) => {
+    const targetApp = applications.find((application) => application.id === id);
+    if (!targetApp) return;
+    if (!targetApp.permitFileName && selectedApp?.id === id && !permitDeadlineInput) {
+      showToast("Set a business permit deadline before approving this application.", "error");
+      return;
+    }
+    if (!targetApp.permitFileName && selectedApp?.id !== id) {
+      showToast("Open the application details and set a permit deadline before approving.", "error");
+      return;
+    }
+
     try {
-      await updateApplicationStatus(id, "approved", remarksInput || undefined);
-      await refetch();
-      if (selectedApp?.id === id) setSelectedApp((prev) => prev ? { ...prev, status: "approved", adminRemarks: remarksInput } : null);
+      const adminRemarks = buildPermitDeadlineRemarks(remarksInput, {
+        permitDeadlineAt: !targetApp.permitFileName && permitDeadlineInput ? new Date(permitDeadlineInput).toISOString() : null,
+      });
+      await updateApplicationStatus(id, "approved", adminRemarks || undefined);
+      await refetchApplications();
+      if (selectedApp?.id === id) setSelectedApp((prev) => prev ? { ...prev, status: "approved", adminRemarks } : null);
       setRemarksInput("");
       showToast("Application approved.", "success");
     } catch (error) {
@@ -158,13 +203,35 @@ export function AdminDashboard() {
 
   const handleReject = async (id: string) => {
     try {
-      await updateApplicationStatus(id, "rejected", remarksInput || undefined);
-      await refetch();
-      if (selectedApp?.id === id) setSelectedApp((prev) => prev ? { ...prev, status: "rejected", adminRemarks: remarksInput } : null);
+      const adminRemarks = buildPermitDeadlineRemarks(remarksInput);
+      await updateApplicationStatus(id, "rejected", adminRemarks || undefined);
+      await refetchApplications();
+      if (selectedApp?.id === id) setSelectedApp((prev) => prev ? { ...prev, status: "rejected", adminRemarks: adminRemarks || prev.adminRemarks } : null);
       setRemarksInput("");
       showToast("Application rejected.", "error");
     } catch (error) {
       showToast(`Failed to reject application: ${(error as Error).message}`, "error");
+    }
+  };
+
+  const handleSavePermitDeadline = async () => {
+    if (!selectedApp) return;
+    if (!permitDeadlineInput) {
+      showToast("Choose a new permit deadline first.", "error");
+      return;
+    }
+
+    try {
+      const nextRemarks = buildPermitDeadlineRemarks(remarksInput, {
+        permitDeadlineAt: new Date(permitDeadlineInput).toISOString(),
+        permitDeadlineUpdatedAt: new Date().toISOString(),
+      });
+      const updated = await updateApplicationAdmin(selectedApp.id, { adminRemarks: nextRemarks });
+      await refetchApplications();
+      setSelectedApp(updated);
+      showToast("Permit deadline updated.", "success");
+    } catch (error) {
+      showToast(`Failed to update permit deadline: ${(error as Error).message}`, "error");
     }
   };
 
@@ -185,49 +252,166 @@ export function AdminDashboard() {
     };
   }
 
+  async function loadAnnouncements() {
+    try {
+      setAnnouncements(await getAnnouncements());
+    } catch (error) {
+      showToast(`Failed to load announcements: ${(error as Error).message}`, "error");
+    }
+  }
+
+  async function loadRequestData() {
+    const [violationRequestsResult, officerRequestsResult, officersResult, allUsersResult] = await Promise.allSettled([
+      getViolationRequests(),
+      getCheckRequests(),
+      listUsers("officer"),
+      listUsers(),
+    ]);
+
+    if (violationRequestsResult.status === "fulfilled") {
+      setCheckRequests(violationRequestsResult.value);
+    }
+    if (officerRequestsResult.status === "fulfilled") {
+      setMapRequests(officerRequestsResult.value);
+    }
+    if (officersResult.status === "fulfilled") {
+      setRequestOfficers(officersResult.value.users);
+    }
+
+    if (allUsersResult.status === "fulfilled") {
+      try {
+        await migrateLegacyRequests(session.userId, allUsersResult.value.users);
+        const [nextViolationRequestsResult, nextOfficerRequestsResult] = await Promise.allSettled([
+          getViolationRequests(),
+          getCheckRequests(),
+        ]);
+        if (nextViolationRequestsResult.status === "fulfilled") {
+          setCheckRequests(nextViolationRequestsResult.value);
+        }
+        if (nextOfficerRequestsResult.status === "fulfilled") {
+          setMapRequests(nextOfficerRequestsResult.value);
+        }
+      } catch (error) {
+        showToast(`Failed to migrate request data: ${(error as Error).message}`, "error");
+      }
+    }
+
+    const firstError = [violationRequestsResult, officerRequestsResult, officersResult, allUsersResult].find(
+      (result): result is PromiseRejectedResult => result.status === "rejected"
+    );
+    if (firstError) {
+      showToast(`Some request data could not be loaded: ${String(firstError.reason instanceof Error ? firstError.reason.message : firstError.reason)}`, "error");
+    }
+  }
+
+  async function loadReportsData() {
+    const [violationsResult, checkRequestsResult, terminationsResult, allUsersResult] = await Promise.allSettled([
+      getViolations(),
+      getCheckRequests(),
+      getTerminationRequests(),
+      listUsers(),
+    ]);
+
+    if (violationsResult.status === "fulfilled") {
+      setViolationsList(violationsResult.value);
+      setAllViolations(violationsResult.value);
+    }
+    if (checkRequestsResult.status === "fulfilled") {
+      setMapRequests(checkRequestsResult.value);
+    }
+    if (terminationsResult.status === "fulfilled") {
+      setTerminationsList(terminationsResult.value);
+    }
+
+    if (allUsersResult.status === "fulfilled") {
+      try {
+        await migrateLegacyRequests(session.userId, allUsersResult.value.users);
+        const [nextViolationsResult, nextCheckRequestsResult, nextTerminationsResult] = await Promise.allSettled([
+          getViolations(),
+          getCheckRequests(),
+          getTerminationRequests(),
+        ]);
+        if (nextViolationsResult.status === "fulfilled") {
+          setViolationsList(nextViolationsResult.value);
+          setAllViolations(nextViolationsResult.value);
+        }
+        if (nextCheckRequestsResult.status === "fulfilled") {
+          setMapRequests(nextCheckRequestsResult.value);
+        }
+        if (nextTerminationsResult.status === "fulfilled") {
+          setTerminationsList(nextTerminationsResult.value);
+        }
+      } catch (error) {
+        showToast(`Failed to migrate reports data: ${(error as Error).message}`, "error");
+      }
+    }
+
+    const firstError = [violationsResult, checkRequestsResult, terminationsResult, allUsersResult].find(
+      (result): result is PromiseRejectedResult => result.status === "rejected"
+    );
+    if (firstError) {
+      showToast(`Some report data could not be loaded: ${String(firstError.reason instanceof Error ? firstError.reason.message : firstError.reason)}`, "error");
+    }
+  }
+
   useEffect(() => {
     if (tab === "announcements" || tab === "dashboard") {
-      setAnnouncements(getAnnouncements());
+      void loadAnnouncements();
     }
     if (tab === "applications" || tab === "dashboard") {
-      refetch();
+      refetchApplications();
     }
     if (tab === "violations") {
-      setViolationsList(getViolations());
-      setMapRequests(getCheckRequests());
+      void loadReportsData();
       setUsers(getAllUsers());
-      setTerminationsList(getTerminationRequests());
     }
     if (tab === "check-requests") {
-      setCheckRequests(getViolationRequests());
-      setMapRequests(getCheckRequests());
+      void loadRequestData();
       setUsers(getAllUsers());
     }
   }, [tab]);
 
-  function handlePostAnnouncement() {
+  async function handlePostAnnouncement() {
     if (!newTitle.trim() || !newMessage.trim()) return;
-    const updated = addAnnouncement({ title: newTitle.trim(), message: newMessage.trim(), type: newType });
-    setAnnouncements(updated);
-    setNewTitle("");
-    setNewMessage("");
-    setNewType("info");
-    setShowForm(false);
+    try {
+      const created = await createAnnouncement({
+        title: newTitle.trim(),
+        message: newMessage.trim(),
+        type: newType,
+      });
+      setAnnouncements((prev) => [created, ...prev]);
+      setNewTitle("");
+      setNewMessage("");
+      setNewType("info");
+      setShowForm(false);
+      showToast("Announcement posted.", "success");
+    } catch (error) {
+      showToast(`Failed to post announcement: ${(error as Error).message}`, "error");
+    }
   }
 
-  function handleDelete(id: string) {
-    const updated = deleteAnnouncement(id);
-    setAnnouncements(updated);
+  async function handleDelete(id: string) {
+    try {
+      await deleteAnnouncement(id);
+      setAnnouncements((prev) => prev.filter((announcement) => announcement.id !== id));
+      showToast("Announcement deleted.", "success");
+    } catch (error) {
+      showToast(`Failed to delete announcement: ${(error as Error).message}`, "error");
+    }
   }
 
-  function handleAssignOfficer(violationId: string, officerId: string) {
+  async function handleAssignOfficer(violationId: string, officerId: string) {
     const officer = users.find((u) => u.id === officerId);
     if (!officer) return;
-    const updated = assignOfficer(violationId, officerId, officer.name);
-    if (updated) {
-      setViolationsList(getViolations());
+    try {
+      await assignOfficer(violationId, officerId, officer.name);
+      const refreshed = await getViolations();
+      setViolationsList(refreshed);
+      setAllViolations(refreshed);
       setAssigningViolation(null);
       showToast(`Officer "${officer.name}" assigned to violation.`, "success");
+    } catch (error) {
+      showToast(`Failed to assign violation: ${(error as Error).message}`, "error");
     }
   }
 
@@ -257,34 +441,83 @@ export function AdminDashboard() {
     }
   }
 
-  function handleCreateCheckRequest() {
+  async function handleCreateCheckRequest() {
     if (!selectedStallForRequest || !requestReason.trim()) return;
-    const sess = getSession();
-    if (!sess) return;
+    try {
+      await createViolationRequest({
+        stallId: selectedStallForRequest.id,
+        stallName: selectedStallForRequest.stall_name,
+        requestedBy: session.userId,
+        requestedByName: session.name,
+        reason: requestReason.trim(),
+      });
 
-    createViolationRequest({
-      stallId: selectedStallForRequest.id,
-      stallName: selectedStallForRequest.stall_name,
-      requestedBy: sess.userId,
-      requestedByName: sess.name,
-      reason: requestReason.trim(),
-    });
-
-    showToast("Violation check request created.", "success");
-    setShowRequestModal(false);
-    setSelectedStallForRequest(null);
-    setRequestReason("");
-    setCheckRequests(getViolationRequests());
+      showToast("Violation check request created.", "success");
+      setShowRequestModal(false);
+      setSelectedStallForRequest(null);
+      setRequestReason("");
+      await loadRequestData();
+    } catch (error) {
+      showToast(`Failed to create request: ${(error as Error).message}`, "error");
+    }
   }
 
-  function handleAssignCheckRequest(requestId: string, officerId: string) {
-    const officer = users.find((u) => u.id === officerId);
+  async function handleAssignCheckRequest(requestId: string, officerId: string) {
+    const officer = requestOfficers.find((u) => u.id === officerId);
     if (!officer) return;
-    const updated = assignRequestToOfficer(requestId, officerId, officer.name);
-    if (updated) {
-      setCheckRequests(getViolationRequests());
+    try {
+      await assignRequestToOfficer(requestId, officerId, officer.name);
+      await loadRequestData();
       setAssigningRequest(null);
       showToast(`Officer "${officer.name}" assigned to check request.`, "success");
+    } catch (error) {
+      showToast(`Failed to assign request: ${(error as Error).message}`, "error");
+    }
+  }
+
+  async function handleTerminationDecision() {
+    if (!terminationActionConfirm) return;
+
+    try {
+      const request = terminationsList.find((item) => item.id === terminationActionConfirm.id);
+
+      if (
+        terminationActionConfirm.action === "approved" &&
+        request?.type === "contract" &&
+        request.stallId
+      ) {
+        const activeContract = applications
+          .filter(
+            (application) =>
+              application.userId === request.vendorId &&
+              application.stallId === request.stallId &&
+              application.status === "approved"
+          )
+          .sort((a, b) => new Date(b.dateApplied).getTime() - new Date(a.dateApplied).getTime())[0];
+
+        if (activeContract) {
+          const terminationRemarks = buildPermitDeadlineRemarks(
+            parsePermitDeadlineMeta(activeContract.adminRemarks).visibleRemarks || "Contract terminated by admin approval.",
+            {
+              permitTerminatedAt: new Date().toISOString(),
+            }
+          );
+          await updateApplicationStatus(activeContract.id, "rejected", terminationRemarks);
+          await refetchApplications();
+        }
+      }
+
+      await updateTerminationStatus(terminationActionConfirm.id, terminationActionConfirm.action);
+      setTerminationsList(await getTerminationRequests());
+      showToast(
+        terminationActionConfirm.action === "approved"
+          ? "Termination request approved."
+          : "Termination request rejected.",
+        terminationActionConfirm.action === "approved" ? "success" : "error"
+      );
+      setTerminationActionConfirm(null);
+    } catch (error) {
+      showToast(`Failed to process termination request: ${(error as Error).message}`, "error");
     }
   }
 
@@ -302,8 +535,8 @@ export function AdminDashboard() {
     navigate(paths[newTab]);
   }
 
-  const openViolations = getViolations().filter((v) => v.status === "open").length;
-  const pendingRequests = getViolationRequests().filter((r) => r.status === "pending").length;
+  const openViolations = allViolations.filter((v) => v.status === "open").length;
+  const pendingRequests = checkRequests.filter((r) => r.status === "pending").length;
 
   const TABS: { id: Tab; label: string; icon: React.ElementType; badge?: number }[] = [
     { id: "dashboard", label: "Overview", icon: LayoutDashboard },
@@ -722,7 +955,7 @@ export function AdminDashboard() {
                           .map((app) => (
                             <tr
                               key={app.id}
-                              onClick={() => { setSelectedApp(app); setRemarksInput(app.adminRemarks || ""); }}
+                              onClick={() => { setSelectedApp(app); }}
                               className={`hover:bg-gray-50 transition-colors cursor-pointer ${selectedApp?.id === app.id ? "bg-teal-50/50" : ""}`}
                             >
                               <td className="px-5 py-3.5 font-medium text-gray-900 text-sm">{app.stallName}</td>
@@ -781,6 +1014,9 @@ export function AdminDashboard() {
 
             {/* Right: detail panel */}
             {selectedApp && (
+              (() => {
+                const permitMeta = parsePermitDeadlineMeta(selectedApp.adminRemarks);
+                return (
               <div className="w-96 flex-shrink-0 bg-white rounded-xl shadow-sm border border-gray-200 overflow-y-auto flex flex-col">
                 {/* Panel header */}
                 <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-teal-50 to-white flex items-center justify-between flex-shrink-0">
@@ -802,6 +1038,31 @@ export function AdminDashboard() {
                   }`}>
                     {selectedApp.status.charAt(0).toUpperCase() + selectedApp.status.slice(1)}
                   </span>
+
+                  {selectedApp.status === "approved" && !selectedApp.permitFileName && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+                      <p className="text-xs font-semibold text-amber-900">Business Permit Deadline</p>
+                      <p className="text-xs text-amber-700 mt-1">
+                        {permitMeta.permitDeadlineAt
+                          ? `Current deadline: ${formatPermitDeadline(permitMeta.permitDeadlineAt)}`
+                          : "No deadline set yet."}
+                      </p>
+                      <div className="mt-3 space-y-2">
+                        <input
+                          type="datetime-local"
+                          value={permitDeadlineInput}
+                          onChange={(e) => setPermitDeadlineInput(e.target.value)}
+                          className="w-full px-3 py-2 bg-white border border-amber-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                        />
+                        <button
+                          onClick={handleSavePermitDeadline}
+                          className="w-full py-2 bg-amber-500 text-white rounded-lg text-xs font-semibold hover:bg-amber-600 transition-colors"
+                        >
+                          Move Deadline
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Applicant info */}
                   <div>
@@ -891,16 +1152,34 @@ export function AdminDashboard() {
                         selectedApp.status === "approved" ? "bg-emerald-50 border-emerald-200 text-emerald-800"
                         : "bg-red-50 border-red-200 text-red-800"
                       }`}>
-                        {selectedApp.adminRemarks || <span className="italic text-gray-400">No remarks provided.</span>}
+                        {permitMeta.visibleRemarks || <span className="italic text-gray-400">No remarks provided.</span>}
                       </div>
                     ) : (
-                      <textarea
-                        value={remarksInput}
-                        onChange={(e) => setRemarksInput(e.target.value)}
-                        placeholder="Optional remarks for the applicant..."
-                        rows={3}
-                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#14B8A6] resize-none transition-all"
-                      />
+                      <>
+                        <textarea
+                          value={remarksInput}
+                          onChange={(e) => setRemarksInput(e.target.value)}
+                          placeholder="Optional remarks for the applicant..."
+                          rows={3}
+                          className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#14B8A6] resize-none transition-all"
+                        />
+                        {!selectedApp.permitFileName && (
+                          <div className="mt-3">
+                            <label className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                              Business Permit Deadline
+                            </label>
+                            <input
+                              type="datetime-local"
+                              value={permitDeadlineInput}
+                              onChange={(e) => setPermitDeadlineInput(e.target.value)}
+                              className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#14B8A6]"
+                            />
+                            <p className="text-[11px] text-gray-400 mt-2">
+                              Required before approval if the vendor still has not uploaded the permit.
+                            </p>
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
 
@@ -931,6 +1210,8 @@ export function AdminDashboard() {
                   )}
                 </div>
               </div>
+                );
+              })()
             )}
           </div>
         )}
@@ -1092,7 +1373,14 @@ export function AdminDashboard() {
                 Inspection Reports ({mapRequests.filter(r => r.status === "completed" && r.completionSummary).length})
               </button>
               <button
-                onClick={() => { setReportSubTab("terminations"); setReportSearch(""); setReportStatusFilter("all"); setTerminationsList(getTerminationRequests()); }}
+                onClick={() => {
+                  setReportSubTab("terminations");
+                  setReportSearch("");
+                  setReportStatusFilter("all");
+                  void getTerminationRequests().then(setTerminationsList).catch((error) => {
+                    showToast(`Failed to load termination requests: ${(error as Error).message}`, "error");
+                  });
+                }}
                 className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all relative ${reportSubTab === "terminations" ? "bg-white text-red-600 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
               >
                 Termination Requests
@@ -1447,7 +1735,7 @@ export function AdminDashboard() {
               </button>
             </div>
 
-            {checkRequests.length === 0 ? (
+            {checkRequests.length === 0 && mapRequests.length === 0 ? (
               <div className="bg-white rounded-2xl border border-gray-200 p-8 text-center">
                 <Search className="w-10 h-10 text-gray-300 mx-auto mb-3" />
                 <p className="text-sm text-gray-500">No requests sent yet</p>
@@ -1468,12 +1756,28 @@ export function AdminDashboard() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {checkRequests.map((req) => {
-                        const officers = users.filter((u) => u.role === "officer");
+                      {[...mapRequests, ...checkRequests].sort((a, b) => (
+                        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+                      )).map((req) => {
+                        const officers = requestOfficers;
+                        const assignedOfficerName = getAssignedOfficerName(req);
+                        const isMapRequest = isMapCheckRequest(req);
+                        const statusLabel = isMapRequest
+                          ? req.status === "completed"
+                            ? "COMPLETED"
+                            : req.status === "cancelled"
+                              ? "CANCELLED"
+                              : "PENDING"
+                          : req.status.toUpperCase();
                         return (
-                          <tr key={req.id} className="hover:bg-gray-50 transition-colors">
+                          <tr key={`${isMapRequest ? "map" : "legacy"}-${req.id}`} className="hover:bg-gray-50 transition-colors">
                             <td className="px-4 py-3">
-                              <span className="font-semibold text-gray-900">{req.stallName}</span>
+                              <div className="flex flex-col">
+                                <span className="font-semibold text-gray-900">{req.stallName}</span>
+                                {isMapRequest && (
+                                  <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">Map Request</span>
+                                )}
+                              </div>
                             </td>
                             <td className="px-4 py-3 text-gray-700">{req.requestedByName}</td>
                             <td className="px-4 py-3 text-gray-600 max-w-xs truncate">{req.reason}</td>
@@ -1481,13 +1785,14 @@ export function AdminDashboard() {
                               <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${
                                 req.status === "pending" ? "bg-amber-100 text-amber-700" :
                                 req.status === "assigned" ? "bg-blue-100 text-blue-700" :
+                                req.status === "cancelled" ? "bg-gray-100 text-gray-600" :
                                 "bg-green-100 text-green-700"
                               }`}>
-                                {req.status.toUpperCase()}
+                                {statusLabel}
                               </span>
                             </td>
                             <td className="px-4 py-3">
-                              {req.status === "pending" && assigningRequest === req.id ? (
+                              {!isMapRequest && req.status === "pending" && assigningRequest === req.id ? (
                                 <select
                                   value={req.assignedOfficerId || ""}
                                   onChange={(e) => handleAssignCheckRequest(req.id, e.target.value)}
@@ -1501,12 +1806,12 @@ export function AdminDashboard() {
                                   ))}
                                 </select>
                               ) : (
-                                <span className="text-gray-700">{req.assignedOfficerName || "Not assigned"}</span>
+                                <span className="text-gray-700">{assignedOfficerName}</span>
                               )}
                             </td>
                             <td className="px-4 py-3 text-gray-500">{formatDate(req.createdAt)}</td>
                             <td className="px-4 py-3 text-center">
-                              {req.status === "pending" && (
+                              {!isMapRequest && req.status === "pending" && (
                                 <button
                                   onClick={() => setAssigningRequest(req.id)}
                                   className="px-2 py-1 bg-[#14B8A6] bg-opacity-20 text-[#14B8A6] text-[10px] font-semibold rounded-lg hover:bg-opacity-30 transition-colors"
@@ -1737,12 +2042,7 @@ export function AdminDashboard() {
                 Cancel
               </button>
               <button
-                onClick={() => {
-                  updateTerminationStatus(terminationActionConfirm.id, terminationActionConfirm.action);
-                  setTerminationsList(getTerminationRequests());
-                  showToast(terminationActionConfirm.action === "approved" ? "Termination request approved." : "Termination request rejected.", terminationActionConfirm.action === "approved" ? "success" : "error");
-                  setTerminationActionConfirm(null);
-                }}
+                onClick={handleTerminationDecision}
                 className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-colors text-white ${terminationActionConfirm.action === "approved" ? "bg-red-600 hover:bg-red-700" : "bg-gray-600 hover:bg-gray-700"}`}
               >
                 {terminationActionConfirm.action === "approved" ? "Yes, Approve" : "Yes, Reject"}
