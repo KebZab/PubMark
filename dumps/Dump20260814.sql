@@ -1,3 +1,5 @@
+CREATE DATABASE  IF NOT EXISTS `pubmark` /*!40100 DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci */ /*!80016 DEFAULT ENCRYPTION='N' */;
+USE `pubmark`;
 -- MySQL dump 10.13  Distrib 8.0.46, for Win64 (x86_64)
 --
 -- Host: localhost    Database: pubmark
@@ -498,14 +500,6 @@ LOCK TABLES `violations` WRITE;
 INSERT INTO `violations` VALUES ('1ba9c2b5-da28-415b-bf48-da046c4eab62','a3ad88d5-d5e5-4286-980f-2bb59d99f595',NULL,'44444444-4444-4444-8444-444444444444','Health Violation','wala kabayad','open','check','2026-08-12 06:34:46',NULL),('27e09dde-0190-4c4a-b7de-c0e0ac499861','a3ad88d5-d5e5-4286-980f-2bb59d99f595',NULL,'44444444-4444-4444-8444-444444444444','Health Violation','wala kabayad','open','check','2026-08-12 06:34:46',NULL),('62235fa0-8476-46b9-b118-e8906bc7c3ae','a3ad88d5-d5e5-4286-980f-2bb59d99f595',NULL,'44444444-4444-4444-8444-444444444444','Health Violation','wala kabayad','open','check','2026-08-12 06:34:46',NULL),('7a131a8a-b4f4-4d0e-b82c-664e9432c706','a3ad88d5-d5e5-4286-980f-2bb59d99f595',NULL,'44444444-4444-4444-8444-444444444444','Health Violation','wala kabayad','open','check','2026-08-12 06:34:46',NULL),('f34a3880-73cf-4f00-9e2b-f9599a8744c7','a3ad88d5-d5e5-4286-980f-2bb59d99f595',NULL,'44444444-4444-4444-8444-444444444444','Health Violation','wala kabayad','open','check','2026-08-12 06:34:46',NULL);
 /*!40000 ALTER TABLE `violations` ENABLE KEYS */;
 UNLOCK TABLES;
-
---
--- Dumping events for database 'pubmark'
---
-
---
--- Dumping routines for database 'pubmark'
---
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
@@ -516,4 +510,4 @@ UNLOCK TABLES;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2026-08-12 16:15:27
+-- Dump completed on 2026-08-14 22:18:22
