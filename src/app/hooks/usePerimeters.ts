@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import { getPerimeter, type Perimeter } from "../services/perimeterApi";
+import { getPerimeters, type Perimeter } from "../services/perimeterApi";
 
-export function usePerimeter() {
-  const [perimeter, setPerimeter] = useState<Perimeter | null>(null);
+export function usePerimeters() {
+  const [perimeters, setPerimeters] = useState<Perimeter[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refetch = useCallback(async () => {
     setLoading(true);
     try {
-      setPerimeter(await getPerimeter());
+      setPerimeters(await getPerimeters());
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -22,5 +22,5 @@ export function usePerimeter() {
     refetch();
   }, [refetch]);
 
-  return { perimeter, setPerimeter, loading, error, refetch };
+  return { perimeters, setPerimeters, loading, error, refetch };
 }

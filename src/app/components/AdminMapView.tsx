@@ -13,7 +13,7 @@ import {
 import { FloorSwitcher } from "./FloorSwitcher";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
-import { usePerimeter } from "../hooks/usePerimeter";
+import { usePerimeters } from "../hooks/usePerimeters";
 import { createStall, updateStall, updateStallGeometry, deleteStall, deleteStalls, type Stall } from "../services/stallsApi";
 import { type StoredStall } from "./stallsStorage";
 import { type Application } from "../services/applicationsApi";
@@ -596,7 +596,7 @@ function PerimeterLayer({ geometry }: { geometry: object }) {
 
 // ── Main Component ───────────────────────────────────────────────────────────
 export function AdminMapView() {
-  const { perimeter } = usePerimeter();
+  const { perimeters } = usePerimeters();
   const { stalls: storedStalls, refetch } = useStalls();
   const { applications } = useApplications();
   const [contractModal, setContractModal] = useState<{ stall: StoredStall; app: Application } | null>(null);
@@ -623,44 +623,47 @@ export function AdminMapView() {
     }
   }, [storedStalls]);
 
-  // Check if a layer is within the perimeter boundary
+  // Check if a layer is fully within at least one perimeter zone
   const isWithinPerimeter = useCallback((layer: L.Layer): boolean => {
-    if (!perimeter) return true; // If no perimeter set, allow anywhere
+    if (perimeters.length === 0) return true; // If no zones set, allow anywhere
 
     try {
       const stallGeoJson = (layer as any).toGeoJSON() as GeoJSON.Feature;
-      const perimeterLayer = L.geoJSON({ type: "Feature", properties: {}, geometry: perimeter.geometry as GeoJSON.Geometry });
       const stallLayer = L.geoJSON(stallGeoJson);
 
-      // Check if all points of the stall polygon are within the perimeter
-      let allPointsInside = true;
-      stallLayer.eachLayer((l: any) => {
-        if (l.getLatLngs) {
-          const coords = l.getLatLngs()[0];
-          coords.forEach((coord: L.LatLng) => {
-            let inside = false;
-            perimeterLayer.eachLayer((pLayer: any) => {
-              if (pLayer.getBounds && pLayer.getBounds().contains(coord)) {
-                // More precise check using ray casting
-                if (pLayer.getLatLngs) {
-                  const polyCoords = pLayer.getLatLngs()[0];
-                  if (isPointInPolygon(coord, polyCoords)) {
-                    inside = true;
+      return perimeters.some((zone) => {
+        const perimeterLayer = L.geoJSON({ type: "Feature", properties: {}, geometry: zone.geometry as GeoJSON.Geometry });
+
+        // Check if all points of the stall polygon are within this zone
+        let allPointsInside = true;
+        stallLayer.eachLayer((l: any) => {
+          if (l.getLatLngs) {
+            const coords = l.getLatLngs()[0];
+            coords.forEach((coord: L.LatLng) => {
+              let inside = false;
+              perimeterLayer.eachLayer((pLayer: any) => {
+                if (pLayer.getBounds && pLayer.getBounds().contains(coord)) {
+                  // More precise check using ray casting
+                  if (pLayer.getLatLngs) {
+                    const polyCoords = pLayer.getLatLngs()[0];
+                    if (isPointInPolygon(coord, polyCoords)) {
+                      inside = true;
+                    }
                   }
                 }
-              }
+              });
+              if (!inside) allPointsInside = false;
             });
-            if (!inside) allPointsInside = false;
-          });
-        }
-      });
+          }
+        });
 
-      return allPointsInside;
+        return allPointsInside;
+      });
     } catch (error) {
       console.error("Boundary check error:", error);
       return true; // On error, allow the operation
     }
-  }, [perimeter]);
+  }, [perimeters]);
 
   // Ray casting algorithm for point-in-polygon test
   function isPointInPolygon(point: L.LatLng, polygon: L.LatLng[]): boolean {
@@ -761,7 +764,7 @@ export function AdminMapView() {
   };
 
   const handleCreateStall = () => {
-    if (!perimeter) return;
+    if (perimeters.length === 0) return;
     setIsToolbarVisible(true);
     drawApiRef.current?.showDrawToolbar();
   };
@@ -824,7 +827,9 @@ export function AdminMapView() {
             onToolbarHidden={() => setIsToolbarVisible(false)}
             onEditModeStop={() => setIsEditMode(false)}
           />
-          {perimeter && <PerimeterLayer geometry={perimeter.geometry} />}
+          {perimeters.map((zone) => (
+            <PerimeterLayer key={zone.id} geometry={zone.geometry} />
+          ))}
           <FlyTo target={flyToTarget} />
         </MapContainer>
 
@@ -861,14 +866,14 @@ export function AdminMapView() {
           </div>
 
           {/* Perimeter required notice or Create / Cancel button */}
-          {!perimeter ? (
+          {perimeters.length === 0 ? (
             <div className="bg-white rounded-xl shadow-lg border border-amber-200 px-4 py-3 max-w-52">
               <div className="flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
                 <div>
-                  <p className="text-xs font-semibold text-amber-800">No market perimeter set</p>
+                  <p className="text-xs font-semibold text-amber-800">No market zones set</p>
                   <p className="text-[11px] text-amber-600 mt-0.5 leading-relaxed">
-                    Super Admin must define the market boundary before stalls can be created.
+                    Super Admin must define at least one market zone before stalls can be created.
                   </p>
                 </div>
               </div>
@@ -949,9 +954,9 @@ export function AdminMapView() {
                 </div>
                 <p className="text-sm font-semibold text-gray-700 mb-1">No stalls drawn yet</p>
                 <p className="text-xs text-gray-400 leading-relaxed">
-                  {perimeter
+                  {perimeters.length > 0
                     ? 'Click "Create New Stall" on the map to draw stall boundaries.'
-                    : "Super Admin must set the market perimeter before stalls can be created."}
+                    : "Super Admin must set a market zone before stalls can be created."}
                 </p>
               </div>
             ) : floorStalls.length === 0 ? (

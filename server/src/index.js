@@ -1132,16 +1132,44 @@ app.delete("/api/applications/:id", requireAuth, requireRole("admin", "super_adm
   try { await db.execute("DELETE FROM applications WHERE id = ?", [req.params.id]); res.json({ ok: true }); } catch (error) { next(error); }
 });
 
-// ── Market Perimeter (singleton) ──────────────────────────────────────────────
-app.get("/api/perimeter", async (req, res, next) => {
+// ── Market Perimeters (multi-zone) ────────────────────────────────────────────
+app.get("/api/perimeters", async (req, res, next) => {
   try {
     const [rows] = await db.execute(`
       SELECT mp.id, mp.name, mp.geometry, mp.created_by, mp.notes, mp.created_at, p.name AS created_by_name
       FROM market_perimeter mp
       LEFT JOIN profiles p ON mp.created_by = p.id
-      ORDER BY mp.created_at DESC LIMIT 1
+      ORDER BY mp.created_at ASC
     `);
-    const perimeter = rows[0] ? {
+    const perimeters = rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      geometry: typeof row.geometry === "string" ? JSON.parse(row.geometry) : row.geometry,
+      createdBy: row.created_by,
+      createdByName: row.created_by_name || "Unknown",
+      notes: row.notes || "",
+      createdAt: row.created_at,
+    }));
+    res.json({ perimeters });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/perimeters", requireAuth, requireRole("super_admin"), async (req, res, next) => {
+  try {
+    const { name, geometry, notes } = req.body;
+    if (!name || !geometry) return res.status(400).json({ message: "Name and geometry are required." });
+    const id = crypto.randomUUID();
+    await db.execute(
+      "INSERT INTO market_perimeter (id, name, geometry, created_by, notes) VALUES (?, ?, ?, ?, ?)",
+      [id, name, JSON.stringify(geometry), req.auth.sub, notes || ""]
+    );
+    const [rows] = await db.execute(`
+      SELECT mp.id, mp.name, mp.geometry, mp.created_by, mp.notes, mp.created_at, p.name AS created_by_name
+      FROM market_perimeter mp
+      LEFT JOIN profiles p ON mp.created_by = p.id
+      WHERE mp.id = ?
+    `, [id]);
+    const perimeter = {
       id: rows[0].id,
       name: rows[0].name,
       geometry: typeof rows[0].geometry === "string" ? JSON.parse(rows[0].geometry) : rows[0].geometry,
@@ -1149,49 +1177,14 @@ app.get("/api/perimeter", async (req, res, next) => {
       createdByName: rows[0].created_by_name || "Unknown",
       notes: rows[0].notes || "",
       createdAt: rows[0].created_at,
-    } : null;
-    res.json({ perimeter });
+    };
+    res.status(201).json({ perimeter });
   } catch (error) { next(error); }
 });
 
-app.post("/api/perimeter", requireAuth, requireRole("super_admin"), async (req, res, next) => {
+app.delete("/api/perimeters/:id", requireAuth, requireRole("super_admin"), async (req, res, next) => {
   try {
-    const { name, geometry, notes } = req.body;
-    if (!name || !geometry) return res.status(400).json({ message: "Name and geometry are required." });
-    const conn = await db.getConnection();
-    try {
-      await conn.beginTransaction();
-      await conn.execute("DELETE FROM market_perimeter");
-      const id = crypto.randomUUID();
-      await conn.execute(
-        "INSERT INTO market_perimeter (id, name, geometry, created_by, notes) VALUES (?, ?, ?, ?, ?)",
-        [id, name, JSON.stringify(geometry), req.auth.sub, notes || ""]
-      );
-      const [rows] = await conn.execute(`
-        SELECT mp.id, mp.name, mp.geometry, mp.created_by, mp.notes, mp.created_at, p.name AS created_by_name
-        FROM market_perimeter mp
-        LEFT JOIN profiles p ON mp.created_by = p.id
-        WHERE mp.id = ?
-      `, [id]);
-      const perimeter = {
-        id: rows[0].id,
-        name: rows[0].name,
-        geometry: typeof rows[0].geometry === "string" ? JSON.parse(rows[0].geometry) : rows[0].geometry,
-        createdBy: rows[0].created_by,
-        createdByName: rows[0].created_by_name || "Unknown",
-        notes: rows[0].notes || "",
-        createdAt: rows[0].created_at,
-      };
-      await conn.commit();
-      res.status(201).json({ perimeter });
-    } catch (innerError) { await conn.rollback(); throw innerError; }
-    finally { conn.release(); }
-  } catch (error) { next(error); }
-});
-
-app.delete("/api/perimeter", requireAuth, requireRole("super_admin"), async (req, res, next) => {
-  try {
-    await db.execute("DELETE FROM market_perimeter");
+    await db.execute("DELETE FROM market_perimeter WHERE id = ?", [req.params.id]);
     res.json({ ok: true });
   } catch (error) { next(error); }
 });

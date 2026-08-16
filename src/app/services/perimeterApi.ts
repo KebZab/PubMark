@@ -10,19 +10,19 @@ export interface Perimeter {
   createdAt: string;
 }
 
-export async function getPerimeter(): Promise<Perimeter | null> {
-  const result = await apiFetch<{ perimeter: Perimeter | null }>("/perimeter");
-  return result.perimeter;
+export async function getPerimeters(): Promise<Perimeter[]> {
+  const result = await apiFetch<{ perimeters: Perimeter[] }>("/perimeters");
+  return result.perimeters;
 }
 
-export async function savePerimeter(data: { name: string; geometry: object; notes: string }): Promise<Perimeter> {
-  const result = await apiFetch<{ perimeter: Perimeter }>("/perimeter", {
+export async function createPerimeter(data: { name: string; geometry: object; notes: string }): Promise<Perimeter> {
+  const result = await apiFetch<{ perimeter: Perimeter }>("/perimeters", {
     method: "POST",
     body: JSON.stringify(data),
   });
   return result.perimeter;
 }
 
-export async function clearPerimeter(): Promise<void> {
-  await apiFetch<{ ok: boolean }>("/perimeter", { method: "DELETE" });
+export async function deletePerimeter(id: string): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/perimeters/${id}`, { method: "DELETE" });
 }

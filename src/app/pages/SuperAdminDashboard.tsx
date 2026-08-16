@@ -12,7 +12,7 @@ import {
   type PubMarkUser, type UserRole, getSession,
 } from "../components/authStorage";
 import { useStalls } from "../hooks/useStalls";
-import { usePerimeter } from "../hooks/usePerimeter";
+import { usePerimeters } from "../hooks/usePerimeters";
 import { importStalls, updateStall } from "../services/stallsApi";
 import { updateStoredStall, getStoredStalls } from "../components/stallsStorage";
 import { useApplications } from "../hooks/useApplications";
@@ -128,7 +128,7 @@ export function SuperAdminDashboard() {
 
   const { stalls, refetch: refetchStalls } = useStalls();
   const { applications, refetch: refetchApplications } = useApplications();
-  const { perimeter } = usePerimeter();
+  const { perimeters } = usePerimeters();
   const [allViolations, setAllViolations] = useState<Violation[]>([]);
 
   useEffect(() => {
@@ -526,7 +526,7 @@ export function SuperAdminDashboard() {
   const TABS: { id: Tab; label: string; icon: React.ElementType; badge?: number | string }[] = [
     { id: "overview", label: "Overview", icon: BarChart3 },
     { id: "users", label: "User Management", icon: Users },
-    { id: "map", label: "Map Editor", icon: Map, badge: perimeter ? "Set" : "Required" },
+    { id: "map", label: "Map Editor", icon: Map, badge: perimeters.length > 0 ? "Set" : "Required" },
     { id: "stalls", label: "Stall Management", icon: Store },
     { id: "applications", label: "Applications", icon: Package, badge: stats.pendingApps > 0 ? stats.pendingApps : undefined },
     { id: "violations", label: "Reports & Requests", icon: AlertTriangle, badge: stats.openViolations },
@@ -879,12 +879,12 @@ export function SuperAdminDashboard() {
                 </button>
               </div>
             )}
-            {!perimeter ? (
+            {perimeters.length === 0 ? (
               <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3">
                 <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
                 <div>
-                  <p className="text-sm font-semibold text-amber-800">Market perimeter not set</p>
-                  <p className="text-xs text-amber-700 mt-0.5">Define the market boundary in the Map Editor tab before creating stalls.</p>
+                  <p className="text-sm font-semibold text-amber-800">No market zones set</p>
+                  <p className="text-xs text-amber-700 mt-0.5">Define at least one market zone in the Map Editor tab before creating stalls.</p>
                 </div>
               </div>
             ) : (

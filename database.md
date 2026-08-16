@@ -594,12 +594,13 @@ This section summarizes the major implementation work completed during the curre
 **localStorage Key:** `pubmark_perimeter`  
 **Store File:** `src/app/components/perimeterStore.ts`
 
-**Purpose:** Stores the drawn boundary of the market on the map. Single record — only one active perimeter at a time.
+**Purpose:** Stores the drawn boundaries of the market on the map. Multiple named zones may exist at once (e.g. Zone I, II, III); a stall is valid if it falls fully inside any one zone.
 
 **Who reads it:**
-- Super Admin — create, update, clear
+- Super Admin — create, delete
+- Admin — read (stall boundary validation)
 
-**Supabase Replacement:** `market_perimeter` table (single-row via application logic) or PostGIS-enabled column.
+**Supabase Replacement:** `market_perimeter` table (one row per zone) or PostGIS-enabled column.
 
 ---
 
@@ -1491,37 +1492,20 @@ CREATE POLICY "archive_super_admin_only"
 ```sql
 CREATE TABLE IF NOT EXISTS public.market_perimeter (
   id          uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
-  name        text         NOT NULL DEFAULT 'Market Boundary',
-  geometry    jsonb        NOT NULL,                         -- GeoJSON geometry (Polygon / MultiPolygon)
+  name        text         NOT NULL DEFAULT 'Market Boundary',  -- zone label, e.g. "Zone I"
+  geometry    jsonb        NOT NULL,                            -- GeoJSON geometry (Polygon / MultiPolygon)
   created_by  uuid         NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
   notes       text         NOT NULL DEFAULT '',
   created_at  timestamptz  NOT NULL DEFAULT now(),
-  updated_at  timestamptz  NOT NULL DEFAULT now(),
+  updated_at  timestamptz  NOT NULL DEFAULT now()
 
-  -- Enforce single active perimeter at the application level.
-  -- This CHECK ensures the table never accidentally holds more than 1 row
-  -- without extra application logic (use DELETE + INSERT to replace).
-  CONSTRAINT single_perimeter CHECK (id IS NOT NULL)        -- placeholder; enforce via app or trigger below
+  -- Multiple rows are expected: each row is one independently-managed zone.
+  -- Zones may be adjacent or overlap; a stall is valid inside any one zone.
 );
 
 CREATE TRIGGER trg_market_perimeter_updated_at
   BEFORE UPDATE ON public.market_perimeter
   FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
-
--- Enforce max 1 row via trigger
-CREATE OR REPLACE FUNCTION public.enforce_single_perimeter()
-RETURNS TRIGGER LANGUAGE plpgsql AS $$
-BEGIN
-  IF (SELECT COUNT(*) FROM public.market_perimeter) >= 1 THEN
-    RAISE EXCEPTION 'Only one market perimeter record is allowed. Delete the existing record first.';
-  END IF;
-  RETURN NEW;
-END;
-$$;
-
-CREATE TRIGGER trg_single_perimeter
-  BEFORE INSERT ON public.market_perimeter
-  FOR EACH ROW EXECUTE FUNCTION public.enforce_single_perimeter();
 
 ALTER TABLE public.market_perimeter ENABLE ROW LEVEL SECURITY;
 
