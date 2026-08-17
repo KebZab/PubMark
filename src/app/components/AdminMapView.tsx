@@ -732,16 +732,27 @@ export function AdminMapView() {
   }, [isWithinPerimeter, refetch]);
 
   const handleDeleted = useCallback(async (ids: string[]) => {
+    const occupied = ids.filter((id) => getActiveApp(id, applications)?.status === "approved");
+    if (occupied.length > 0) {
+      showToast("Cannot delete a stall that is currently owned by a vendor. Terminate or transfer the tenancy first.", "error");
+      await refetch();
+      return;
+    }
     try {
       await deleteStalls(ids);
       await refetch();
       setSelectedStallId((prev) => (prev && ids.includes(prev) ? null : prev));
     } catch (e) {
       showToast(`Failed to delete stalls: ${(e as Error).message}`, "error");
+      await refetch();
     }
-  }, [refetch]);
+  }, [refetch, applications]);
 
   const handleDeleteStall = async (id: string) => {
+    if (getActiveApp(id, applications)?.status === "approved") {
+      showToast("Cannot delete a stall that is currently owned by a vendor. Terminate or transfer the tenancy first.", "error");
+      return;
+    }
     try {
       await deleteStall(id);
       await refetch();
@@ -1087,7 +1098,13 @@ export function AdminMapView() {
                 </button>
                 <button
                   onClick={() => handleDeleteStall(selectedStall.id)}
-                  className="py-2 bg-white border border-red-200 text-red-600 rounded-xl text-xs font-semibold hover:bg-red-50 transition-all flex items-center justify-center gap-1.5"
+                  disabled={detailIsOccupied}
+                  title={detailIsOccupied ? "Cannot delete a stall that is currently owned by a vendor." : undefined}
+                  className={`py-2 border rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+                    detailIsOccupied
+                      ? "bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed"
+                      : "bg-white border-red-200 text-red-600 hover:bg-red-50"
+                  }`}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   Delete

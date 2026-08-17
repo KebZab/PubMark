@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 PubMark is a smart public-market stall management PWA (Progressive Web App) built in React 18, TypeScript, and Vite. Four roles access it: vendors (apply for/manage market stalls), officers (inspections and violation reports), admins (day-to-day operations), and super-admins (users, maps, inventory, analytics, archives). The interactive Leaflet map lets users draw and manage stall polygons.
 
-**⚠️ Architectural status (critical):** the application is mid-migration from browser `localStorage` to a real backend. **Only login and registration talk to the MySQL API**—everything else (stalls, applications, transfers, violations, inventory, etc.) still reads/writes `localStorage` directly via domain-specific store modules. Do not assume `database.md` describes a running feature; that file documents the *future* Supabase/PostgreSQL target, not the current backend. For exhaustive current architecture, design system, routes, and known gaps, read [`PROJECT_CONTEXT.md`](./PROJECT_CONTEXT.md) (updated continuously as a working AI handoff doc).
+**⚠️ Architectural status (critical, updated 2026-08-17):** the application is mid-migration from browser `localStorage` to a real backend, and **more of it has moved to MySQL than the module names suggest.** As of 2026-08-17, `server/src/index.js` exposes real MySQL-backed routes for: auth, users, announcements, stalls (`/api/stalls*`, including geometry), applications, perimeters, check-requests, violation-requests, violations, and termination-requests. The corresponding `src/app/components/*Store.ts` / `*Storage.ts` files for those entities are mostly thin `apiFetch` wrappers now, not localStorage — **do not assume a `*Store.ts`/`*Storage.ts` file name means localStorage; check whether it imports `apiFetch` before assuming either way.** Still genuinely `localStorage`-only (no backend route exists yet): **transfers** (`transferStorage.ts`), **inventory** (`inventoryStore.ts`), and **archive** (`archiveStore.ts`). Note also `stallsStorage.ts` (the old localStorage-based stall store) is legacy dead weight for most flows — `AdminMapView.tsx` uses `stallsApi.ts` (real API) — but `SuperAdminDashboard.tsx` still calls `getStoredStalls`/`updateStoredStall` from it directly in a few places, which is a latent inconsistency worth resolving if you touch stall import/export there. Do not assume `database.md` describes a running feature; that file documents the *future* Supabase/PostgreSQL target, not the current backend. For exhaustive current architecture, design system, routes, and known gaps, read [`PROJECT_CONTEXT.md`](./PROJECT_CONTEXT.md) (updated continuously as a working AI handoff doc).
 
 ## Commands
 
@@ -32,13 +32,14 @@ PubMark is a smart public-market stall management PWA (Progressive Web App) buil
 
 ### localStorage → MySQL migration
 
-The **only backend endpoints** are auth (`/api/auth/login`, `/api/auth/register`, `/api/auth/me`, `/api/auth/logout`); they use bcrypt password hashing, JWT signed cookies (`pubmark_session`, 8-hour expiry), and MySQL-backed user profiles. Everything else is still `localStorage`. When you migrate a feature (e.g., stalls, applications, transfers, violations, check requests, inventory, announcements, or perimeter):
+Auth (`/api/auth/login`, `/api/auth/register`, `/api/auth/me`, `/api/auth/logout`) uses bcrypt password hashing, JWT signed cookies (`pubmark_session`, 8-hour expiry), and MySQL-backed user profiles. Beyond auth, **stalls, applications, perimeters, announcements, users, violations, check-requests, violation-requests, and termination-requests are also MySQL-backed** — see the architectural status note above for the full breakdown. Only **transfers, inventory, and archive** remain `localStorage`-only. When you migrate one of those remaining features:
 
 1. Add a typed API route to `server/src/index.js` with role checks.
-2. Add a typed fetch client function to `src/app/services/api.ts`.
+2. Add a typed fetch client function to `src/app/services/api.ts` (or a dedicated `*Api.ts`/`*Store.ts` wrapper, following the pattern in `violationsStore.ts` or `checkRequestsStore.ts`).
 3. Replace all consumers of the legacy `localStorage` store with API calls.
 4. Do not dual-write; migrate every consumer before removing the `localStorage` fallback.
 5. Preserve the UUID/snake_case conventions so the eventual Supabase migration is straightforward.
+6. **Route registration order matters in Express.** `server/src/index.js` registers routes in file order and matches top-down — a static path (e.g. `/api/stalls/geometry`) must be declared *before* a dynamic sibling (e.g. `/api/stalls/:id`), or the dynamic route swallows it (see gotcha #6 below; this exact bug shipped once already).
 
 ### Routes and role-gating
 
@@ -54,21 +55,24 @@ Shared: `/analytics`, `/archive` (admin + super-admin).
 
 ### Domain state modules
 
-Each feature area has its own store module under `src/app/components/`:
+Each feature area has its own store module under `src/app/components/` (or `src/app/services/` for the newer ones). Despite the shared naming pattern, they are **not all backed the same way** — check the "Backend" column, or grep the file for `apiFetch` vs `localStorage`, before assuming:
 
-| Module | Entity |
-|--------|--------|
-| `stallsStorage.ts` | drawn stalls, geometry, CRUD |
-| `applicationsStorage.ts` | vendor applications, status, permits |
-| `transferStorage.ts` | vendor stall transfers |
-| `violationsStore.ts` | violations, evidence, resolve/dismiss |
-| `checkRequestsStore.ts` | inspections and completion files |
-| `inventoryStore.ts` | inventory items, low-stock |
-| `announcementsStore.ts` | admin announcements |
-| `archiveStore.ts` | archived records |
-| `perimeterStore.ts` | one market boundary polygon |
+| Module | Entity | Backend |
+|--------|--------|---------|
+| `stallsStorage.ts` (legacy) / `services/stallsApi.ts` (current) | drawn stalls, geometry, CRUD | MySQL (`stallsApi.ts`); `stallsStorage.ts` is mostly dead but still used directly by `SuperAdminDashboard.tsx` in a few spots |
+| `applicationsStorage.ts` | vendor applications, status, permits | MySQL |
+| `transferStorage.ts` | vendor stall transfers | `localStorage` only |
+| `violationsStore.ts` | violations, evidence, resolve/dismiss | MySQL |
+| `checkRequestsStore.ts` | inspections and completion files | MySQL |
+| `violationRequestStore.ts` | officer violation-check requests | MySQL |
+| `inventoryStore.ts` | inventory items, low-stock | `localStorage` only |
+| `announcementsStore.ts` | admin announcements | MySQL |
+| `archiveStore.ts` | archived records | `localStorage` only |
+| `perimeterStore.ts` | one market boundary polygon | MySQL |
 
-Maps (`AdminMapView`, `SuperAdminMapEditor`, `OfficerMapView`, `AdminCheckRequestMap`) all write to these stores. There is no Redux, Zustand, or React Context—state is per-feature `localStorage`. When building new features, follow this pattern: one store module per entity, JSON serialize/deserialize via `localStorage`.
+Maps (`AdminMapView`, `SuperAdminMapEditor`, `OfficerMapView`, `AdminCheckRequestMap`) write to these stores/APIs. There is no Redux, Zustand, or React Context — state lives in these per-feature modules. When building a new feature that's still `localStorage`-backed (transfers, inventory, archive), follow the existing pattern for that module: one store per entity, JSON serialize/deserialize via `localStorage`. When adding to an already-migrated entity, follow the `apiFetch`-wrapper pattern instead (see `violationsStore.ts` for a good example).
+
+**Legacy-data migration on page load:** [`src/app/services/legacyRequestMigration.ts`](./src/app/services/legacyRequestMigration.ts) runs on every "Reports & Requests" / "Send Request" page load (called from `AdminDashboard.tsx`'s `loadReportsData`/`loadRequestData`) to one-time-migrate any leftover `localStorage` request/violation data (from before those entities moved to MySQL) into the API, gated by the `pubmark_db_request_migration_v1` localStorage key. Each item is migrated in its own try/catch (fixed 2026-08-17 — see below) so a stale record referencing a since-deleted or pre-migration `local_...` stall ID is skipped rather than repeatedly 500ing and blocking the migration from ever completing.
 
 ## Working in this repo
 
@@ -110,11 +114,13 @@ The interface uses **Tailwind CSS 4** and **teal/white/Inter** professional typo
 
 ### Common gotchas
 
-1. **Only auth hits the API.** If a feature uses `applicationsStorage.ts`, it's still `localStorage`, not persisted to MySQL.
+1. **Don't assume a store module means localStorage.** Most domain modules (stalls, applications, violations, check-requests, violation-requests, perimeters, announcements) are MySQL-backed `apiFetch` wrappers now; only transfers, inventory, and archive are still pure `localStorage`. See the Domain state modules table above.
 2. **Cached profile can outlive server session.** `ProtectedRoute` checks the UI cache, not a live server call. `GET /api/auth/me` is not called on every route (known gap).
-3. **Maps share geometry with stores.** Editing a stall polygon updates `stallsStorage` directly. Perimeter editing updates `perimeterStore`.
+3. **Maps write geometry through the API for stalls (`stallsApi.ts` → `PATCH /api/stalls/geometry`), and through `perimeterStore` for the market boundary.** `AdminMapView.tsx`'s edit/delete handlers pre-check the market perimeter and vendor-occupancy client-side, but the server is the source of truth for both.
 4. **Figma origin.** Root `package.json` name is `@figma/my-make-file` and `vite.config.ts` has Figma-specific tooling. This was scaffolded from a Figma "Make" export; `src/imports/` has Figma images (reference only, not executed by the build).
 5. **No server `.env.example`.** The existing `server/.env` file has no checked-in template—copy from `root/.env.example` and update MySQL creds and `JWT_SECRET` manually.
+6. **Express route order bites `server/src/index.js`.** Routes are matched top-down; a dynamic `:id` route declared before a static sibling path will swallow requests meant for the static one (e.g. `PATCH /api/stalls/:id` registered before `PATCH /api/stalls/geometry` caused every geometry-save request to 400 with "No fields to update." — fixed 2026-08-17 by reordering). When adding a new static sub-path under an existing resource, declare it above any `:id`-style route on that resource.
+7. **`stalls` is referenced by several tables with no `ON DELETE CASCADE`** (`applications`, `violations`, `check_requests`, `violation_requests`, `transfers`, `termination_requests`). Deleting a stall must go through the cascade-cleanup + ownership-check logic in `DELETE /api/stalls/:id` / `DELETE /api/stalls` (not a bare `DELETE FROM stalls`), or it will FK-fail on any stall with history. "Owned by a vendor" is defined as having an `applications` row with `status = 'approved'`.
 
 ### Reference files
 
@@ -122,3 +128,13 @@ The interface uses **Tailwind CSS 4** and **teal/white/Inter** professional typo
 - [`MYSQL_TRANSITION.md`](./MYSQL_TRANSITION.md) — notes on the temporary MySQL backend and the planned Supabase migration order.
 - [`database.md`](./database.md) — future Supabase/PostgreSQL schema, RLS, Storage policies (not current backend).
 - `server/README.md` — backend setup steps.
+
+## Session log
+
+### 2026-08-17 — stall delete/geometry/reports bug fixes
+
+Three related bugs found and fixed in the stalls/reports flow, all in `server/src/index.js` unless noted:
+
+1. **Stall delete had no ownership rule and FK-failed on any stall with history.** `DELETE /api/stalls/:id` and `DELETE /api/stalls` did a bare `DELETE FROM stalls`, which (a) let admins delete stalls currently occupied by a vendor, and (b) threw an FK constraint error (surfaced to the user as a generic "Unexpected server error") whenever the stall had any historical `applications`/`violations`/`check_requests`/`violation_requests`/`transfers`/`termination_requests` rows, since none of those FKs cascade. Fixed by adding `findOwnedStallNames()` (blocks delete with a `409` when an `applications` row with `status = 'approved'` exists) and `cascadeDeleteStall()` (cleans up dependent rows in a transaction before deleting the stall) — both used by the single and bulk delete routes. Mirrored on the frontend in `AdminMapView.tsx`: the Delete button is disabled for occupied stalls, and both delete paths pre-check occupancy and re-`refetch()` on failure so the map doesn't show a stall as gone when it wasn't.
+2. **Geometry save always failed with "No fields to update."** `PATCH /api/stalls/:id` was registered before `PATCH /api/stalls/geometry`; Express matched the dynamic route first and treated `"geometry"` as a stall ID. Fixed by moving the `/geometry` route above `/:id`. See gotcha #6 above — watch for this class of bug elsewhere.
+3. **"Reports & Requests" / "Send Request" pages 500'd on every load.** `legacyRequestMigration.ts` migrates old pre-MySQL `localStorage` request/violation data into the API on every page load of those tabs, in a loop with no per-item error handling. Legacy records referencing stale/local-only stall IDs fail the `stall_id` FK constraint on insert, which threw out of the loop *before* the migration was marked `"done"` — so it retried (and 500'd) forever. Fixed by wrapping each loop iteration in its own try/catch so one bad record is skipped instead of blocking the rest and re-triggering on every visit.

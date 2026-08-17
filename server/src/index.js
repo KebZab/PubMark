@@ -975,6 +975,19 @@ app.post("/api/stalls", requireAuth, requireRole("admin", "super_admin"), async 
   } catch (error) { next(error); }
 });
 
+app.patch("/api/stalls/geometry", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
+  try {
+    const { updates } = req.body;
+    if (!Array.isArray(updates) || updates.length === 0) return res.status(400).json({ message: "Updates array is required and must not be empty." });
+    const conn = await db.getConnection();
+    try { await conn.beginTransaction();
+      for (const { id, geometry } of updates) { await conn.execute("UPDATE stalls SET geometry = ? WHERE id = ?", [JSON.stringify(geometry), id]); }
+      await conn.commit(); res.json({ ok: true });
+    } catch (innerError) { await conn.rollback(); throw innerError; }
+    finally { conn.release(); }
+  } catch (error) { next(error); }
+});
+
 app.patch("/api/stalls/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try {
     const { stall_name, business_type, section, floor, floor_area, notes, status } = req.body;
@@ -995,26 +1008,37 @@ app.patch("/api/stalls/:id", requireAuth, requireRole("admin", "super_admin"), a
   } catch (error) { next(error); }
 });
 
-app.patch("/api/stalls/geometry", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
-  try {
-    const { updates } = req.body;
-    if (!Array.isArray(updates) || updates.length === 0) return res.status(400).json({ message: "Updates array is required and must not be empty." });
-    const conn = await db.getConnection();
-    try { await conn.beginTransaction();
-      for (const { id, geometry } of updates) { await conn.execute("UPDATE stalls SET geometry = ? WHERE id = ?", [JSON.stringify(geometry), id]); }
-      await conn.commit(); res.json({ ok: true });
-    } catch (innerError) { await conn.rollback(); throw innerError; }
-    finally { conn.release(); }
-  } catch (error) { next(error); }
-});
+async function findOwnedStallNames(ids) {
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => "?").join(",");
+  const [rows] = await db.execute(
+    `SELECT DISTINCT s.stall_name FROM applications a JOIN stalls s ON s.id = a.stall_id WHERE a.stall_id IN (${placeholders}) AND a.status = 'approved'`,
+    ids
+  );
+  return rows.map((r) => r.stall_name);
+}
+
+async function cascadeDeleteStall(conn, id) {
+  await conn.execute("DELETE FROM check_requests WHERE stall_id = ?", [id]);
+  await conn.execute("DELETE FROM violation_requests WHERE stall_id = ?", [id]);
+  await conn.execute("DELETE FROM violations WHERE stall_id = ?", [id]);
+  await conn.execute("DELETE FROM transfers WHERE stall_id = ?", [id]);
+  await conn.execute("DELETE FROM termination_requests WHERE stall_id = ?", [id]);
+  await conn.execute("DELETE FROM applications WHERE stall_id = ?", [id]);
+  await conn.execute("DELETE FROM stalls WHERE id = ?", [id]);
+}
 
 app.delete("/api/stalls", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try {
     const { ids } = req.body;
     if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ message: "IDs array is required and must not be empty." });
+    const ownedNames = await findOwnedStallNames(ids);
+    if (ownedNames.length > 0) {
+      return res.status(409).json({ message: `Cannot delete stall(s) currently owned by a vendor: ${ownedNames.join(", ")}.` });
+    }
     const conn = await db.getConnection();
     try { await conn.beginTransaction();
-      for (const id of ids) { await conn.execute("DELETE FROM stalls WHERE id = ?", [id]); }
+      for (const id of ids) { await cascadeDeleteStall(conn, id); }
       await conn.commit(); res.json({ ok: true });
     } catch (innerError) { await conn.rollback(); throw innerError; }
     finally { conn.release(); }
@@ -1022,7 +1046,18 @@ app.delete("/api/stalls", requireAuth, requireRole("admin", "super_admin"), asyn
 });
 
 app.delete("/api/stalls/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
-  try { await db.execute("DELETE FROM stalls WHERE id = ?", [req.params.id]); res.json({ ok: true }); } catch (error) { next(error); }
+  try {
+    const ownedNames = await findOwnedStallNames([req.params.id]);
+    if (ownedNames.length > 0) {
+      return res.status(409).json({ message: "Cannot delete a stall that is currently owned by a vendor. Terminate or transfer the tenancy first." });
+    }
+    const conn = await db.getConnection();
+    try { await conn.beginTransaction();
+      await cascadeDeleteStall(conn, req.params.id);
+      await conn.commit(); res.json({ ok: true });
+    } catch (innerError) { await conn.rollback(); throw innerError; }
+    finally { conn.release(); }
+  } catch (error) { next(error); }
 });
 
 app.post("/api/stalls/import", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {

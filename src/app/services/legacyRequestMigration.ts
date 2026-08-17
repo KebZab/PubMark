@@ -91,75 +91,91 @@ export async function migrateLegacyRequests(sessionUserId: string, users: ApiPro
   }
 
   for (const request of legacyViolationRequests) {
-    const assignedOfficer = findUserByName(users, request.assignedOfficerName);
-    await apiFetch("/violation-requests", {
-      method: "POST",
-      body: JSON.stringify({
-        stallId: request.stallId,
-        reason: request.reason,
-        requestedBy: sessionUserId,
-        assignedOfficerId: assignedOfficer?.id,
-        status: request.status || (assignedOfficer ? "assigned" : "pending"),
-        createdAt: request.createdAt,
-        completedAt: request.completedAt,
-      }),
-    });
+    try {
+      const assignedOfficer = findUserByName(users, request.assignedOfficerName);
+      await apiFetch("/violation-requests", {
+        method: "POST",
+        body: JSON.stringify({
+          stallId: request.stallId,
+          reason: request.reason,
+          requestedBy: sessionUserId,
+          assignedOfficerId: assignedOfficer?.id,
+          status: request.status || (assignedOfficer ? "assigned" : "pending"),
+          createdAt: request.createdAt,
+          completedAt: request.completedAt,
+        }),
+      });
+    } catch (error) {
+      console.warn("Skipping legacy violation request during migration:", error);
+    }
   }
 
   for (const request of legacyCheckRequests) {
-    const assignedOfficer = findUserByName(users, request.assignedToName);
-    await apiFetch("/check-requests", {
-      method: "POST",
-      body: JSON.stringify({
-        stallId: request.stallId,
-        requestedBy: sessionUserId,
-        assignedTo: assignedOfficer?.id,
-        priority: request.priority || "normal",
-        reason: request.reason,
-        notes: request.notes || "",
-        status: request.status || "pending",
-        createdAt: request.createdAt,
-        completedAt: request.completedAt,
-        completionNotes: request.completionNotes || "",
-        completionSummary: request.completionSummary || "",
-        completionFiles: request.completionFiles || [],
-      }),
-    });
+    try {
+      const assignedOfficer = findUserByName(users, request.assignedToName);
+      await apiFetch("/check-requests", {
+        method: "POST",
+        body: JSON.stringify({
+          stallId: request.stallId,
+          requestedBy: sessionUserId,
+          assignedTo: assignedOfficer?.id,
+          priority: request.priority || "normal",
+          reason: request.reason,
+          notes: request.notes || "",
+          status: request.status || "pending",
+          createdAt: request.createdAt,
+          completedAt: request.completedAt,
+          completionNotes: request.completionNotes || "",
+          completionSummary: request.completionSummary || "",
+          completionFiles: request.completionFiles || [],
+        }),
+      });
+    } catch (error) {
+      console.warn("Skipping legacy check request during migration:", error);
+    }
   }
 
   for (const request of legacyTerminationRequests) {
     const vendor = findUserByEmail(users, request.vendorEmail) || findUserByName(users, request.vendorName) || users.find((user) => user.id === request.vendorId) || null;
     if (!vendor) continue;
-    await apiFetch("/termination-requests", {
-      method: "POST",
-      body: JSON.stringify({
-        type: request.type,
-        vendorId: vendor.id,
-        stallId: request.stallId,
-        reason: request.reason,
-        status: request.status || "pending",
-        createdAt: request.createdAt,
-        resolvedAt: request.resolvedAt,
-      }),
-    });
+    try {
+      await apiFetch("/termination-requests", {
+        method: "POST",
+        body: JSON.stringify({
+          type: request.type,
+          vendorId: vendor.id,
+          stallId: request.stallId,
+          reason: request.reason,
+          status: request.status || "pending",
+          createdAt: request.createdAt,
+          resolvedAt: request.resolvedAt,
+        }),
+      });
+    } catch (error) {
+      console.warn("Skipping legacy termination request during migration:", error);
+    }
   }
 
   for (const violation of legacyViolations) {
-    const officer = findUserByName(users, violation.officerName) || findUserByEmail(users, "officer@pubmark.com");
-    await apiFetch("/violations", {
-      method: "POST",
-      body: JSON.stringify({
-        stallId: violation.stallId,
-        officerId: officer?.id,
-        category: violation.category,
-        description: violation.description,
-        status: violation.status || "open",
-        remarks: violation.remarks || "",
-        evidence: violation.evidence || [],
-        createdAt: violation.createdAt,
-        resolvedAt: violation.resolvedAt,
-      }),
-    });
+    try {
+      const officer = findUserByName(users, violation.officerName) || findUserByEmail(users, "officer@pubmark.com");
+      await apiFetch("/violations", {
+        method: "POST",
+        body: JSON.stringify({
+          stallId: violation.stallId,
+          officerId: officer?.id,
+          category: violation.category,
+          description: violation.description,
+          status: violation.status || "open",
+          remarks: violation.remarks || "",
+          evidence: violation.evidence || [],
+          createdAt: violation.createdAt,
+          resolvedAt: violation.resolvedAt,
+        }),
+      });
+    } catch (error) {
+      console.warn("Skipping legacy violation during migration:", error);
+    }
   }
 
   localStorage.setItem(MIGRATION_KEY, "done");
