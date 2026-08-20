@@ -3,13 +3,13 @@ import express from "express";
 import cors from "cors";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import mysql from "mysql2/promise";
+import pg from "pg";
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
 const jwtSecret = process.env.JWT_SECRET;
 if (!jwtSecret) throw new Error("JWT_SECRET is required.");
-const db = mysql.createPool({ host: process.env.MYSQL_HOST, port: Number(process.env.MYSQL_PORT || 3306), database: process.env.MYSQL_DATABASE, user: process.env.MYSQL_USER, password: process.env.MYSQL_PASSWORD, waitForConnections: true, connectionLimit: 10 });
+const db = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 const configuredOrigins = (process.env.CLIENT_ORIGIN || "").split(",").map((origin) => origin.trim()).filter(Boolean);
 const localDevelopmentOrigins = [
   "http://localhost:5173", "http://localhost:5174",
@@ -35,25 +35,6 @@ function requireAuth(req, res, next) {
 function profile(row) { return { id: row.id, email: row.email, name: row.name, role: row.role, address: row.address, phone: row.phone, department: row.department, createdAt: row.created_at }; }
 function requireRole(...roles) { return (req, res, next) => { if (!roles.includes(req.auth?.role)) return res.status(403).json({ message: "Access denied." }); next(); }; }
 
-const DEFAULT_ANNOUNCEMENTS = [
-  {
-    title: "Welcome to Stall Management Portal",
-    message: "All stall applicants are reminded to submit complete documentation including business permit and valid ID. Incomplete applications will not be processed.",
-    type: "info",
-  },
-  {
-    title: "Deadline Reminder: May 15 Applications",
-    message: "Applications for Stalls A-101 to A-110 are due by May 15, 2026. Please ensure all required documents are uploaded before the deadline.",
-    type: "warning",
-  },
-  {
-    title: "New Stalls Available in Section B",
-    message: "We are pleased to announce that 8 new stalls in Section B are now open for applications. Visit the map to view their locations and submit your application.",
-    type: "success",
-  },
-];
-const DEFAULT_ANNOUNCEMENT_AUTHOR_ID = "22222222-2222-4222-8222-222222222222";
-
 function mapAnnouncementRow(row) {
   return {
     id: row.id,
@@ -64,36 +45,6 @@ function mapAnnouncementRow(row) {
     author: row.author_name || "Admin",
     authorId: row.author_id,
   };
-}
-
-async function ensureDefaultAnnouncements() {
-  await db.execute(`
-    CREATE TABLE IF NOT EXISTS announcements (
-      id CHAR(36) PRIMARY KEY,
-      title VARCHAR(255) NOT NULL,
-      message TEXT NOT NULL,
-      type ENUM('info','warning','urgent','success') NOT NULL DEFAULT 'info',
-      author_id CHAR(36) NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (author_id) REFERENCES profiles(id)
-    )
-  `);
-  const [countRows] = await db.execute("SELECT COUNT(*) AS count FROM announcements");
-  if (Number(countRows[0]?.count || 0) > 0) return;
-
-  const [adminRows] = await db.execute(
-    "SELECT id FROM profiles WHERE id = ? OR role IN ('admin', 'super_admin') ORDER BY role = 'admin' DESC, created_at ASC LIMIT 1",
-    [DEFAULT_ANNOUNCEMENT_AUTHOR_ID]
-  );
-  const authorId = adminRows[0]?.id;
-  if (!authorId) return;
-
-  for (const item of DEFAULT_ANNOUNCEMENTS) {
-    await db.execute(
-      "INSERT INTO announcements (id, title, message, type, author_id) VALUES (?, ?, ?, ?, ?)",
-      [crypto.randomUUID(), item.title, item.message, item.type, authorId]
-    );
-  }
 }
 
 function parsePermitMeta(remarks) {
@@ -535,7 +486,7 @@ async function autoTerminateExpiredPermitDeadlines() {
 
 app.post("/api/auth/login", async (req, res, next) => {
   try {
-    const [rows] = await db.execute("SELECT * FROM profiles WHERE email = ? LIMIT 1", [String(req.body.email || "").toLowerCase()]);
+    const { rows } = await db.query("SELECT * FROM profiles WHERE email = $1 LIMIT 1", [String(req.body.email || "").toLowerCase()]);
     const user = rows[0];
     if (!user || !(await bcrypt.compare(String(req.body.password || ""), user.password_hash))) return res.status(401).json({ message: "Invalid email or password." });
     const result = profile(user); setSession(res, result); res.json({ profile: result });
@@ -548,20 +499,20 @@ app.post("/api/auth/register", async (req, res, next) => {
     if (!name || !email || !password || !phone || !address || String(password).length < 6) return res.status(400).json({ message: "Complete all fields and use a password with at least 6 characters." });
     const id = crypto.randomUUID();
     const passwordHash = await bcrypt.hash(password, 12);
-    await db.execute("INSERT INTO profiles (id, email, password_hash, name, phone, address, role) VALUES (?, ?, ?, ?, ?, ?, 'vendor')", [id, String(email).toLowerCase(), passwordHash, name, phone, address]);
+    await db.query("INSERT INTO profiles (id, email, password_hash, name, phone, address, role) VALUES ($1, $2, $3, $4, $5, $6, 'vendor')", [id, String(email).toLowerCase(), passwordHash, name, phone, address]);
     const result = { id, email: String(email).toLowerCase(), name, phone, address, role: "vendor" }; setSession(res, result); res.status(201).json({ profile: result });
-  } catch (error) { if (error?.code === "ER_DUP_ENTRY") return res.status(409).json({ message: "This email is already in use." }); next(error); }
+  } catch (error) { if (error?.code === "23505") return res.status(409).json({ message: "This email is already in use." }); next(error); }
 });
 
 app.get("/api/auth/me", requireAuth, async (req, res, next) => {
-  try { const [rows] = await db.execute("SELECT id, email, name, role, address, phone, department FROM profiles WHERE id = ?", [req.auth.sub]); if (!rows[0]) return res.status(401).json({ message: "Account not found." }); res.json({ profile: profile(rows[0]) }); } catch (error) { next(error); }
+  try { const { rows } = await db.query("SELECT id, email, name, role, address, phone, department FROM profiles WHERE id = $1", [req.auth.sub]); if (!rows[0]) return res.status(401).json({ message: "Account not found." }); res.json({ profile: profile(rows[0]) }); } catch (error) { next(error); }
 });
 app.get("/api/auth/users/by-email", requireAuth, async (req, res, next) => {
   try {
     const email = String(req.query.email || "").trim().toLowerCase();
     if (!email) return res.status(400).json({ message: "Email is required." });
-    const [rows] = await db.execute(
-      "SELECT id, email, name, role, address, phone, department FROM profiles WHERE email = ? LIMIT 1",
+    const { rows } = await db.query(
+      "SELECT id, email, name, role, address, phone, department FROM profiles WHERE email = $1 LIMIT 1",
       [email]
     );
     if (!rows[0]) return res.status(404).json({ message: "No PubMark account found with this email." });
@@ -576,19 +527,18 @@ app.get("/api/users", requireAuth, requireRole("admin", "super_admin"), async (r
     const values = [];
     let sql = "SELECT id, email, name, role, address, phone, department FROM profiles";
     if (role) {
-      sql += " WHERE role = ?";
       values.push(role);
+      sql += ` WHERE role = $${values.length}`;
     }
     sql += " ORDER BY name ASC";
-    const [rows] = await db.execute(sql, values);
+    const { rows } = await db.query(sql, values);
     res.json({ users: rows.map(profile) });
   } catch (error) { next(error); }
 });
 
 app.get("/api/announcements", requireAuth, async (_req, res, next) => {
   try {
-    await ensureDefaultAnnouncements();
-    const [rows] = await db.execute(`
+    const { rows } = await db.query(`
       SELECT a.id, a.title, a.message, a.type, a.author_id, a.created_at, p.name AS author_name
       FROM announcements a
       LEFT JOIN profiles p ON p.id = a.author_id
@@ -607,15 +557,15 @@ app.post("/api/announcements", requireAuth, requireRole("admin", "super_admin"),
     if (!["info", "warning", "urgent", "success"].includes(type)) return res.status(400).json({ message: "Invalid announcement type." });
 
     const id = crypto.randomUUID();
-    await db.execute(
-      "INSERT INTO announcements (id, title, message, type, author_id) VALUES (?, ?, ?, ?, ?)",
+    await db.query(
+      "INSERT INTO announcements (id, title, message, type, author_id) VALUES ($1, $2, $3, $4, $5)",
       [id, title, message, type, req.auth.sub]
     );
-    const [rows] = await db.execute(
+    const { rows } = await db.query(
       `SELECT a.id, a.title, a.message, a.type, a.author_id, a.created_at, p.name AS author_name
        FROM announcements a
        LEFT JOIN profiles p ON p.id = a.author_id
-       WHERE a.id = ?
+       WHERE a.id = $1
        LIMIT 1`,
       [id]
     );
@@ -626,7 +576,7 @@ app.post("/api/announcements", requireAuth, requireRole("admin", "super_admin"),
 
 app.delete("/api/announcements/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try {
-    await db.execute("DELETE FROM announcements WHERE id = ?", [req.params.id]);
+    await db.query("DELETE FROM announcements WHERE id = $1", [req.params.id]);
     res.json({ ok: true });
   } catch (error) { next(error); }
 });
