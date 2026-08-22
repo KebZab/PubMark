@@ -9,6 +9,7 @@ const app = express();
 const port = Number(process.env.PORT || 4000);
 const jwtSecret = process.env.JWT_SECRET;
 if (!jwtSecret) throw new Error("JWT_SECRET is required.");
+if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required. Copy server/.env.example to server/.env and fill in real values.");
 const db = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 const configuredOrigins = (process.env.CLIENT_ORIGIN || "").split(",").map((origin) => origin.trim()).filter(Boolean);
 const localDevelopmentOrigins = [
@@ -102,61 +103,10 @@ function formatBytes(bytes) {
   return `${value} B`;
 }
 
-async function ensureRequestTables() {
-  await db.execute(`
-    CREATE TABLE IF NOT EXISTS violation_requests (
-      id CHAR(36) PRIMARY KEY,
-      stall_id CHAR(36) NOT NULL,
-      requested_by CHAR(36) NOT NULL,
-      reason TEXT NOT NULL,
-      status ENUM('pending','assigned','completed') NOT NULL DEFAULT 'pending',
-      assigned_officer_id CHAR(36) NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      completed_at TIMESTAMP NULL,
-      FOREIGN KEY (stall_id) REFERENCES stalls(id),
-      FOREIGN KEY (requested_by) REFERENCES profiles(id),
-      FOREIGN KEY (assigned_officer_id) REFERENCES profiles(id)
-    )
-  `);
-  await db.execute(`
-    CREATE TABLE IF NOT EXISTS check_requests (
-      id CHAR(36) PRIMARY KEY,
-      stall_id CHAR(36) NOT NULL,
-      requested_by CHAR(36) NOT NULL,
-      assigned_to CHAR(36) NULL,
-      priority ENUM('low','normal','high','urgent') NOT NULL DEFAULT 'normal',
-      reason TEXT NOT NULL,
-      notes TEXT NULL,
-      status ENUM('pending','completed','cancelled') NOT NULL DEFAULT 'pending',
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      completed_at TIMESTAMP NULL,
-      completion_notes TEXT NULL,
-      completion_summary TEXT NULL,
-      FOREIGN KEY (stall_id) REFERENCES stalls(id),
-      FOREIGN KEY (requested_by) REFERENCES profiles(id),
-      FOREIGN KEY (assigned_to) REFERENCES profiles(id)
-    )
-  `);
-  await db.execute(`
-    CREATE TABLE IF NOT EXISTS check_request_files (
-      id CHAR(36) PRIMARY KEY,
-      check_request_id CHAR(36) NOT NULL,
-      storage_path VARCHAR(1024) NOT NULL,
-      file_name VARCHAR(255) NOT NULL,
-      mime_type VARCHAR(100) NOT NULL,
-      file_size BIGINT NOT NULL,
-      uploaded_by CHAR(36) NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (check_request_id) REFERENCES check_requests(id) ON DELETE CASCADE,
-      FOREIGN KEY (uploaded_by) REFERENCES profiles(id)
-    )
-  `);
-}
-
 async function getCheckRequestFilesMap(requestIds) {
   if (requestIds.length === 0) return new Map();
-  const placeholders = requestIds.map(() => "?").join(", ");
-  const [rows] = await db.execute(
+  const placeholders = requestIds.map((_, i) => `$${i + 1}`).join(", ");
+  const { rows } = await db.query(
     `SELECT check_request_id, file_name, mime_type, file_size FROM check_request_files WHERE check_request_id IN (${placeholders}) ORDER BY created_at ASC`,
     requestIds
   );
@@ -211,8 +161,7 @@ function mapViolationRequestRow(row) {
 }
 
 async function listCheckRequestsInternal() {
-  await ensureRequestTables();
-  const [rows] = await db.execute(`
+  const { rows } = await db.query(`
     SELECT
       cr.id, cr.stall_id, cr.requested_by, cr.assigned_to, cr.priority, cr.reason, cr.notes,
       cr.status, cr.created_at, cr.completed_at, cr.completion_notes, cr.completion_summary,
@@ -230,8 +179,7 @@ async function listCheckRequestsInternal() {
 }
 
 async function listViolationRequestsInternal() {
-  await ensureRequestTables();
-  const [rows] = await db.execute(`
+  const { rows } = await db.query(`
     SELECT
       vr.id, vr.stall_id, vr.requested_by, vr.reason, vr.status, vr.assigned_officer_id,
       vr.created_at, vr.completed_at,
@@ -248,8 +196,7 @@ async function listViolationRequestsInternal() {
 }
 
 async function syncViolationRequestsToCheckRequests() {
-  await ensureRequestTables();
-  const [rows] = await db.execute(`
+  const { rows } = await db.query(`
     SELECT
       vr.id, vr.stall_id, vr.requested_by, vr.assigned_officer_id, vr.reason, vr.status,
       vr.created_at, vr.completed_at
@@ -259,8 +206,8 @@ async function syncViolationRequestsToCheckRequests() {
   `);
 
   for (const row of rows) {
-    await db.execute(
-      "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    await db.query(
+      "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
       [
         row.id,
         row.stall_id,
@@ -279,58 +226,10 @@ async function syncViolationRequestsToCheckRequests() {
   }
 }
 
-async function ensureViolationAndTerminationTables() {
-  await db.execute(`
-    CREATE TABLE IF NOT EXISTS termination_requests (
-      id CHAR(36) PRIMARY KEY,
-      type ENUM('account','contract') NOT NULL,
-      vendor_id CHAR(36) NOT NULL,
-      stall_id CHAR(36) NULL,
-      reason TEXT NOT NULL,
-      status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      resolved_at TIMESTAMP NULL,
-      FOREIGN KEY (vendor_id) REFERENCES profiles(id),
-      FOREIGN KEY (stall_id) REFERENCES stalls(id)
-    )
-  `);
-  await db.execute(`
-    CREATE TABLE IF NOT EXISTS violations (
-      id CHAR(36) PRIMARY KEY,
-      stall_id CHAR(36) NOT NULL,
-      vendor_id CHAR(36) NULL,
-      officer_id CHAR(36) NOT NULL,
-      category VARCHAR(100) NOT NULL,
-      description TEXT NOT NULL,
-      status ENUM('open','resolved','dismissed') NOT NULL DEFAULT 'open',
-      remarks TEXT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      resolved_at TIMESTAMP NULL,
-      FOREIGN KEY (stall_id) REFERENCES stalls(id),
-      FOREIGN KEY (vendor_id) REFERENCES profiles(id),
-      FOREIGN KEY (officer_id) REFERENCES profiles(id)
-    )
-  `);
-  await db.execute(`
-    CREATE TABLE IF NOT EXISTS violation_evidence (
-      id CHAR(36) PRIMARY KEY,
-      violation_id CHAR(36) NOT NULL,
-      storage_path VARCHAR(1024) NOT NULL,
-      file_name VARCHAR(255) NOT NULL,
-      mime_type VARCHAR(100) NOT NULL,
-      file_size BIGINT NOT NULL,
-      uploaded_by CHAR(36) NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (violation_id) REFERENCES violations(id) ON DELETE CASCADE,
-      FOREIGN KEY (uploaded_by) REFERENCES profiles(id)
-    )
-  `);
-}
-
 async function getViolationEvidenceMap(violationIds) {
   if (violationIds.length === 0) return new Map();
-  const placeholders = violationIds.map(() => "?").join(", ");
-  const [rows] = await db.execute(
+  const placeholders = violationIds.map((_, i) => `$${i + 1}`).join(", ");
+  const { rows } = await db.query(
     `SELECT violation_id, file_name, mime_type, file_size FROM violation_evidence WHERE violation_id IN (${placeholders}) ORDER BY created_at ASC`,
     violationIds
   );
@@ -382,8 +281,7 @@ function mapTerminationRequestRow(row) {
 }
 
 async function listViolationsInternal() {
-  await ensureViolationAndTerminationTables();
-  const [rows] = await db.execute(`
+  const { rows } = await db.query(`
     SELECT
       v.id, v.stall_id, v.vendor_id, v.officer_id, v.category, v.description, v.status, v.remarks, v.created_at, v.resolved_at,
       s.stall_name,
@@ -400,8 +298,7 @@ async function listViolationsInternal() {
 }
 
 async function listTerminationRequestsInternal() {
-  await ensureViolationAndTerminationTables();
-  const [rows] = await db.execute(`
+  const { rows } = await db.query(`
     SELECT
       tr.id, tr.type, tr.vendor_id, tr.stall_id, tr.reason, tr.status, tr.created_at, tr.resolved_at,
       vp.name AS vendor_name,
@@ -448,7 +345,7 @@ function mapApplicationRow(r) {
 }
 
 async function autoTerminateExpiredPermitDeadlines() {
-  const [rows] = await db.execute("SELECT id, permit_path, status, admin_remarks FROM applications WHERE status = 'approved'");
+  const { rows } = await db.query("SELECT id, permit_path, status, admin_remarks FROM applications WHERE status = 'approved'");
   const now = Date.now();
 
   for (const row of rows) {
@@ -470,8 +367,8 @@ async function autoTerminateExpiredPermitDeadlines() {
       ? meta.visibleRemarks
       : [meta.visibleRemarks, terminationMessage].filter(Boolean).join("\n\n");
 
-    await db.execute(
-      "UPDATE applications SET status = 'rejected', admin_remarks = ? WHERE id = ?",
+    await db.query(
+      "UPDATE applications SET status = 'rejected', admin_remarks = $1 WHERE id = $2",
       [
         buildPermitMetaRemarks(nextVisibleRemarks, {
           permitDeadlineAt: meta.permitDeadlineAt,
@@ -590,7 +487,6 @@ app.get("/api/check-requests", requireAuth, requireRole("admin", "super_admin", 
 
 app.post("/api/check-requests", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try {
-    await ensureRequestTables();
     const stallId = String(req.body.stallId || "").trim();
     const assignedTo = req.body.assignedTo ? String(req.body.assignedTo).trim() : null;
     const priority = String(req.body.priority || "normal");
@@ -607,14 +503,14 @@ app.post("/api/check-requests", requireAuth, requireRole("admin", "super_admin")
     if (!["pending", "completed", "cancelled"].includes(status)) return res.status(400).json({ message: "Invalid status." });
 
     const id = crypto.randomUUID();
-    await db.execute(
-      "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    await db.query(
+      "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
       [id, stallId, requestedBy, assignedTo, priority, reason, notes || null, status, createdAt, completedAt, completionNotes, completionSummary]
     );
     if (Array.isArray(req.body.completionFiles)) {
       for (const file of req.body.completionFiles) {
-        await db.execute(
-          "INSERT INTO check_request_files (id, check_request_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        await db.query(
+          "INSERT INTO check_request_files (id, check_request_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
           [
             crypto.randomUUID(),
             id,
@@ -633,31 +529,30 @@ app.post("/api/check-requests", requireAuth, requireRole("admin", "super_admin")
 
 app.patch("/api/check-requests/:id", requireAuth, requireRole("admin", "super_admin", "officer"), async (req, res, next) => {
   try {
-    await ensureRequestTables();
     const updates = [];
     const values = [];
-    if (req.body.assignedTo !== undefined) { updates.push("assigned_to = ?"); values.push(req.body.assignedTo ? String(req.body.assignedTo).trim() : null); }
-    if (req.body.priority !== undefined) { updates.push("priority = ?"); values.push(String(req.body.priority)); }
-    if (req.body.reason !== undefined) { updates.push("reason = ?"); values.push(String(req.body.reason).trim()); }
-    if (req.body.notes !== undefined) { updates.push("notes = ?"); values.push(String(req.body.notes || "").trim() || null); }
+    if (req.body.assignedTo !== undefined) { values.push(req.body.assignedTo ? String(req.body.assignedTo).trim() : null); updates.push(`assigned_to = $${values.length}`); }
+    if (req.body.priority !== undefined) { values.push(String(req.body.priority)); updates.push(`priority = $${values.length}`); }
+    if (req.body.reason !== undefined) { values.push(String(req.body.reason).trim()); updates.push(`reason = $${values.length}`); }
+    if (req.body.notes !== undefined) { values.push(String(req.body.notes || "").trim() || null); updates.push(`notes = $${values.length}`); }
     if (req.body.status !== undefined) {
-      updates.push("status = ?");
       values.push(String(req.body.status));
-      updates.push("completed_at = ?");
+      updates.push(`status = $${values.length}`);
       values.push(req.body.status === "pending" ? null : new Date());
+      updates.push(`completed_at = $${values.length}`);
     }
-    if (req.body.completionNotes !== undefined) { updates.push("completion_notes = ?"); values.push(String(req.body.completionNotes || "")); }
-    if (req.body.completionSummary !== undefined) { updates.push("completion_summary = ?"); values.push(String(req.body.completionSummary || "")); }
+    if (req.body.completionNotes !== undefined) { values.push(String(req.body.completionNotes || "")); updates.push(`completion_notes = $${values.length}`); }
+    if (req.body.completionSummary !== undefined) { values.push(String(req.body.completionSummary || "")); updates.push(`completion_summary = $${values.length}`); }
     if (updates.length > 0) {
       values.push(req.params.id);
-      await db.execute(`UPDATE check_requests SET ${updates.join(", ")} WHERE id = ?`, values);
+      await db.query(`UPDATE check_requests SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
     }
 
     if (Array.isArray(req.body.completionFiles)) {
-      await db.execute("DELETE FROM check_request_files WHERE check_request_id = ?", [req.params.id]);
+      await db.query("DELETE FROM check_request_files WHERE check_request_id = $1", [req.params.id]);
       for (const file of req.body.completionFiles) {
-        await db.execute(
-          "INSERT INTO check_request_files (id, check_request_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        await db.query(
+          "INSERT INTO check_request_files (id, check_request_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
           [
             crypto.randomUUID(),
             req.params.id,
@@ -679,8 +574,7 @@ app.patch("/api/check-requests/:id", requireAuth, requireRole("admin", "super_ad
 
 app.delete("/api/check-requests/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try {
-    await ensureRequestTables();
-    await db.execute("DELETE FROM check_requests WHERE id = ?", [req.params.id]);
+    await db.query("DELETE FROM check_requests WHERE id = $1", [req.params.id]);
     res.json({ ok: true });
   } catch (error) { next(error); }
 });
@@ -694,7 +588,6 @@ app.get("/api/violation-requests", requireAuth, requireRole("admin", "super_admi
 
 app.post("/api/violation-requests", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try {
-    await ensureRequestTables();
     const stallId = String(req.body.stallId || "").trim();
     const reason = String(req.body.reason || "").trim();
     const requestedBy = req.body.requestedBy ? String(req.body.requestedBy).trim() : req.auth.sub;
@@ -706,12 +599,12 @@ app.post("/api/violation-requests", requireAuth, requireRole("admin", "super_adm
     if (!["pending", "assigned", "completed"].includes(status)) return res.status(400).json({ message: "Invalid status." });
 
     const id = crypto.randomUUID();
-    await db.execute(
-      "INSERT INTO violation_requests (id, stall_id, requested_by, reason, status, assigned_officer_id, created_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    await db.query(
+      "INSERT INTO violation_requests (id, stall_id, requested_by, reason, status, assigned_officer_id, created_at, completed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
       [id, stallId, requestedBy, reason, status, assignedOfficerId, createdAt, completedAt]
     );
-    await db.execute(
-      "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    await db.query(
+      "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
       [
         id,
         stallId,
@@ -733,50 +626,49 @@ app.post("/api/violation-requests", requireAuth, requireRole("admin", "super_adm
 
 app.patch("/api/violation-requests/:id", requireAuth, requireRole("admin", "super_admin", "officer"), async (req, res, next) => {
   try {
-    await ensureRequestTables();
     const updates = [];
     const values = [];
-    if (req.body.reason !== undefined) { updates.push("reason = ?"); values.push(String(req.body.reason || "").trim()); }
+    if (req.body.reason !== undefined) { values.push(String(req.body.reason || "").trim()); updates.push(`reason = $${values.length}`); }
     if (req.body.assignedOfficerId !== undefined) {
-      updates.push("assigned_officer_id = ?");
       values.push(req.body.assignedOfficerId ? String(req.body.assignedOfficerId).trim() : null);
+      updates.push(`assigned_officer_id = $${values.length}`);
       if (req.body.status === undefined) {
-        updates.push("status = ?");
         values.push(req.body.assignedOfficerId ? "assigned" : "pending");
+        updates.push(`status = $${values.length}`);
       }
     }
     if (req.body.status !== undefined) {
-      updates.push("status = ?");
       values.push(String(req.body.status));
-      updates.push("completed_at = ?");
+      updates.push(`status = $${values.length}`);
       values.push(req.body.status === "completed" ? new Date() : null);
+      updates.push(`completed_at = $${values.length}`);
     }
     if (updates.length === 0) return res.status(400).json({ message: "No fields to update." });
 
     values.push(req.params.id);
-    await db.execute(`UPDATE violation_requests SET ${updates.join(", ")} WHERE id = ?`, values);
+    await db.query(`UPDATE violation_requests SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
     const mirroredUpdates = [];
     const mirroredValues = [];
     if (req.body.reason !== undefined) {
-      mirroredUpdates.push("reason = ?");
       mirroredValues.push(String(req.body.reason || "").trim());
+      mirroredUpdates.push(`reason = $${mirroredValues.length}`);
     }
     if (req.body.assignedOfficerId !== undefined) {
-      mirroredUpdates.push("assigned_to = ?");
       mirroredValues.push(req.body.assignedOfficerId ? String(req.body.assignedOfficerId).trim() : null);
+      mirroredUpdates.push(`assigned_to = $${mirroredValues.length}`);
     }
     if (req.body.status !== undefined) {
-      mirroredUpdates.push("status = ?");
       mirroredValues.push(req.body.status === "completed" ? "completed" : "pending");
-      mirroredUpdates.push("completed_at = ?");
+      mirroredUpdates.push(`status = $${mirroredValues.length}`);
       mirroredValues.push(req.body.status === "completed" ? new Date() : null);
+      mirroredUpdates.push(`completed_at = $${mirroredValues.length}`);
     } else if (req.body.assignedOfficerId !== undefined) {
-      mirroredUpdates.push("status = ?");
       mirroredValues.push(req.body.assignedOfficerId ? "pending" : "pending");
+      mirroredUpdates.push(`status = $${mirroredValues.length}`);
     }
     if (mirroredUpdates.length > 0) {
       mirroredValues.push(req.params.id);
-      await db.execute(`UPDATE check_requests SET ${mirroredUpdates.join(", ")} WHERE id = ?`, mirroredValues);
+      await db.query(`UPDATE check_requests SET ${mirroredUpdates.join(", ")} WHERE id = $${mirroredValues.length}`, mirroredValues);
     }
     const updated = (await listViolationRequestsInternal()).find((item) => item.id === req.params.id);
     if (!updated) return res.status(404).json({ message: "Violation request not found." });
@@ -792,7 +684,6 @@ app.get("/api/violations", requireAuth, requireRole("admin", "super_admin", "off
 
 app.post("/api/violations", requireAuth, requireRole("admin", "super_admin", "officer", "vendor"), async (req, res, next) => {
   try {
-    await ensureViolationAndTerminationTables();
     const stallId = String(req.body.stallId || "").trim();
     const vendorId = req.body.vendorId ? String(req.body.vendorId).trim() : null;
     const officerId = req.body.officerId ? String(req.body.officerId).trim() : (req.auth.role === "officer" ? req.auth.sub : "44444444-4444-4444-8444-444444444444");
@@ -806,13 +697,13 @@ app.post("/api/violations", requireAuth, requireRole("admin", "super_admin", "of
     if (!stallId || !category || !description) return res.status(400).json({ message: "Stall, category, and description are required." });
 
     const id = crypto.randomUUID();
-    await db.execute(
-      "INSERT INTO violations (id, stall_id, vendor_id, officer_id, category, description, status, remarks, created_at, resolved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    await db.query(
+      "INSERT INTO violations (id, stall_id, vendor_id, officer_id, category, description, status, remarks, created_at, resolved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
       [id, stallId, vendorId, officerId, category, description, status, remarks || null, createdAt, resolvedAt]
     );
     for (const file of evidence) {
-      await db.execute(
-        "INSERT INTO violation_evidence (id, violation_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      await db.query(
+        "INSERT INTO violation_evidence (id, violation_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
         [
           crypto.randomUUID(),
           id,
@@ -830,27 +721,26 @@ app.post("/api/violations", requireAuth, requireRole("admin", "super_admin", "of
 
 app.patch("/api/violations/:id", requireAuth, requireRole("admin", "super_admin", "officer"), async (req, res, next) => {
   try {
-    await ensureViolationAndTerminationTables();
     const updates = [];
     const values = [];
-    if (req.body.officerId !== undefined) { updates.push("officer_id = ?"); values.push(String(req.body.officerId || "").trim()); }
-    if (req.body.category !== undefined) { updates.push("category = ?"); values.push(String(req.body.category || "").trim()); }
-    if (req.body.description !== undefined) { updates.push("description = ?"); values.push(String(req.body.description || "").trim()); }
+    if (req.body.officerId !== undefined) { values.push(String(req.body.officerId || "").trim()); updates.push(`officer_id = $${values.length}`); }
+    if (req.body.category !== undefined) { values.push(String(req.body.category || "").trim()); updates.push(`category = $${values.length}`); }
+    if (req.body.description !== undefined) { values.push(String(req.body.description || "").trim()); updates.push(`description = $${values.length}`); }
     if (req.body.status !== undefined) {
-      updates.push("status = ?");
       values.push(String(req.body.status));
-      updates.push("resolved_at = ?");
+      updates.push(`status = $${values.length}`);
       values.push(req.body.status === "open" ? null : new Date());
+      updates.push(`resolved_at = $${values.length}`);
     }
-    if (req.body.remarks !== undefined) { updates.push("remarks = ?"); values.push(String(req.body.remarks || "").trim()); }
+    if (req.body.remarks !== undefined) { values.push(String(req.body.remarks || "").trim()); updates.push(`remarks = $${values.length}`); }
     if (updates.length > 0) {
       values.push(req.params.id);
-      await db.execute(`UPDATE violations SET ${updates.join(", ")} WHERE id = ?`, values);
+      await db.query(`UPDATE violations SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
     }
     if (Array.isArray(req.body.evidence) && req.body.evidence.length > 0) {
       for (const file of req.body.evidence) {
-        await db.execute(
-          "INSERT INTO violation_evidence (id, violation_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        await db.query(
+          "INSERT INTO violation_evidence (id, violation_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
           [
             crypto.randomUUID(),
             req.params.id,
@@ -877,7 +767,6 @@ app.get("/api/termination-requests", requireAuth, requireRole("admin", "super_ad
 
 app.post("/api/termination-requests", requireAuth, requireRole("admin", "super_admin", "vendor"), async (req, res, next) => {
   try {
-    await ensureViolationAndTerminationTables();
     const type = String(req.body.type || "").trim();
     const reason = String(req.body.reason || "").trim();
     const stallId = req.body.stallId ? String(req.body.stallId).trim() : null;
@@ -888,8 +777,8 @@ app.post("/api/termination-requests", requireAuth, requireRole("admin", "super_a
     if (!["account", "contract"].includes(type) || !reason) return res.status(400).json({ message: "Type and reason are required." });
     if (!["pending", "approved", "rejected"].includes(status)) return res.status(400).json({ message: "Invalid status." });
     const id = crypto.randomUUID();
-    await db.execute(
-      "INSERT INTO termination_requests (id, type, vendor_id, stall_id, reason, status, created_at, resolved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    await db.query(
+      "INSERT INTO termination_requests (id, type, vendor_id, stall_id, reason, status, created_at, resolved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
       [id, type, vendorId, stallId, reason, status, createdAt, resolvedAt]
     );
     res.status(201).json({ request: (await listTerminationRequestsInternal()).find((item) => item.id === id) });
@@ -898,11 +787,10 @@ app.post("/api/termination-requests", requireAuth, requireRole("admin", "super_a
 
 app.patch("/api/termination-requests/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try {
-    await ensureViolationAndTerminationTables();
     const status = String(req.body.status || "").trim();
     if (!["pending", "approved", "rejected"].includes(status)) return res.status(400).json({ message: "Invalid status." });
-    await db.execute(
-      "UPDATE termination_requests SET status = ?, resolved_at = ? WHERE id = ?",
+    await db.query(
+      "UPDATE termination_requests SET status = $1, resolved_at = $2 WHERE id = $3",
       [status, status === "pending" ? null : new Date(), req.params.id]
     );
     const updated = (await listTerminationRequestsInternal()).find((item) => item.id === req.params.id);
@@ -912,7 +800,7 @@ app.patch("/api/termination-requests/:id", requireAuth, requireRole("admin", "su
 });
 
 app.get("/api/stalls", async (req, res, next) => {
-  try { const [rows] = await db.execute("SELECT id, stall_name, status, business_type, section, floor, floor_area, notes, geometry, created_at FROM stalls ORDER BY created_at DESC"); res.json({ stalls: rows.map(r => ({ ...r, geometry: typeof r.geometry === "string" ? JSON.parse(r.geometry) : r.geometry })) }); } catch (error) { next(error); }
+  try { const { rows } = await db.query("SELECT id, stall_name, status, business_type, section, floor, floor_area, notes, geometry, created_at FROM stalls ORDER BY created_at DESC"); res.json({ stalls: rows.map(r => ({ ...r, geometry: typeof r.geometry === "string" ? JSON.parse(r.geometry) : r.geometry })) }); } catch (error) { next(error); }
 });
 
 app.post("/api/stalls", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
@@ -920,7 +808,7 @@ app.post("/api/stalls", requireAuth, requireRole("admin", "super_admin"), async 
     const { stall_name, business_type, section, floor, floor_area, notes, geometry } = req.body;
     if (!stall_name || !business_type || !section || !floor || !floor_area) return res.status(400).json({ message: "Missing required fields." });
     const id = crypto.randomUUID();
-    await db.execute("INSERT INTO stalls (id, stall_name, status, business_type, section, floor, floor_area, notes, geometry) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [id, stall_name, "vacant", business_type, section, floor, floor_area || "", notes || "", JSON.stringify(geometry)]);
+    await db.query("INSERT INTO stalls (id, stall_name, status, business_type, section, floor, floor_area, notes, geometry) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)", [id, stall_name, "vacant", business_type, section, floor, floor_area || "", notes || "", JSON.stringify(geometry)]);
     res.status(201).json({ stall: { id, stall_name, status: "vacant", owner_id: null, business_type, section, floor, floor_area, notes, geometry, created_at: new Date().toISOString() } });
   } catch (error) { next(error); }
 });
@@ -929,11 +817,11 @@ app.patch("/api/stalls/geometry", requireAuth, requireRole("admin", "super_admin
   try {
     const { updates } = req.body;
     if (!Array.isArray(updates) || updates.length === 0) return res.status(400).json({ message: "Updates array is required and must not be empty." });
-    const conn = await db.getConnection();
-    try { await conn.beginTransaction();
-      for (const { id, geometry } of updates) { await conn.execute("UPDATE stalls SET geometry = ? WHERE id = ?", [JSON.stringify(geometry), id]); }
-      await conn.commit(); res.json({ ok: true });
-    } catch (innerError) { await conn.rollback(); throw innerError; }
+    const conn = await db.connect();
+    try { await conn.query("BEGIN");
+      for (const { id, geometry } of updates) { await conn.query("UPDATE stalls SET geometry = $1 WHERE id = $2", [JSON.stringify(geometry), id]); }
+      await conn.query("COMMIT"); res.json({ ok: true });
+    } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
     finally { conn.release(); }
   } catch (error) { next(error); }
 });
@@ -942,17 +830,17 @@ app.patch("/api/stalls/:id", requireAuth, requireRole("admin", "super_admin"), a
   try {
     const { stall_name, business_type, section, floor, floor_area, notes, status } = req.body;
     const updates = []; const values = [];
-    if (stall_name !== undefined) { updates.push("stall_name = ?"); values.push(stall_name); }
-    if (business_type !== undefined) { updates.push("business_type = ?"); values.push(business_type); }
-    if (section !== undefined) { updates.push("section = ?"); values.push(section); }
-    if (floor !== undefined) { updates.push("floor = ?"); values.push(floor); }
-    if (floor_area !== undefined) { updates.push("floor_area = ?"); values.push(floor_area); }
-    if (notes !== undefined) { updates.push("notes = ?"); values.push(notes); }
-    if (status !== undefined) { updates.push("status = ?"); values.push(status); }
+    if (stall_name !== undefined) { values.push(stall_name); updates.push(`stall_name = $${values.length}`); }
+    if (business_type !== undefined) { values.push(business_type); updates.push(`business_type = $${values.length}`); }
+    if (section !== undefined) { values.push(section); updates.push(`section = $${values.length}`); }
+    if (floor !== undefined) { values.push(floor); updates.push(`floor = $${values.length}`); }
+    if (floor_area !== undefined) { values.push(floor_area); updates.push(`floor_area = $${values.length}`); }
+    if (notes !== undefined) { values.push(notes); updates.push(`notes = $${values.length}`); }
+    if (status !== undefined) { values.push(status); updates.push(`status = $${values.length}`); }
     if (updates.length === 0) return res.status(400).json({ message: "No fields to update." });
     values.push(req.params.id);
-    await db.execute(`UPDATE stalls SET ${updates.join(", ")} WHERE id = ?`, values);
-    const [rows] = await db.execute("SELECT id, stall_name, status, owner_id, business_type, section, floor, floor_area, notes, geometry, created_at FROM stalls WHERE id = ?", [req.params.id]);
+    await db.query(`UPDATE stalls SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
+    const { rows } = await db.query("SELECT id, stall_name, status, owner_id, business_type, section, floor, floor_area, notes, geometry, created_at FROM stalls WHERE id = $1", [req.params.id]);
     if (!rows[0]) return res.status(404).json({ message: "Stall not found." });
     const row = rows[0]; res.json({ stall: { ...row, geometry: typeof row.geometry === "string" ? JSON.parse(row.geometry) : row.geometry } });
   } catch (error) { next(error); }
@@ -960,8 +848,8 @@ app.patch("/api/stalls/:id", requireAuth, requireRole("admin", "super_admin"), a
 
 async function findOwnedStallNames(ids) {
   if (ids.length === 0) return [];
-  const placeholders = ids.map(() => "?").join(",");
-  const [rows] = await db.execute(
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(",");
+  const { rows } = await db.query(
     `SELECT DISTINCT s.stall_name FROM applications a JOIN stalls s ON s.id = a.stall_id WHERE a.stall_id IN (${placeholders}) AND a.status = 'approved'`,
     ids
   );
@@ -969,13 +857,13 @@ async function findOwnedStallNames(ids) {
 }
 
 async function cascadeDeleteStall(conn, id) {
-  await conn.execute("DELETE FROM check_requests WHERE stall_id = ?", [id]);
-  await conn.execute("DELETE FROM violation_requests WHERE stall_id = ?", [id]);
-  await conn.execute("DELETE FROM violations WHERE stall_id = ?", [id]);
-  await conn.execute("DELETE FROM transfers WHERE stall_id = ?", [id]);
-  await conn.execute("DELETE FROM termination_requests WHERE stall_id = ?", [id]);
-  await conn.execute("DELETE FROM applications WHERE stall_id = ?", [id]);
-  await conn.execute("DELETE FROM stalls WHERE id = ?", [id]);
+  await conn.query("DELETE FROM check_requests WHERE stall_id = $1", [id]);
+  await conn.query("DELETE FROM violation_requests WHERE stall_id = $1", [id]);
+  await conn.query("DELETE FROM violations WHERE stall_id = $1", [id]);
+  await conn.query("DELETE FROM transfers WHERE stall_id = $1", [id]);
+  await conn.query("DELETE FROM termination_requests WHERE stall_id = $1", [id]);
+  await conn.query("DELETE FROM applications WHERE stall_id = $1", [id]);
+  await conn.query("DELETE FROM stalls WHERE id = $1", [id]);
 }
 
 app.delete("/api/stalls", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
@@ -986,11 +874,11 @@ app.delete("/api/stalls", requireAuth, requireRole("admin", "super_admin"), asyn
     if (ownedNames.length > 0) {
       return res.status(409).json({ message: `Cannot delete stall(s) currently owned by a vendor: ${ownedNames.join(", ")}.` });
     }
-    const conn = await db.getConnection();
-    try { await conn.beginTransaction();
+    const conn = await db.connect();
+    try { await conn.query("BEGIN");
       for (const id of ids) { await cascadeDeleteStall(conn, id); }
-      await conn.commit(); res.json({ ok: true });
-    } catch (innerError) { await conn.rollback(); throw innerError; }
+      await conn.query("COMMIT"); res.json({ ok: true });
+    } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
     finally { conn.release(); }
   } catch (error) { next(error); }
 });
@@ -1001,11 +889,11 @@ app.delete("/api/stalls/:id", requireAuth, requireRole("admin", "super_admin"), 
     if (ownedNames.length > 0) {
       return res.status(409).json({ message: "Cannot delete a stall that is currently owned by a vendor. Terminate or transfer the tenancy first." });
     }
-    const conn = await db.getConnection();
-    try { await conn.beginTransaction();
+    const conn = await db.connect();
+    try { await conn.query("BEGIN");
       await cascadeDeleteStall(conn, req.params.id);
-      await conn.commit(); res.json({ ok: true });
-    } catch (innerError) { await conn.rollback(); throw innerError; }
+      await conn.query("COMMIT"); res.json({ ok: true });
+    } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
     finally { conn.release(); }
   } catch (error) { next(error); }
 });
@@ -1014,12 +902,12 @@ app.post("/api/stalls/import", requireAuth, requireRole("admin", "super_admin"),
   try {
     const { stalls } = req.body;
     if (!Array.isArray(stalls)) return res.status(400).json({ message: "Stalls array is required." });
-    const conn = await db.getConnection();
+    const conn = await db.connect();
     const idMap = {};
-    try { await conn.beginTransaction();
-      for (const stall of stalls) { const newId = crypto.randomUUID(); idMap[stall.id] = newId; await conn.execute("INSERT INTO stalls (id, stall_name, status, business_type, section, floor, floor_area, notes, geometry) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [newId, stall.stall_name, stall.status, stall.business_type, stall.section, stall.floor || "1", stall.floor_area, stall.notes || "", JSON.stringify(stall.geometry)]); }
-      await conn.commit(); res.status(201).json({ ok: true, idMap });
-    } catch (innerError) { await conn.rollback(); throw innerError; }
+    try { await conn.query("BEGIN");
+      for (const stall of stalls) { const newId = crypto.randomUUID(); idMap[stall.id] = newId; await conn.query("INSERT INTO stalls (id, stall_name, status, business_type, section, floor, floor_area, notes, geometry) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)", [newId, stall.stall_name, stall.status, stall.business_type, stall.section, stall.floor || "1", stall.floor_area, stall.notes || "", JSON.stringify(stall.geometry)]); }
+      await conn.query("COMMIT"); res.status(201).json({ ok: true, idMap });
+    } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
     finally { conn.release(); }
   } catch (error) { next(error); }
 });
@@ -1027,7 +915,7 @@ app.post("/api/stalls/import", requireAuth, requireRole("admin", "super_admin"),
 app.get("/api/applications", async (req, res, next) => {
   try {
     await autoTerminateExpiredPermitDeadlines();
-    const [rows] = await db.execute(`
+    const { rows } = await db.query(`
       SELECT
         a.id, a.user_id, a.stall_id, a.business_name, a.business_type,
         a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path,
@@ -1051,12 +939,12 @@ app.post("/api/applications", requireAuth, requireRole("vendor"), async (req, re
       return res.status(400).json({ message: "Missing required fields." });
     }
     const id = crypto.randomUUID();
-    await db.execute(
-      "INSERT INTO applications (id, user_id, stall_id, business_name, business_type, contract_start, contract_term_months, contract_end, permit_path, additional_file_path, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    await db.query(
+      "INSERT INTO applications (id, user_id, stall_id, business_name, business_type, contract_start, contract_term_months, contract_end, permit_path, additional_file_path, notes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
       [id, req.auth.sub, stallId, businessName, businessType, contractStart, parseInt(contractTermMonths), contractEnd, permitPath || null, additionalFilePath || null, notes || ""]
     );
-    const [rows] = await db.execute(
-      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = ?`,
+    const { rows } = await db.query(
+      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
       [id]
     );
     const app = mapApplicationRow(rows[0]);
@@ -1068,13 +956,13 @@ app.patch("/api/applications/:id", requireAuth, requireRole("admin", "super_admi
   try {
     const { status, adminRemarks } = req.body;
     const updates = []; const values = [];
-    if (status !== undefined) { updates.push("status = ?"); values.push(status); }
-    if (adminRemarks !== undefined) { updates.push("admin_remarks = ?"); values.push(adminRemarks); }
+    if (status !== undefined) { values.push(status); updates.push(`status = $${values.length}`); }
+    if (adminRemarks !== undefined) { values.push(adminRemarks); updates.push(`admin_remarks = $${values.length}`); }
     if (updates.length === 0) return res.status(400).json({ message: "No fields to update." });
     values.push(req.params.id);
-    await db.execute(`UPDATE applications SET ${updates.join(", ")} WHERE id = ?`, values);
-    const [rows] = await db.execute(
-      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = ?`,
+    await db.query(`UPDATE applications SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
+    const { rows } = await db.query(
+      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
       [req.params.id]
     );
     if (!rows[0]) return res.status(404).json({ message: "Application not found." });
@@ -1088,8 +976,8 @@ app.patch("/api/applications/:id/permit", requireAuth, async (req, res, next) =>
     const { permitFileName } = req.body;
     if (!permitFileName) return res.status(400).json({ message: "Permit file name is required." });
 
-    const [existingRows] = await db.execute(
-      "SELECT id, user_id, admin_remarks FROM applications WHERE id = ?",
+    const { rows: existingRows } = await db.query(
+      "SELECT id, user_id, admin_remarks FROM applications WHERE id = $1",
       [req.params.id]
     );
     const existing = existingRows[0];
@@ -1099,13 +987,13 @@ app.patch("/api/applications/:id/permit", requireAuth, async (req, res, next) =>
     }
 
     const meta = parsePermitMeta(existing.admin_remarks || "");
-    await db.execute(
-      "UPDATE applications SET permit_path = ?, admin_remarks = ? WHERE id = ?",
+    await db.query(
+      "UPDATE applications SET permit_path = $1, admin_remarks = $2 WHERE id = $3",
       [permitFileName, buildPermitMetaRemarks(meta.visibleRemarks, {}), req.params.id]
     );
 
-    const [rows] = await db.execute(
-      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = ?`,
+    const { rows } = await db.query(
+      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
       [req.params.id]
     );
     if (!rows[0]) return res.status(404).json({ message: "Application not found." });
@@ -1114,13 +1002,13 @@ app.patch("/api/applications/:id/permit", requireAuth, async (req, res, next) =>
 });
 
 app.delete("/api/applications/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
-  try { await db.execute("DELETE FROM applications WHERE id = ?", [req.params.id]); res.json({ ok: true }); } catch (error) { next(error); }
+  try { await db.query("DELETE FROM applications WHERE id = $1", [req.params.id]); res.json({ ok: true }); } catch (error) { next(error); }
 });
 
 // ── Market Perimeters (multi-zone) ────────────────────────────────────────────
 app.get("/api/perimeters", async (req, res, next) => {
   try {
-    const [rows] = await db.execute(`
+    const { rows } = await db.query(`
       SELECT mp.id, mp.name, mp.geometry, mp.created_by, mp.notes, mp.created_at, p.name AS created_by_name
       FROM market_perimeter mp
       LEFT JOIN profiles p ON mp.created_by = p.id
@@ -1144,15 +1032,15 @@ app.post("/api/perimeters", requireAuth, requireRole("super_admin"), async (req,
     const { name, geometry, notes } = req.body;
     if (!name || !geometry) return res.status(400).json({ message: "Name and geometry are required." });
     const id = crypto.randomUUID();
-    await db.execute(
-      "INSERT INTO market_perimeter (id, name, geometry, created_by, notes) VALUES (?, ?, ?, ?, ?)",
+    await db.query(
+      "INSERT INTO market_perimeter (id, name, geometry, created_by, notes) VALUES ($1, $2, $3, $4, $5)",
       [id, name, JSON.stringify(geometry), req.auth.sub, notes || ""]
     );
-    const [rows] = await db.execute(`
+    const { rows } = await db.query(`
       SELECT mp.id, mp.name, mp.geometry, mp.created_by, mp.notes, mp.created_at, p.name AS created_by_name
       FROM market_perimeter mp
       LEFT JOIN profiles p ON mp.created_by = p.id
-      WHERE mp.id = ?
+      WHERE mp.id = $1
     `, [id]);
     const perimeter = {
       id: rows[0].id,
@@ -1169,7 +1057,7 @@ app.post("/api/perimeters", requireAuth, requireRole("super_admin"), async (req,
 
 app.delete("/api/perimeters/:id", requireAuth, requireRole("super_admin"), async (req, res, next) => {
   try {
-    await db.execute("DELETE FROM market_perimeter WHERE id = ?", [req.params.id]);
+    await db.query("DELETE FROM market_perimeter WHERE id = $1", [req.params.id]);
     res.json({ ok: true });
   } catch (error) { next(error); }
 });

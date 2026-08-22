@@ -123,7 +123,7 @@ function FlyTo({ position }: { position: [number, number] | null }) {
 // ── Main component ────────────────────────────────────────────────────────────
 export function UserMapDashboard() {
   const navigate = useNavigate();
-  const { stalls: storedStalls } = useStalls();
+  const { stalls: storedStalls, loading: stallsLoading } = useStalls();
   const { applications: allApplications } = useApplications();
   const [selected, setSelected] = useState<Stall | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -305,7 +305,7 @@ export function UserMapDashboard() {
       </div>
 
       {/* ── Empty state ────────────────────────────────── */}
-      {storedStalls.length === 0 && (
+      {!stallsLoading && storedStalls.length === 0 && (
         <div className="absolute inset-0 z-[500] flex items-center justify-center pointer-events-none">
           <div className="bg-white/90 backdrop-blur-md rounded-2xl px-6 py-5 shadow-xl border border-gray-100 text-center mx-6">
             <Store className="w-8 h-8 text-gray-300 mx-auto mb-2" />

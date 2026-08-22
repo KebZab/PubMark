@@ -111,7 +111,7 @@ export function AdminDashboard() {
     setTab(getTabFromURL(location.pathname));
   }, [location.pathname]);
 
-  const { applications, refetch: refetchApplications } = useApplications();
+  const { applications, loading: applicationsLoading, refetch: refetchApplications } = useApplications();
   const [selectedApp, setSelectedApp] = useState<Application | null>(null);
   const [contractApp, setContractApp] = useState<Application | null>(null);
   const [remarksInput, setRemarksInput] = useState("");
@@ -916,7 +916,7 @@ export function AdminDashboard() {
                 <span className="ml-auto text-xs text-gray-400">{applications.length} total</span>
               </div>
 
-              {applications.filter((a) => appStatusFilter === "all" || a.status === appStatusFilter).length === 0 ? (
+              {!applicationsLoading && applications.filter((a) => appStatusFilter === "all" || a.status === appStatusFilter).length === 0 ? (
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center py-20 text-center">
                   <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                     <FileText className="w-8 h-8 text-gray-400" />

@@ -74,7 +74,7 @@ function StatusBanner({ status }: { status: "pending" | "approved" | "rejected" 
 export function AdminApplicationDetails() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
-  const { applications, refetch } = useApplications();
+  const { applications, loading, refetch } = useApplications();
   const app = id ? applications.find(a => a.id === id) : null;
   const [remarksInput, setRemarksInput] = useState("");
   const [permitDeadlineInput, setPermitDeadlineInput] = useState("");
@@ -91,6 +91,14 @@ export function AdminApplicationDetails() {
     setRemarksInput(meta.visibleRemarks);
     setPermitDeadlineInput(toDateTimeLocalValue(meta.permitDeadlineAt));
   }, [app]);
+
+  if (loading) {
+    return (
+      <div className="size-full bg-gray-50 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   if (!app) {
     return (
