@@ -9,6 +9,7 @@ export function Register() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const stallId = searchParams.get("stallId");
+  const stallIds = stallId ? stallId.split(",").map((id) => id.trim()).filter(Boolean) : [];
 
   const [form, setForm] = useState({
     name: "",
@@ -101,8 +102,8 @@ export function Register() {
       "pubmark_pending_toast",
       JSON.stringify({ message: "Account created! Welcome to PubMark.", type: "success" })
     );
-    if (stallId) {
-      navigate(`/apply/${stallId}`);
+    if (stallIds.length > 0) {
+      navigate(`/apply/${stallIds[0]}`, { state: { stallIds } });
     } else {
       navigate("/dashboard");
     }
@@ -167,7 +168,7 @@ export function Register() {
 
           <h1 className="text-2xl font-bold text-gray-900 mb-1">Create Account</h1>
           <p className="text-gray-500 text-sm mb-6">
-            Register for PubMark{stallId && " to apply for your selected stall"}
+            Register for PubMark{stallIds.length > 0 && ` to apply for your selected ${stallIds.length > 1 ? `${stallIds.length} stalls` : "stall"}`}
           </p>
 
           <form onSubmit={handleSubmit} className="w-full min-w-0 space-y-4">

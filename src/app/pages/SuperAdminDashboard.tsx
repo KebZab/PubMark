@@ -5,6 +5,7 @@ import {
   Search, Edit2, Check, X, AlertTriangle, Package, UserCog,
   TrendingUp, Activity, Eye, EyeOff, RefreshCw, Map, CheckCircle,
   ChevronUp, ChevronDown, ChevronsUpDown, MapPin, User, Paperclip, FileText,
+  Receipt as ReceiptIcon,
 } from "lucide-react";
 import { AdminMapView } from "../components/AdminMapView";
 import {
@@ -29,6 +30,7 @@ import {
 } from "../components/violationRequestStore";
 import { getCheckRequests, type OfficerCheckRequest } from "../components/checkRequestsStore";
 import { getTerminationRequests, updateTerminationStatus, type TerminationRequest } from "../components/terminationRequestsStore";
+import { getReceipts, reviewReceipt, type PaymentReceipt } from "../services/receiptsApi";
 import { DashboardLayout } from "../components/DashboardLayout";
 import { SuperAdminMapEditor } from "../components/SuperAdminMapEditor";
 import { showToast } from "../components/Toast";
@@ -119,8 +121,9 @@ export function SuperAdminDashboard() {
   const [selectedApplication, setSelectedApplication] = useState<Application | null>(null);
   const [expandedViolation, setExpandedViolation] = useState<string | null>(null);
   const [showStallMap, setShowStallMap] = useState(false);
-  const [reportSubTab, setReportSubTab] = useState<"violations" | "inspections" | "terminations">("violations");
+  const [reportSubTab, setReportSubTab] = useState<"violations" | "inspections" | "terminations" | "receipts">("violations");
   const [terminationsList, setTerminationsList] = useState<TerminationRequest[]>([]);
+  const [receiptsList, setReceiptsList] = useState<PaymentReceipt[]>([]);
   const [terminationActionConfirm, setTerminationActionConfirm] = useState<{ id: string; action: "approved" | "rejected"; name: string; type: string } | null>(null);
   const [reportSearch, setReportSearch] = useState("");
   const [reportStatusFilter, setReportStatusFilter] = useState("all");
@@ -201,10 +204,11 @@ export function SuperAdminDashboard() {
   useEffect(() => {
     if (tab === "violations") {
       void (async () => {
-        const [violationsResult, checkRequestsResult, terminationsResult, allUsersResult] = await Promise.allSettled([
+        const [violationsResult, checkRequestsResult, terminationsResult, receiptsResult, allUsersResult] = await Promise.allSettled([
           getViolations(),
           getCheckRequests(),
           getTerminationRequests(),
+          getReceipts(),
           listUsers(),
         ]);
 
@@ -217,6 +221,9 @@ export function SuperAdminDashboard() {
         }
         if (terminationsResult.status === "fulfilled") {
           setTerminationsList(terminationsResult.value);
+        }
+        if (receiptsResult.status === "fulfilled") {
+          setReceiptsList(receiptsResult.value);
         }
 
         if (allUsersResult.status === "fulfilled") {
@@ -242,7 +249,7 @@ export function SuperAdminDashboard() {
           }
         }
 
-        const firstError = [violationsResult, checkRequestsResult, terminationsResult, allUsersResult].find(
+        const firstError = [violationsResult, checkRequestsResult, terminationsResult, receiptsResult, allUsersResult].find(
           (result): result is PromiseRejectedResult => result.status === "rejected"
         );
         if (firstError) {
@@ -411,6 +418,16 @@ export function SuperAdminDashboard() {
       setTerminationActionConfirm(null);
     } catch (error) {
       showToast(`Failed to process termination request: ${(error as Error).message}`, "error");
+    }
+  }
+
+  async function handleReviewReceipt(id: string, status: "verified" | "rejected") {
+    try {
+      const updated = await reviewReceipt(id, status);
+      setReceiptsList((current) => current.map((r) => (r.id === updated.id ? updated : r)));
+      showToast(`Receipt ${status}.`, "success");
+    } catch (error) {
+      showToast(`Failed to update receipt: ${(error as Error).message}`, "error");
     }
   }
 
@@ -1308,6 +1325,17 @@ export function SuperAdminDashboard() {
                   </span>
                 )}
               </button>
+              <button
+                onClick={() => { setReportSubTab("receipts"); setReportSearch(""); setReportStatusFilter("all"); }}
+                className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all relative ${reportSubTab === "receipts" ? "bg-white text-purple-700 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+              >
+                Payment Receipts
+                {receiptsList.filter(r => r.status === "pending").length > 0 && (
+                  <span className="ml-1 inline-flex items-center justify-center w-4 h-4 bg-red-500 text-white rounded-full text-[9px] font-bold">
+                    {receiptsList.filter(r => r.status === "pending").length}
+                  </span>
+                )}
+              </button>
             </div>
 
             {/* Search + Filter bar */}
@@ -1631,6 +1659,81 @@ export function SuperAdminDashboard() {
                 )}
               </div>
             )}
+
+            {/* ── Payment Receipts ── */}
+            {reportSubTab === "receipts" && (() => {
+              const filtered = receiptsList.filter((r) => !reportSearch ||
+                r.stallName.toLowerCase().includes(reportSearch.toLowerCase()) ||
+                r.vendorName.toLowerCase().includes(reportSearch.toLowerCase()) ||
+                r.submittedByName.toLowerCase().includes(reportSearch.toLowerCase())
+              );
+              return filtered.length === 0 ? (
+                <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center">
+                  <ReceiptIcon className="w-10 h-10 text-gray-200 mx-auto mb-3" />
+                  <p className="text-sm text-gray-400">No payment receipts submitted yet</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {filtered.map((r) => (
+                    <div key={r.id} className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+                      <div className="flex items-start gap-4 px-5 py-4">
+                        <div className="w-10 h-10 bg-purple-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                          <ReceiptIcon className="w-5 h-5 text-purple-700" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-gray-900">
+                                {r.stallName}
+                                {r.amount !== null && <span className="text-gray-400 font-normal ml-1">— ₱{r.amount.toLocaleString()}</span>}
+                              </p>
+                              <p className="text-xs text-gray-500 mt-0.5">
+                                <span className="font-medium text-gray-700">{r.vendorName}</span> · Paid {new Date(r.receiptDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                              </p>
+                              <p className="text-xs text-gray-400 mt-0.5">
+                                Submitted by {r.submittedByName}{r.submittedByRole === "officer" ? " (officer)" : ""} · {formatDate(r.createdAt)}
+                              </p>
+                            </div>
+                            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full capitalize flex-shrink-0 ${
+                              r.status === "pending" ? "bg-amber-100 text-amber-700"
+                              : r.status === "verified" ? "bg-green-100 text-green-700"
+                              : "bg-red-100 text-red-700"
+                            }`}>
+                              {r.status}
+                            </span>
+                          </div>
+                          {r.notes && (
+                            <p className="text-xs text-gray-600 mt-2 bg-gray-50 rounded-lg px-3 py-2 leading-relaxed">{r.notes}</p>
+                          )}
+                          {r.fileUrl && (
+                            <a href={r.fileUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-purple-700 font-medium mt-2 hover:underline">
+                              <FileText className="w-3.5 h-3.5" />
+                              View receipt file
+                            </a>
+                          )}
+                          {r.status === "pending" && (
+                            <div className="flex gap-2 mt-3">
+                              <button
+                                onClick={() => handleReviewReceipt(r.id, "verified")}
+                                className="px-3 py-1.5 bg-green-500 text-white rounded-lg text-xs font-semibold hover:bg-green-600 transition-colors"
+                              >
+                                Verify
+                              </button>
+                              <button
+                                onClick={() => handleReviewReceipt(r.id, "rejected")}
+                                className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-xs font-semibold hover:bg-gray-200 transition-colors"
+                              >
+                                Reject
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
           </>
         )}
 

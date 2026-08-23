@@ -5,6 +5,7 @@ import {
   Clock, CheckCircle, XCircle, AlertCircle,
   ScrollText, User, Trash2, ChevronRight,
   ArrowRightLeft, Mail, X, Upload, Loader,
+  Receipt as ReceiptIcon,
 } from "lucide-react";
 import { useApplications } from "../hooks/useApplications";
 import { deleteApplication, updateApplicationPermit, type Application } from "../services/applicationsApi";
@@ -20,8 +21,10 @@ import { showToast } from "../components/Toast";
 import {
   formatPermitDeadline,
   getApplicationDisplayStatus,
+  getContractEndStatus,
   parsePermitDeadlineMeta,
 } from "../components/permitDeadline";
+import { getReceipts, submitReceipt, type PaymentReceipt } from "../services/receiptsApi";
 
 type VendorApplicationDisplayStatus = "pending" | "approved" | "rejected" | "terminated";
 
@@ -101,6 +104,45 @@ export function ApplicationDetails() {
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferEmail, setTransferEmail] = useState("");
   const [transferError, setTransferError] = useState("");
+
+  const [receipts, setReceipts] = useState<PaymentReceipt[]>([]);
+  const [showReceiptModal, setShowReceiptModal] = useState(false);
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [receiptAmount, setReceiptAmount] = useState("");
+  const [receiptDate, setReceiptDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [receiptNotes, setReceiptNotes] = useState("");
+  const [submittingReceipt, setSubmittingReceipt] = useState(false);
+
+  useEffect(() => {
+    if (!app) return;
+    getReceipts()
+      .then((all) => setReceipts(all.filter((r) => r.stallId === app.stallId)))
+      .catch(() => { /* history is a nice-to-have, ignore failures here */ });
+  }, [app?.stallId]);
+
+  async function handleSubmitReceipt() {
+    if (!app || !receiptFile) return;
+    setSubmittingReceipt(true);
+    try {
+      const saved = await submitReceipt({
+        stallId: app.stallId,
+        amount: receiptAmount.trim() ? Number(receiptAmount) : null,
+        receiptDate,
+        notes: receiptNotes.trim(),
+        file: receiptFile,
+      });
+      setReceipts((current) => [saved, ...current]);
+      setShowReceiptModal(false);
+      setReceiptFile(null);
+      setReceiptAmount("");
+      setReceiptNotes("");
+      showToast("Payment receipt submitted for review!", "success");
+    } catch (error) {
+      showToast(`Failed to submit receipt: ${(error as Error).message}`, "error");
+    } finally {
+      setSubmittingReceipt(false);
+    }
+  }
 
   const hasPendingTransfer = app && session
     ? getTransfersByFromUserId(session.userId).some(
@@ -265,6 +307,24 @@ export function ApplicationDetails() {
               </p>
             </div>
           )}
+
+          {displayStatus === "approved" && (() => {
+            const contractStatus = getContractEndStatus(app.contractEnd);
+            if (contractStatus.urgency === "none") return null;
+            const isUrgent = contractStatus.urgency !== "notice";
+            return (
+              <div className={`rounded-2xl p-4 border ${isUrgent ? "bg-red-50 border-red-200" : "bg-amber-50 border-amber-200"}`}>
+                <p className={`text-sm font-semibold ${isUrgent ? "text-red-900" : "text-amber-900"}`}>
+                  {contractStatus.urgency === "expired" ? "Contract term has ended" : "Contract ending soon"}
+                </p>
+                <p className={`text-xs mt-1 leading-snug ${isUrgent ? "text-red-700" : "text-amber-700"}`}>
+                  {contractStatus.urgency === "expired"
+                    ? `Your contract ended ${new Date(app.contractEnd).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}. Contact the admin to renew.`
+                    : `Your contract ends in ${contractStatus.daysRemaining} day${contractStatus.daysRemaining === 1 ? "" : "s"}, on ${new Date(app.contractEnd).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}.`}
+                </p>
+              </div>
+            );
+          })()}
 
           {/* Stall info */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-4">
@@ -437,6 +497,54 @@ export function ApplicationDetails() {
             </div>
           </div>
 
+          {/* Payment Receipts — only for approved apps */}
+          {displayStatus === "approved" && (
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <ReceiptIcon className="w-4 h-4 text-[#14B8A6]" />
+                <h2 className="text-sm font-semibold text-gray-800">Payment Receipts</h2>
+              </div>
+              <div className="space-y-2">
+                {receipts.map((r) => (
+                  <div key={r.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border border-gray-200">
+                    <div className="w-9 h-9 bg-teal-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                      <ReceiptIcon className="w-4 h-4 text-[#14B8A6]" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-gray-900 truncate">
+                        {r.amount !== null ? `₱${r.amount.toLocaleString()}` : r.fileName}
+                      </p>
+                      <p className="text-[10px] text-gray-400">
+                        {new Date(r.receiptDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                        {r.submittedByRole === "officer" ? ` · Submitted by officer` : ""}
+                      </p>
+                    </div>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${
+                      r.status === "verified" ? "bg-emerald-100 text-emerald-700" :
+                      r.status === "rejected" ? "bg-red-100 text-red-700" :
+                      "bg-amber-100 text-amber-700"
+                    }`}>
+                      {r.status === "verified" ? "Verified" : r.status === "rejected" ? "Rejected" : "Pending"}
+                    </span>
+                  </div>
+                ))}
+                <button
+                  onClick={() => setShowReceiptModal(true)}
+                  className="w-full flex items-center gap-3 p-4 border-2 border-dashed border-gray-200 bg-gray-50 hover:border-[#14B8A6] hover:bg-teal-50/30 rounded-xl cursor-pointer transition-all"
+                >
+                  <div className="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <Upload className="w-5 h-5 text-gray-400" />
+                  </div>
+                  <div className="flex-1 text-left">
+                    <p className="text-sm font-semibold text-gray-700">Submit Payment Receipt</p>
+                    <p className="text-xs text-gray-400 mt-0.5">Upload proof that you paid the treasurer</p>
+                  </div>
+                  <ChevronRight className="w-4 h-4 flex-shrink-0 text-gray-300" />
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Notes */}
           {app.notes && (
             <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-4">
@@ -577,6 +685,99 @@ export function ApplicationDetails() {
               >
                 <ArrowRightLeft className="w-4 h-4" />
                 Send Transfer Offer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Submit Payment Receipt Modal */}
+      {showReceiptModal && (
+        <div className="absolute inset-0 z-[2000] flex items-center justify-center bg-black/50 backdrop-blur-sm px-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-gray-100 w-full max-w-sm overflow-hidden">
+            <div className="px-5 py-4 bg-gradient-to-r from-teal-50 to-cyan-50 border-b border-teal-100 flex items-center gap-3">
+              <div className="w-10 h-10 bg-teal-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                <ReceiptIcon className="w-5 h-5 text-[#0d9488]" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-gray-900">Submit Payment Receipt</p>
+                <p className="text-xs text-gray-500 truncate">{app.stallName}</p>
+              </div>
+              <button
+                onClick={() => setShowReceiptModal(false)}
+                className="w-8 h-8 rounded-xl hover:bg-black/10 flex items-center justify-center flex-shrink-0"
+              >
+                <X className="w-4 h-4 text-gray-500" />
+              </button>
+            </div>
+            <div className="px-5 py-4 space-y-4 max-h-[70vh] overflow-y-auto">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Receipt File <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="file"
+                  id="receipt-file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  className="hidden"
+                  onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
+                />
+                <label
+                  htmlFor="receipt-file"
+                  className={`flex items-center gap-3 p-4 border-2 border-dashed rounded-xl cursor-pointer transition-all ${
+                    receiptFile ? "border-[#14B8A6] bg-teal-50" : "border-gray-200 bg-gray-50 hover:border-[#14B8A6] hover:bg-teal-50/30"
+                  }`}
+                >
+                  <Upload className="w-5 h-5 text-gray-400 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-700 truncate">{receiptFile ? receiptFile.name : "Tap to upload photo or PDF"}</p>
+                    {receiptFile && <p className="text-xs text-gray-400">{formatFileSize(receiptFile.size)}</p>}
+                  </div>
+                </label>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Amount Paid</label>
+                <input
+                  type="number"
+                  value={receiptAmount}
+                  onChange={(e) => setReceiptAmount(e.target.value)}
+                  placeholder="Optional"
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#14B8A6] focus:bg-white transition-all"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Date Paid</label>
+                <input
+                  type="date"
+                  value={receiptDate}
+                  onChange={(e) => setReceiptDate(e.target.value)}
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#14B8A6] focus:bg-white transition-all"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Notes</label>
+                <textarea
+                  value={receiptNotes}
+                  onChange={(e) => setReceiptNotes(e.target.value)}
+                  placeholder="Optional"
+                  className="w-full h-20 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#14B8A6] focus:bg-white transition-all resize-none"
+                />
+              </div>
+            </div>
+            <div className="px-5 pb-5 flex gap-2">
+              <button
+                onClick={() => setShowReceiptModal(false)}
+                className="flex-1 py-3 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmitReceipt}
+                disabled={!receiptFile || submittingReceipt}
+                className="flex-[2] py-3 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl text-sm font-semibold shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {submittingReceipt ? <Loader className="w-4 h-4 animate-spin" /> : <ReceiptIcon className="w-4 h-4" />}
+                {submittingReceipt ? "Submitting…" : "Submit Receipt"}
               </button>
             </div>
           </div>

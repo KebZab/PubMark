@@ -32,9 +32,24 @@ export default defineConfig({
   },
 
   // Bind to all network interfaces so other devices on the LAN can reach
-  // the dev server (e.g. http://<your-machine-ip>:5173).
+  // the dev server (e.g. http://<your-machine-ip>:5173). Port is fixed
+  // (not auto-bumped) so the tunnel script always targets the right port.
+  // API calls are proxied to the backend so only this one port needs to be
+  // exposed (LAN or via the dev:tunnel script) — no CORS or second tunnel needed.
   server: {
     host: true,
+    port: 5173,
+    strictPort: true,
+    // The Cloudflare quick tunnel (dev:tunnel script) fronts this server with a
+    // random *.trycloudflare.com host each run, which Vite's Host-header check
+    // would otherwise reject as an unrecognized host.
+    allowedHosts: true,
+    proxy: {
+      "/api": {
+        target: "http://localhost:4000",
+        changeOrigin: true,
+      },
+    },
   },
 
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.

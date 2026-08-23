@@ -3,7 +3,7 @@ import {
   AlertTriangle, CheckCircle, XCircle, Clock, Plus, Search,
   Filter, Eye, Paperclip, X, Check, FileText, Map, ClipboardList,
   LayoutDashboard, Camera, Upload, User, ChevronDown, Settings,
-  LogOut, Bell, Megaphone,
+  LogOut, Bell, Megaphone, Receipt as ReceiptIcon,
 } from "lucide-react";
 import {
   getViolations, saveViolation, updateViolationStatus, addOngoingUpdate,
@@ -14,10 +14,13 @@ import {
 } from "../components/checkRequestsStore";
 import { getViolationRequests, completeViolationRequest } from "../components/violationRequestStore";
 import { useStalls } from "../hooks/useStalls";
+import { useApplications } from "../hooks/useApplications";
 import { getSession, clearSession, type PubMarkSession } from "../components/authStorage";
 import { OfficerMapView } from "../components/OfficerMapView";
 import { showToast } from "../components/Toast";
-import { useNavigate } from "react-router";
+import { useNavigate, useLocation } from "react-router";
+import { getReceipts, submitReceipt, type PaymentReceipt } from "../services/receiptsApi";
+import { formatFileSize } from "../components/applicationsStorage";
 
 const CATEGORIES: ViolationCategory[] = [
   "Illegal Vending", "Health Violation", "Fire Hazard",
@@ -100,7 +103,7 @@ async function loadOfficerCheckRequests(officerId: string, officerName: string):
   );
 }
 
-type Tab = "dashboard" | "map" | "requests" | "log";
+type Tab = "dashboard" | "map" | "requests" | "log" | "receipts";
 
 interface EvidenceFile {
   name: string;
@@ -110,9 +113,11 @@ interface EvidenceFile {
 
 export function OfficerDashboard() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { stalls } = useStalls();
+  const { applications } = useApplications();
   const [session, setSession] = useState<PubMarkSession | null>(null);
-  const [activeTab, setActiveTab] = useState<Tab>("dashboard");
+  const [activeTab, setActiveTab] = useState<Tab>(location.pathname === "/officer/receipts" ? "receipts" : "dashboard");
   const [violations, setViolations] = useState<Violation[]>([]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<ViolationStatus | "all">("all");
@@ -149,6 +154,45 @@ export function OfficerDashboard() {
   const [reqViolationForm, setReqViolationForm] = useState({ category: "Other" as ViolationCategory, description: "" });
   const reqViolEvidenceRef = useRef<HTMLInputElement>(null);
   const [reqViolEvidence, setReqViolEvidence] = useState<EvidenceFile[]>([]);
+
+  // Payment receipts — submitted by the officer on behalf of a vendor
+  const [receipts, setReceipts] = useState<PaymentReceipt[]>([]);
+  const [receiptForm, setReceiptForm] = useState({ stallId: "", amount: "", receiptDate: new Date().toISOString().split("T")[0], notes: "" });
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [submittingReceipt, setSubmittingReceipt] = useState(false);
+
+  const receiptActiveApp = receiptForm.stallId
+    ? applications.filter((a) => a.stallId === receiptForm.stallId && a.status === "approved")
+        .sort((a, b) => new Date(b.dateApplied).getTime() - new Date(a.dateApplied).getTime())[0] ?? null
+    : null;
+
+  useEffect(() => {
+    void getReceipts().then(setReceipts).catch((error) => {
+      showToast(`Failed to load receipts: ${(error as Error).message}`, "error");
+    });
+  }, [activeTab]);
+
+  async function handleSubmitReceipt() {
+    if (!receiptForm.stallId || !receiptFile || !receiptActiveApp) return;
+    setSubmittingReceipt(true);
+    try {
+      const saved = await submitReceipt({
+        stallId: receiptForm.stallId,
+        amount: receiptForm.amount.trim() ? Number(receiptForm.amount) : null,
+        receiptDate: receiptForm.receiptDate,
+        notes: receiptForm.notes.trim(),
+        file: receiptFile,
+      });
+      setReceipts((current) => [saved, ...current]);
+      setReceiptForm({ stallId: "", amount: "", receiptDate: new Date().toISOString().split("T")[0], notes: "" });
+      setReceiptFile(null);
+      showToast("Receipt submitted for review!", "success");
+    } catch (error) {
+      showToast(`Failed to submit receipt: ${(error as Error).message}`, "error");
+    } finally {
+      setSubmittingReceipt(false);
+    }
+  }
 
   useEffect(() => {
     const s = getSession();
@@ -797,6 +841,132 @@ export function OfficerDashboard() {
             )}
           </div>
         )}
+
+        {/* ── RECEIPTS TAB ──────────────────────────────────── */}
+        {activeTab === "receipts" && (
+          <div className="p-4 space-y-4 pb-24">
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">Payment Receipts</h2>
+              <p className="text-xs text-gray-500 mt-0.5">Submit proof of payment for a vendor who needs help (elderly or unfamiliar with the app).</p>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1.5">Stall *</label>
+                <select
+                  value={receiptForm.stallId}
+                  onChange={(e) => setReceiptForm((p) => ({ ...p, stallId: e.target.value }))}
+                  className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                >
+                  <option value="">Select stall</option>
+                  {stalls.map((s) => (
+                    <option key={s.id} value={s.id}>{s.stall_name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {receiptForm.stallId && (
+                <div className={`rounded-xl p-3 text-xs ${receiptActiveApp ? "bg-teal-50 border border-teal-200 text-teal-700" : "bg-red-50 border border-red-200 text-red-700"}`}>
+                  {receiptActiveApp ? `Vendor: ${receiptActiveApp.applicantName}` : "No active vendor for this stall."}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1.5">Receipt File *</label>
+                <input
+                  type="file"
+                  id="officer-receipt-file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  className="hidden"
+                  onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
+                />
+                <label
+                  htmlFor="officer-receipt-file"
+                  className={`flex items-center gap-3 p-3 border-2 border-dashed rounded-xl cursor-pointer transition-all ${
+                    receiptFile ? "border-amber-400 bg-amber-50" : "border-gray-200 bg-gray-50 hover:border-amber-400"
+                  }`}
+                >
+                  <Upload className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-700 truncate">{receiptFile ? receiptFile.name : "Tap to upload photo or PDF"}</p>
+                    {receiptFile && <p className="text-[10px] text-gray-400">{formatFileSize(receiptFile.size)}</p>}
+                  </div>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1.5">Amount Paid</label>
+                  <input
+                    type="number"
+                    value={receiptForm.amount}
+                    onChange={(e) => setReceiptForm((p) => ({ ...p, amount: e.target.value }))}
+                    placeholder="Optional"
+                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1.5">Date Paid</label>
+                  <input
+                    type="date"
+                    value={receiptForm.receiptDate}
+                    onChange={(e) => setReceiptForm((p) => ({ ...p, receiptDate: e.target.value }))}
+                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1.5">Notes</label>
+                <textarea
+                  value={receiptForm.notes}
+                  onChange={(e) => setReceiptForm((p) => ({ ...p, notes: e.target.value }))}
+                  placeholder="Optional"
+                  className="w-full h-16 px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none"
+                />
+              </div>
+
+              <button
+                onClick={handleSubmitReceipt}
+                disabled={!receiptForm.stallId || !receiptFile || !receiptActiveApp || submittingReceipt}
+                className="w-full py-3 bg-gradient-to-r from-amber-500 to-amber-600 text-white rounded-xl text-sm font-semibold shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <ReceiptIcon className="w-4 h-4" />
+                {submittingReceipt ? "Submitting…" : "Submit Receipt"}
+              </button>
+            </div>
+
+            <div>
+              <h3 className="text-sm font-semibold text-gray-800 mb-2">Your Submissions</h3>
+              <div className="space-y-2">
+                {receipts.length === 0 && (
+                  <p className="text-xs text-gray-400 italic px-1">No receipts submitted yet.</p>
+                )}
+                {receipts.map((r) => (
+                  <div key={r.id} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-gray-200">
+                    <div className="w-9 h-9 bg-amber-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                      <ReceiptIcon className="w-4 h-4 text-amber-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-gray-900 truncate">{r.stallName} · {r.vendorName}</p>
+                      <p className="text-[10px] text-gray-400">
+                        {new Date(r.receiptDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                        {r.amount !== null ? ` · ₱${r.amount.toLocaleString()}` : ""}
+                      </p>
+                    </div>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${
+                      r.status === "verified" ? "bg-emerald-100 text-emerald-700" :
+                      r.status === "rejected" ? "bg-red-100 text-red-700" :
+                      "bg-amber-100 text-amber-700"
+                    }`}>
+                      {r.status === "verified" ? "Verified" : r.status === "rejected" ? "Rejected" : "Pending"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Bottom Nav Bar ──────────────────────────────── */}
@@ -842,6 +1012,15 @@ export function OfficerDashboard() {
           >
             <ClipboardList className="w-5 h-5" />
             <span className="text-[10px] font-medium">Log</span>
+          </button>
+          <button
+            onClick={() => switchTab("receipts")}
+            className={`flex-1 flex flex-col items-center gap-1 py-3 transition-colors ${
+              activeTab === "receipts" ? "text-amber-500" : "text-gray-400"
+            }`}
+          >
+            <ReceiptIcon className="w-5 h-5" />
+            <span className="text-[10px] font-medium">Receipts</span>
           </button>
         </div>
       </div>

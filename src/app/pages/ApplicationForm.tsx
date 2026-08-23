@@ -1,16 +1,18 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate, useParams, useLocation } from "react-router";
 import {
   Upload, X, FileText, Check, ScrollText,
   User, Building2, MapPin, CalendarDays, Clock,
-  ChevronLeft, Loader,
+  ChevronLeft, Loader, Plus,
 } from "lucide-react";
 import { useStalls } from "../hooks/useStalls";
+import { type Stall } from "../services/stallsApi";
 import { useApplications } from "../hooks/useApplications";
 import { createApplication } from "../services/applicationsApi";
 import { addMonths, formatFileSize } from "../components/applicationsStorage";
 import { getSession, getUserById } from "../components/authStorage";
 import { showToast } from "../components/Toast";
+import { AddStallMapPicker } from "../components/AddStallMapPicker";
 
 const TERM_OPTIONS = [
   { value: "6", label: "6 Months" },
@@ -41,6 +43,7 @@ function Divider() {
 
 export function ApplicationForm() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { stallId } = useParams<{ stallId: string }>();
   const { stalls, loading: stallsLoading } = useStalls();
   const { applications, loading: appsLoading } = useApplications();
@@ -57,14 +60,32 @@ export function ApplicationForm() {
   const [startDate, setStartDate] = useState("");
   const [termMonths, setTermMonths] = useState("12");
   const [submitting, setSubmitting] = useState(false);
+  const [showAddStallModal, setShowAddStallModal] = useState(false);
+
+  const routeStallIds = (location.state as { stallIds?: string[] } | null)?.stallIds;
+  const [pickedStallIds, setPickedStallIds] = useState<string[]>(
+    routeStallIds && routeStallIds.length > 0 ? routeStallIds : (stallId ? [stallId] : [])
+  );
 
   const loading = stallsLoading || appsLoading;
   const stall = stallId ? stalls.find((s) => s.id === stallId) : null;
+  const pickedStalls = pickedStallIds.map((id) => stalls.find((s) => s.id === id)).filter((s): s is Stall => !!s);
+  // The single stall currently picked, if exactly one — may differ from the URL's :stallId once stalls are added/removed
+  const primaryStallId = pickedStallIds.length === 1 ? pickedStallIds[0] : null;
+  const singleStall = primaryStallId ? pickedStalls.find((s) => s.id === primaryStallId) ?? null : null;
 
-  // Check for existing active application on this stall by this user
-  const existingApp = stallId && session
+  // Stalls already excluded because the vendor has an existing active application on them
+  const excludedStallIds = session
+    ? pickedStallIds.filter((id) =>
+        applications.some((a) => a.stallId === id && a.userId === session.userId && a.status !== "rejected")
+      )
+    : [];
+  const submittableStallIds = pickedStallIds.filter((id) => !excludedStallIds.includes(id));
+
+  // Duplicate-application banner for the currently picked single stall (if exactly one is picked)
+  const existingApp = primaryStallId && session
     ? applications.find(
-        (a) => a.stallId === stallId && a.userId === session.userId && a.status !== "rejected"
+        (a) => a.stallId === primaryStallId && a.userId === session.userId && a.status !== "rejected"
       ) ?? null
     : null;
 
@@ -72,8 +93,23 @@ export function ApplicationForm() {
     if (stall?.business_type) setBusinessType(stall.business_type);
   }, [stall?.business_type]);
 
+  function removePickedStall(id: string) {
+    setPickedStallIds((prev) => prev.filter((existing) => existing !== id));
+  }
+
+  function addPickedStalls(ids: string[]) {
+    setPickedStallIds((prev) => [...prev, ...ids.filter((id) => !prev.includes(id))]);
+    setShowAddStallModal(false);
+  }
+
+  // Stalls the vendor already has an active (non-rejected) application on, across the whole map —
+  // these should show as unavailable in the add-stall map picker even if not currently picked here.
+  const sessionActiveAppStallIds = session
+    ? applications.filter((a) => a.userId === session.userId && a.status !== "rejected").map((a) => a.stallId)
+    : [];
+
   const contractEndPreview = startDate ? addMonths(startDate, parseInt(termMonths)) : null;
-  const canSubmit = !existingApp && businessName.trim() && businessType && applicantAddress.trim() && startDate;
+  const canSubmit = submittableStallIds.length > 0 && businessName.trim() && businessType && applicantAddress.trim() && startDate;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -87,29 +123,53 @@ export function ApplicationForm() {
 
     setSubmitting(true);
     try {
-      const saved = await createApplication({
-        userId: session.userId,
-        stallId: stallId ?? "",
-        stallName: stall?.stall_name ?? `Stall ${stallId}`,
-        stallSection: stall?.section ?? "",
-        floorArea: stall?.floor_area ?? "",
-        applicantName: session.name,
-        applicantEmail: session.email,
-        applicantAddress: applicantAddress.trim(),
-        businessName: businessName.trim(),
-        businessType,
-        contractStart: startDate,
-        contractTermMonths: termMonths,
-        contractEnd,
-        permitFileName: permitFile?.name ?? null,
-        permitFileSize: permitFile ? formatFileSize(permitFile.size) : null,
-        additionalFileName: additionalFile?.name ?? null,
-        additionalFileSize: additionalFile ? formatFileSize(additionalFile.size) : null,
-        notes,
-      });
+      const results = await Promise.allSettled(
+        submittableStallIds.map((id) => {
+          const targetStall = stalls.find((s) => s.id === id);
+          return createApplication({
+            userId: session.userId,
+            stallId: id,
+            stallName: targetStall?.stall_name ?? `Stall ${id}`,
+            stallSection: targetStall?.section ?? "",
+            floorArea: targetStall?.floor_area ?? "",
+            applicantName: session.name,
+            applicantEmail: session.email,
+            applicantAddress: applicantAddress.trim(),
+            businessName: businessName.trim(),
+            businessType,
+            contractStart: startDate,
+            contractTermMonths: termMonths,
+            contractEnd,
+            permitFileName: permitFile?.name ?? null,
+            permitFileSize: permitFile ? formatFileSize(permitFile.size) : null,
+            additionalFileName: additionalFile?.name ?? null,
+            additionalFileSize: additionalFile ? formatFileSize(additionalFile.size) : null,
+            notes,
+          });
+        })
+      );
 
-      showToast("Application submitted successfully!", "success");
-      navigate(`/applications/${saved.id}`);
+      const succeeded = results.filter((r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof createApplication>>> => r.status === "fulfilled");
+      const failed = results.length - succeeded.length;
+
+      if (succeeded.length === 0) {
+        showToast("Failed to submit any applications. Please try again.", "error");
+        setSubmitting(false);
+        return;
+      }
+
+      showToast(
+        results.length === 1
+          ? "Application submitted successfully!"
+          : `${succeeded.length} of ${results.length} applications submitted successfully${failed > 0 ? ` (${failed} failed)` : ""}.`,
+        failed > 0 ? "error" : "success"
+      );
+
+      if (succeeded.length === 1) {
+        navigate(`/applications/${succeeded[0].value.id}`);
+      } else {
+        navigate("/dashboard");
+      }
     } catch (error) {
       showToast(`Failed to submit application: ${(error as Error).message}`, "error");
     } finally {
@@ -132,7 +192,9 @@ export function ApplicationForm() {
             <div>
               <h2 className="text-base font-bold text-gray-900 leading-tight">Stall Application</h2>
               <p className="text-xs text-gray-500 hidden sm:block">
-                {stall ? stall.stall_name : `Stall ${stallId}`}
+                {pickedStallIds.length > 1
+                  ? `${pickedStallIds.length} stalls selected`
+                  : singleStall ? singleStall.stall_name : primaryStallId ? `Stall ${primaryStallId}` : "No stall selected"}
               </p>
             </div>
           </div>
@@ -177,6 +239,52 @@ export function ApplicationForm() {
             </div>
           )}
 
+          {pickedStallIds.length > 1 && excludedStallIds.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+              <p className="text-sm font-semibold text-amber-800">Some stalls were excluded</p>
+              <p className="text-xs text-amber-700 mt-0.5">
+                You already have an active application on: {excludedStallIds.map((id) => stalls.find((s) => s.id === id)?.stall_name ?? id).join(", ")}. Only the remaining stalls below will be submitted.
+              </p>
+            </div>
+          )}
+
+          {/* Selected stalls list (add/remove) */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 sm:p-6 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 bg-[#14B8A6] rounded-lg flex items-center justify-center flex-shrink-0">
+                  <MapPin className="w-3.5 h-3.5 text-white" />
+                </div>
+                <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide">
+                  Selected Stalls ({pickedStallIds.length})
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddStallModal(true)}
+                className="flex items-center gap-1 text-xs font-semibold text-[#14B8A6] hover:text-[#0d9488] transition-colors flex-shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Add Stall
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {pickedStalls.map((s) => (
+                <span
+                  key={s.id}
+                  className={`inline-flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-full text-xs font-medium ${
+                    excludedStallIds.includes(s.id) ? "bg-gray-100 text-gray-400 line-through" : "bg-teal-50 text-teal-700"
+                  }`}
+                >
+                  {s.stall_name}
+                  <button type="button" onClick={() => removePickedStall(s.id)} className="hover:text-red-500">
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          </div>
+
           {/* ── Section 1: Applicant Info ────────────────── */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 sm:p-6 space-y-4">
             <SectionHeader icon={User} label="Applicant Information" />
@@ -187,7 +295,11 @@ export function ApplicationForm() {
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">Stall</label>
                 <div className="px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-600 flex items-center gap-2">
                   <MapPin className="w-4 h-4 text-[#14B8A6] flex-shrink-0" />
-                  <span className="truncate">{stall ? stall.stall_name : `Stall ${stallId}`}</span>
+                  <span className="truncate">
+                    {pickedStallIds.length > 1
+                      ? `${pickedStallIds.length} stalls (see above)`
+                      : singleStall ? singleStall.stall_name : primaryStallId ? `Stall ${primaryStallId}` : "No stall selected"}
+                  </span>
                 </div>
               </div>
               <div>
@@ -410,12 +522,27 @@ export function ApplicationForm() {
               className="sm:flex-[2] bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white px-6 py-3.5 rounded-xl font-medium shadow-lg shadow-teal-500/30 hover:shadow-xl hover:shadow-teal-500/40 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {submitting ? <Loader className="w-4 h-4 animate-spin" /> : <ScrollText className="w-4 h-4" />}
-              {submitting ? "Submitting..." : "Submit Application & Contract"}
+              {submitting
+                ? "Submitting..."
+                : submittableStallIds.length > 1
+                  ? `Submit ${submittableStallIds.length} Applications`
+                  : "Submit Application & Contract"}
             </button>
           </div>
         </form>
         )}
       </div>
+
+      {/* Add-stall map picker */}
+      {showAddStallModal && (
+        <AddStallMapPicker
+          stalls={stalls}
+          applications={applications}
+          alreadyPickedIds={[...pickedStallIds, ...sessionActiveAppStallIds]}
+          onConfirm={addPickedStalls}
+          onClose={() => setShowAddStallModal(false)}
+        />
+      )}
     </div>
   );
 }

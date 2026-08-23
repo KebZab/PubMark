@@ -273,6 +273,14 @@ export const router = createBrowserRouter([
       </ProtectedRoute>
     ),
   },
+  {
+    path: "/officer/receipts",
+    element: (
+      <ProtectedRoute role="officer">
+        <OfficerDashboard />
+      </ProtectedRoute>
+    ),
+  },
 
   // ── Shared routes (admin + super_admin) ──────────────
   {

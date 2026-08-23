@@ -76,6 +76,16 @@ export function formatPermitDeadline(dateString: string): string {
   });
 }
 
+export type ContractEndUrgency = "none" | "notice" | "urgent" | "expired";
+
+export function getContractEndStatus(contractEnd: string): { urgency: ContractEndUrgency; daysRemaining: number } {
+  const days = Math.ceil((new Date(contractEnd).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+  if (days < 0) return { urgency: "expired", daysRemaining: days };
+  if (days <= 7) return { urgency: "urgent", daysRemaining: days };
+  if (days <= 30) return { urgency: "notice", daysRemaining: days };
+  return { urgency: "none", daysRemaining: days };
+}
+
 export function toDateTimeLocalValue(dateString: string | null | undefined): string {
   if (!dateString) return "";
   const date = new Date(dateString);

@@ -4,6 +4,7 @@ import cors from "cors";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import pg from "pg";
+import { createClient } from "@supabase/supabase-js";
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -11,22 +12,45 @@ const jwtSecret = process.env.JWT_SECRET;
 if (!jwtSecret) throw new Error("JWT_SECRET is required.");
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required. Copy server/.env.example to server/.env and fill in real values.");
 const db = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+
+const RECEIPTS_BUCKET = "receipts";
+const supabaseStorage = process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
+  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+  : null;
+
+async function uploadReceiptFile(receiptId, base64Data, fileName, mimeType) {
+  if (!supabaseStorage) throw new Error("Receipt uploads are not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in server/.env.");
+  const buffer = Buffer.from(base64Data, "base64");
+  const storagePath = `${receiptId}/${fileName}`;
+  const { error } = await supabaseStorage.storage.from(RECEIPTS_BUCKET).upload(storagePath, buffer, { contentType: mimeType, upsert: true });
+  if (error) throw new Error(`Receipt upload failed: ${error.message}`);
+  return storagePath;
+}
+
+async function getReceiptSignedUrl(storagePath) {
+  if (!supabaseStorage || !storagePath) return null;
+  const { data, error } = await supabaseStorage.storage.from(RECEIPTS_BUCKET).createSignedUrl(storagePath, 600);
+  if (error) return null;
+  return data.signedUrl;
+}
 const configuredOrigins = (process.env.CLIENT_ORIGIN || "").split(",").map((origin) => origin.trim()).filter(Boolean);
-const localDevelopmentOrigins = [
-  "http://localhost:5173", "http://localhost:5174",
-  "http://127.0.0.1:5173", "http://127.0.0.1:5174",
-];
-const allowedOrigins = new Set([...configuredOrigins, ...localDevelopmentOrigins]);
-const devVitePorts = new Set(["5173", "5174"]);
-function isLanDevOrigin(origin) {
+const allowedOrigins = new Set(configuredOrigins);
+function isLocalDevOrigin(origin) {
   if (process.env.NODE_ENV === "production") return false;
-  try { return devVitePorts.has(new URL(origin).port); }
+  try {
+    const url = new URL(origin);
+    const port = Number(url.port || 80);
+    const isVitePort = port >= 5170 && port < 5180;
+    const isLoopback = ["localhost", "127.0.0.1"].includes(url.hostname);
+    const isLanIp = /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(url.hostname);
+    return isVitePort && (isLoopback || isLanIp);
+  }
   catch { return false; }
 }
 
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || allowedOrigins.has(origin) || isLanDevOrigin(origin)) return callback(null, true);
+    if (!origin || allowedOrigins.has(origin) || isLocalDevOrigin(origin)) return callback(null, true);
     return callback(new Error("Origin is not allowed by CORS."));
   },
   credentials: true,
@@ -868,6 +892,7 @@ async function cascadeDeleteStall(conn, id) {
   await conn.query("DELETE FROM violations WHERE stall_id = $1", [id]);
   await conn.query("DELETE FROM transfers WHERE stall_id = $1", [id]);
   await conn.query("DELETE FROM termination_requests WHERE stall_id = $1", [id]);
+  await conn.query("DELETE FROM payment_receipts WHERE stall_id = $1", [id]);
   await conn.query("DELETE FROM applications WHERE stall_id = $1", [id]);
   await conn.query("DELETE FROM stalls WHERE id = $1", [id]);
 }
@@ -1009,6 +1034,115 @@ app.patch("/api/applications/:id/permit", requireAuth, async (req, res, next) =>
 
 app.delete("/api/applications/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try { await db.query("DELETE FROM applications WHERE id = $1", [req.params.id]); res.json({ ok: true }); } catch (error) { next(error); }
+});
+
+// ── Payment Receipts ──────────────────────────────────────────────────────────
+async function mapPaymentReceiptRow(row) {
+  return {
+    id: row.id,
+    stallId: row.stall_id,
+    stallName: row.stall_name,
+    vendorId: row.vendor_id,
+    vendorName: row.vendor_name || "Unknown",
+    submittedBy: row.submitted_by,
+    submittedByName: row.submitted_by_name || "Unknown",
+    submittedByRole: row.submitted_by_role,
+    amount: row.amount !== null ? Number(row.amount) : null,
+    receiptDate: row.receipt_date,
+    fileName: row.file_name,
+    mimeType: row.mime_type,
+    fileSize: row.file_size,
+    fileUrl: await getReceiptSignedUrl(row.storage_path),
+    notes: row.notes || "",
+    status: row.status,
+    reviewedBy: row.reviewed_by,
+    reviewedByName: row.reviewed_by_name || null,
+    reviewedAt: row.reviewed_at,
+    remarks: row.remarks || "",
+    createdAt: row.created_at,
+  };
+}
+
+const PAYMENT_RECEIPT_SELECT = `
+  SELECT
+    pr.id, pr.stall_id, pr.vendor_id, pr.submitted_by, pr.amount, pr.receipt_date,
+    pr.storage_path, pr.file_name, pr.mime_type, pr.file_size, pr.notes, pr.status,
+    pr.reviewed_by, pr.reviewed_at, pr.remarks, pr.created_at,
+    s.stall_name,
+    vp.name AS vendor_name,
+    sp.name AS submitted_by_name, sp.role AS submitted_by_role,
+    rp.name AS reviewed_by_name
+  FROM payment_receipts pr
+  LEFT JOIN stalls s ON s.id = pr.stall_id
+  LEFT JOIN profiles vp ON vp.id = pr.vendor_id
+  LEFT JOIN profiles sp ON sp.id = pr.submitted_by
+  LEFT JOIN profiles rp ON rp.id = pr.reviewed_by
+`;
+
+app.get("/api/receipts", requireAuth, requireRole("vendor", "officer", "admin", "super_admin"), async (req, res, next) => {
+  try {
+    let where = "";
+    const params = [];
+    if (req.auth.role === "vendor") { params.push(req.auth.sub); where = `WHERE pr.vendor_id = $${params.length}`; }
+    else if (req.auth.role === "officer") { params.push(req.auth.sub); where = `WHERE pr.submitted_by = $${params.length}`; }
+    const { rows } = await db.query(`${PAYMENT_RECEIPT_SELECT} ${where} ORDER BY pr.created_at DESC`, params);
+    const receipts = await Promise.all(rows.map(mapPaymentReceiptRow));
+    res.json({ receipts });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/receipts", requireAuth, requireRole("vendor", "officer"), async (req, res, next) => {
+  try {
+    const stallId = String(req.body.stallId || "").trim();
+    const amount = req.body.amount !== undefined && req.body.amount !== null && req.body.amount !== "" ? Number(req.body.amount) : null;
+    const receiptDate = req.body.receiptDate ? new Date(req.body.receiptDate) : new Date();
+    const notes = String(req.body.notes || "").trim();
+    const file = req.body.file || {};
+    if (!stallId) return res.status(400).json({ message: "Stall is required." });
+    if (!file.name || !file.type || !file.base64) return res.status(400).json({ message: "A receipt file is required." });
+    if (amount !== null && !Number.isFinite(amount)) return res.status(400).json({ message: "Amount must be a number." });
+
+    const { rows: activeAppRows } = await db.query(
+      "SELECT user_id FROM applications WHERE stall_id = $1 AND status = 'approved' ORDER BY date_applied DESC LIMIT 1",
+      [stallId]
+    );
+    const activeVendorId = activeAppRows[0]?.user_id || null;
+
+    let vendorId;
+    if (req.auth.role === "vendor") {
+      if (activeVendorId !== req.auth.sub) return res.status(403).json({ message: "You do not have an approved application for this stall." });
+      vendorId = req.auth.sub;
+    } else {
+      if (!activeVendorId) return res.status(400).json({ message: "No active vendor for this stall." });
+      vendorId = activeVendorId;
+    }
+
+    const id = crypto.randomUUID();
+    await db.query(
+      "INSERT INTO payment_receipts (id, stall_id, vendor_id, submitted_by, amount, receipt_date, storage_path, file_name, mime_type, file_size, notes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+      [id, stallId, vendorId, req.auth.sub, amount, receiptDate, "", file.name, file.type, Number(file.size) || 0, notes || null]
+    );
+    const storagePath = await uploadReceiptFile(id, file.base64, file.name, file.type);
+    await db.query("UPDATE payment_receipts SET storage_path = $1 WHERE id = $2", [storagePath, id]);
+
+    const { rows } = await db.query(`${PAYMENT_RECEIPT_SELECT} WHERE pr.id = $1`, [id]);
+    res.status(201).json({ receipt: await mapPaymentReceiptRow(rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.patch("/api/receipts/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
+  try {
+    const status = String(req.body.status || "");
+    if (!["verified", "rejected"].includes(status)) return res.status(400).json({ message: "Status must be 'verified' or 'rejected'." });
+    const remarks = req.body.remarks !== undefined ? String(req.body.remarks || "").trim() : null;
+    await db.query(
+      "UPDATE payment_receipts SET status = $1, remarks = $2, reviewed_by = $3, reviewed_at = $4 WHERE id = $5",
+      [status, remarks, req.auth.sub, new Date(), req.params.id]
+    );
+    const { rows } = await db.query(`${PAYMENT_RECEIPT_SELECT} WHERE pr.id = $1`, [req.params.id]);
+    if (!rows[0]) return res.status(404).json({ message: "Receipt not found." });
+    res.json({ receipt: await mapPaymentReceiptRow(rows[0]) });
+  } catch (error) { next(error); }
 });
 
 // ── Market Perimeters (multi-zone) ────────────────────────────────────────────

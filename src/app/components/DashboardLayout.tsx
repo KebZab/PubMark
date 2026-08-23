@@ -4,7 +4,7 @@ import {
   LayoutDashboard, MapPin, Users, FileText, BarChart3,
   Archive, Settings, Bell, LogOut, Menu, X, Store,
   ShieldCheck, ClipboardList, Package, AlertTriangle,
-  ChevronRight, Megaphone, Map, UserCog, Inbox,
+  ChevronRight, Megaphone, Map, UserCog, Inbox, Receipt,
 } from "lucide-react";
 import { clearSession, type PubMarkSession } from "./authStorage";
 import { showToast } from "./Toast";
@@ -57,6 +57,7 @@ function getNavItems(role: UserRole): NavItem[] {
         { label: "Dashboard", icon: LayoutDashboard, path: "/officer" },
         { label: "Map Monitor", icon: Map, path: "/officer/map" },
         { label: "Violations", icon: AlertTriangle, path: "/officer/violations" },
+        { label: "Payment Receipts", icon: Receipt, path: "/officer/receipts" },
         { label: "Activity Log", icon: ClipboardList, path: "/officer/log" },
       ];
   }

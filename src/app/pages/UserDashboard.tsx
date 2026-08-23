@@ -52,6 +52,7 @@ import {
 import { saveTerminationRequest } from "../components/terminationRequestsStore";
 import {
   formatPermitDeadline,
+  getContractEndStatus,
   getApplicationDisplayStatus,
   parsePermitDeadlineMeta,
 } from "../components/permitDeadline";
@@ -827,6 +828,16 @@ export function UserDashboard() {
                               Permit due {formatPermitDeadline(permitMeta.permitDeadlineAt)}
                             </p>
                           )}
+                          {displayStatus === "approved" && (() => {
+                            const contractStatus = getContractEndStatus(app.contractEnd);
+                            if (contractStatus.urgency === "none") return null;
+                            const text =
+                              contractStatus.urgency === "expired"
+                                ? "Contract term has ended"
+                                : `Contract ends in ${contractStatus.daysRemaining} day${contractStatus.daysRemaining === 1 ? "" : "s"}`;
+                            const colorClass = contractStatus.urgency === "notice" ? "text-amber-700" : "text-red-700";
+                            return <p className={`text-[10px] ${colorClass} mt-1`}>{text}</p>;
+                          })()}
                           {outgoing && (
                             <div className="mt-1 flex items-center gap-1.5 text-[10px] text-purple-600">
                               <ArrowRightLeft className="w-3 h-3" />

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { MapPin, Store, X, ChevronLeft, ChevronRight, User, Clock, CheckCircle, AlertTriangle, Flag } from "lucide-react";
+import { MapPin, Store, X, ChevronLeft, ChevronRight, User, Clock, CheckCircle, AlertTriangle, Flag, CheckSquare } from "lucide-react";
 import { useStalls, type Stall } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
 import { type Application } from "../services/applicationsApi";
@@ -71,12 +71,16 @@ function DrawnStallsLayer({
   userApplications,
   allApplications,
   selectedId,
+  selectedIds,
+  multiSelectMode,
   onSelect,
 }: {
   stalls: Stall[];
   userApplications: Application[];
   allApplications: Application[];
   selectedId: string | null;
+  selectedIds: Set<string>;
+  multiSelectMode: boolean;
   onSelect: (stall: Stall) => void;
 }) {
   const map = useMap();
@@ -85,7 +89,7 @@ function DrawnStallsLayer({
     const layers: L.GeoJSON[] = [];
 
     stalls.forEach((stall) => {
-      const isSelected = stall.id === selectedId;
+      const isSelected = multiSelectMode ? selectedIds.has(stall.id) : stall.id === selectedId;
       const userApp = getActiveApp(stall.id, userApplications);
       const globalOccupied = allApplications.some((a) => a.stallId === stall.id && a.status === "approved");
       const style = stallStyle(userApp, globalOccupied, isSelected);
@@ -101,7 +105,7 @@ function DrawnStallsLayer({
     });
 
     return () => { layers.forEach((l) => map.removeLayer(l)); };
-  }, [stalls, userApplications, allApplications, selectedId, map, onSelect]);
+  }, [stalls, userApplications, allApplications, selectedId, selectedIds, multiSelectMode, map, onSelect]);
 
   return null;
 }
@@ -126,6 +130,8 @@ export function UserMapDashboard() {
   const { stalls: storedStalls, loading: stallsLoading } = useStalls();
   const { applications: allApplications } = useApplications();
   const [selected, setSelected] = useState<Stall | null>(null);
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const [flyTarget, setFlyTarget] = useState<[number, number] | null>(null);
   const [activeFloor, setActiveFloor] = useState<"1" | "2">("1");
@@ -178,10 +184,35 @@ export function UserMapDashboard() {
     : floorStalls;
 
   const handleSelectStall = (stall: Stall) => {
+    if (multiSelectMode) {
+      const anyActiveApp = getActiveApp(stall.id, allApplications);
+      if (anyActiveApp) {
+        showToast("That stall isn't available and can't be added to your selection.", "error");
+        return;
+      }
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(stall.id)) next.delete(stall.id); else next.add(stall.id);
+        return next;
+      });
+      return;
+    }
     if (selected?.id === stall.id) { setSelected(null); return; }
     setSelected(stall);
     const center = getGeometryCentroid(stall.geometry);
     if (center) setFlyTarget(center);
+  };
+
+  const handleToggleMultiSelect = () => {
+    setMultiSelectMode((prev) => !prev);
+    setSelectedIds(new Set());
+    setSelected(null);
+  };
+
+  const handleApplyToSelection = () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    navigate(`/apply/${ids[0]}`, { state: { stallIds: ids } });
   };
 
   const handleSubmitReport = async () => {
@@ -240,6 +271,8 @@ export function UserMapDashboard() {
             userApplications={userApplications}
             allApplications={allApplications}
             selectedId={selected?.id ?? null}
+            selectedIds={selectedIds}
+            multiSelectMode={multiSelectMode}
             onSelect={handleSelectStall}
           />
           <FlyTo position={flyTarget} />
@@ -280,6 +313,15 @@ export function UserMapDashboard() {
             onChange={(f) => { setActiveFloor(f); setSelected(null); }}
             counts={floorCounts}
           />
+          <button
+            onClick={handleToggleMultiSelect}
+            className={`bg-white/96 backdrop-blur-md rounded-xl px-3 py-1.5 shadow-md border flex items-center gap-1.5 transition-colors ${
+              multiSelectMode ? "border-[#14B8A6] text-[#0d9488]" : "border-gray-100/80 text-gray-700"
+            }`}
+          >
+            <CheckSquare className="w-3.5 h-3.5" />
+            <span className="text-xs font-semibold">{multiSelectMode ? "Cancel" : "Select Multiple"}</span>
+          </button>
           <div className="bg-white/96 backdrop-blur-md rounded-xl px-3 py-1.5 shadow-md border border-gray-100/80 flex items-center gap-1.5">
             <div className="w-2.5 h-2.5 rounded-full bg-[#14B8A6]" />
             <span className="text-xs font-semibold text-gray-700">{vacant} Vacant</span>
@@ -325,8 +367,24 @@ export function UserMapDashboard() {
         </div>
       )}
 
+      {/* ── Multi-select action bar ───────────────────────── */}
+      {multiSelectMode && selectedIds.size > 0 && (
+        <div className="absolute z-[1000] left-3 right-3 flex items-center gap-2.5 bg-white rounded-2xl shadow-2xl border border-gray-100 p-3" style={{ bottom: "16px" }}>
+          <div className="bg-[#14B8A6]/90 backdrop-blur-md rounded-xl px-3 py-2 flex-shrink-0">
+            <span className="text-xs font-semibold text-white">{selectedIds.size} selected</span>
+          </div>
+          <button
+            onClick={handleApplyToSelection}
+            className="flex-1 py-2.5 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl font-semibold text-sm shadow-md hover:shadow-lg active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+          >
+            Apply to {selectedIds.size} Stall{selectedIds.size === 1 ? "" : "s"}
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* ── Bottom stall sheet ──────────────────────────── */}
-      {selected && (() => {
+      {!multiSelectMode && selected && (() => {
         const isMyApproved = selectedUserApp?.status === "approved";
         const isMyPending = selectedUserApp?.status === "pending";
         const isOtherOccupied = selectedGlobalOccupied && !isMyApproved;

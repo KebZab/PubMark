@@ -3,11 +3,12 @@ import { useNavigate, Link } from "react-router";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { MapPin, Store, X, LogIn, UserPlus, User, ChevronRight } from "lucide-react";
+import { MapPin, Store, X, LogIn, UserPlus, User, ChevronRight, CheckSquare } from "lucide-react";
 import { useStalls, type Stall } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
 import { type Application } from "../services/applicationsApi";
 import { FloorSwitcher } from "../components/FloorSwitcher";
+import { showToast } from "../components/Toast";
 
 const MAP_CSS = `
   .leaflet-container { background: #e5e7eb; }
@@ -33,11 +34,15 @@ function DrawnStallsLayer({
   stalls,
   applications,
   selectedId,
+  selectedIds,
+  multiSelectMode,
   onSelect,
 }: {
   stalls: Stall[];
   applications: Application[];
   selectedId: string | null;
+  selectedIds: Set<string>;
+  multiSelectMode: boolean;
   onSelect: (stall: Stall) => void;
 }) {
   const map = useMap();
@@ -45,7 +50,7 @@ function DrawnStallsLayer({
     const layers: L.GeoJSON[] = [];
     stalls.forEach((stall) => {
       const occupied = !!getApprovedApp(stall.id, applications);
-      const isSelected = stall.id === selectedId;
+      const isSelected = multiSelectMode ? selectedIds.has(stall.id) : stall.id === selectedId;
       const color = occupied ? "#9ca3af" : isSelected ? "#0d9488" : "#14B8A6";
       const fillOpacity = isSelected ? 0.4 : 0.22;
       const layer = L.geoJSON(
@@ -61,7 +66,7 @@ function DrawnStallsLayer({
       layers.push(layer);
     });
     return () => { layers.forEach((l) => map.removeLayer(l)); };
-  }, [stalls, applications, selectedId, map, onSelect]);
+  }, [stalls, applications, selectedId, selectedIds, multiSelectMode, map, onSelect]);
   return null;
 }
 
@@ -83,17 +88,43 @@ export function GuestMapView() {
   const { stalls, loading } = useStalls();
   const { applications } = useApplications();
   const [selected, setSelected] = useState<Stall | null>(null);
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [flyTarget, setFlyTarget] = useState<[number, number] | null>(null);
-  const [showLoginPrompt, setShowLoginPrompt] = useState<string | null>(null);
+  const [pendingStallIds, setPendingStallIds] = useState<string[] | null>(null);
   const [activeFloor, setActiveFloor] = useState<"1" | "2">("1");
 
   const floorStalls = stalls.filter((s) => s.floor === activeFloor);
 
   function handleSelectStall(stall: Stall) {
+    if (multiSelectMode) {
+      if (getApprovedApp(stall.id, applications)) {
+        showToast("That stall is occupied and can't be added to your selection.", "error");
+        return;
+      }
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(stall.id)) next.delete(stall.id); else next.add(stall.id);
+        return next;
+      });
+      return;
+    }
     if (selected?.id === stall.id) { setSelected(null); return; }
     setSelected(stall);
     const center = getGeometryCentroid(stall.geometry);
     if (center) setFlyTarget(center);
+  }
+
+  function handleToggleMultiSelect() {
+    setMultiSelectMode((prev) => !prev);
+    setSelectedIds(new Set());
+    setSelected(null);
+  }
+
+  function handleApplyToSelection() {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    setPendingStallIds(ids);
   }
 
   const approvedApp = selected ? getApprovedApp(selected.id, applications) : null;
@@ -130,6 +161,8 @@ export function GuestMapView() {
             stalls={floorStalls}
             applications={applications}
             selectedId={selected?.id ?? null}
+            selectedIds={selectedIds}
+            multiSelectMode={multiSelectMode}
             onSelect={handleSelectStall}
           />
           <FlyTo position={flyTarget} />
@@ -173,6 +206,15 @@ export function GuestMapView() {
             onChange={(f) => { setActiveFloor(f); setSelected(null); }}
             counts={floorCounts}
           />
+          <button
+            onClick={handleToggleMultiSelect}
+            className={`bg-white/96 backdrop-blur-md rounded-xl px-3 py-1.5 shadow-md border flex items-center gap-1.5 transition-colors ${
+              multiSelectMode ? "border-[#14B8A6] text-[#0d9488]" : "border-gray-100/80 text-gray-700"
+            }`}
+          >
+            <CheckSquare className="w-3.5 h-3.5" />
+            <span className="text-xs font-semibold">{multiSelectMode ? "Cancel" : "Select Multiple"}</span>
+          </button>
           <div className="bg-white/96 backdrop-blur-md rounded-xl px-3 py-1.5 shadow-md border border-gray-100/80 flex items-center gap-1.5">
             <div className="w-2.5 h-2.5 rounded-full bg-[#14B8A6]" />
             <span className="text-xs font-semibold text-gray-700">{vacantCount} Vacant</span>
@@ -207,8 +249,24 @@ export function GuestMapView() {
         </div>
       )}
 
+      {/* ── Multi-select action bar ───────────────────────── */}
+      {multiSelectMode && selectedIds.size > 0 && (
+        <div className="absolute z-[1000] left-3 right-3 flex items-center gap-2.5 bg-white rounded-2xl shadow-2xl border border-gray-100 p-3" style={{ bottom: "16px" }}>
+          <div className="bg-[#14B8A6]/90 backdrop-blur-md rounded-xl px-3 py-2 flex-shrink-0">
+            <span className="text-xs font-semibold text-white">{selectedIds.size} selected</span>
+          </div>
+          <button
+            onClick={handleApplyToSelection}
+            className="flex-1 py-2.5 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl font-semibold text-sm shadow-md hover:shadow-lg active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+          >
+            Apply to {selectedIds.size} Stall{selectedIds.size === 1 ? "" : "s"}
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* ── Bottom sheet (mobile) ─────────────────────── */}
-      {selected && (
+      {!multiSelectMode && selected && (
         <div className="absolute z-[1000] left-3 right-3 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden" style={{ bottom: "16px" }}>
           {/* Header */}
           <div className={`px-5 py-4 flex items-start gap-4 ${selectedOccupied ? "bg-gradient-to-r from-gray-50 to-slate-50" : "bg-gradient-to-r from-teal-50 to-cyan-50"}`}>
@@ -265,7 +323,7 @@ export function GuestMapView() {
               </div>
             ) : (
               <button
-                onClick={() => setShowLoginPrompt(selected.id)}
+                onClick={() => setPendingStallIds([selected.id])}
                 className="w-full py-3 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl font-semibold text-sm shadow-lg shadow-teal-500/30 hover:shadow-teal-500/50 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
               >
                 Apply for This Stall
@@ -277,7 +335,7 @@ export function GuestMapView() {
       )}
 
       {/* Login prompt modal */}
-      {showLoginPrompt && (
+      {pendingStallIds && pendingStallIds.length > 0 && (
         <div className="absolute inset-0 z-[2000] flex items-center justify-center bg-black/40 backdrop-blur-sm px-6">
           <div className="bg-white rounded-2xl shadow-2xl border border-gray-100 w-full max-w-sm p-6">
             <div className="w-12 h-12 bg-teal-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
@@ -285,18 +343,18 @@ export function GuestMapView() {
             </div>
             <h3 className="text-base font-bold text-gray-900 text-center mb-1">Account Required</h3>
             <p className="text-sm text-gray-500 text-center mb-6 leading-relaxed">
-              You need an account to apply for a stall. Create a free account or log in to continue.
+              You need an account to apply for {pendingStallIds.length > 1 ? `these ${pendingStallIds.length} stalls` : "a stall"}. Create a free account or log in to continue.
             </p>
             <div className="flex flex-col gap-3">
               <button
-                onClick={() => navigate(`/register?stallId=${showLoginPrompt}`)}
+                onClick={() => navigate(`/register?stallId=${pendingStallIds.join(",")}`)}
                 className="w-full py-3 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl font-semibold text-sm shadow-md flex items-center justify-center gap-2"
               >
                 <UserPlus className="w-4 h-4" />
                 Create Account
               </button>
               <button
-                onClick={() => navigate("/")}
+                onClick={() => navigate(`/?stallId=${pendingStallIds.join(",")}`)}
                 className="w-full py-3 border border-[#14B8A6] text-[#14B8A6] rounded-xl font-semibold text-sm flex items-center justify-center gap-2 hover:bg-teal-50 transition-colors"
               >
                 <LogIn className="w-4 h-4" />
@@ -304,7 +362,7 @@ export function GuestMapView() {
               </button>
             </div>
             <button
-              onClick={() => setShowLoginPrompt(null)}
+              onClick={() => setPendingStallIds(null)}
               className="mt-4 w-full text-center text-xs text-gray-400 hover:text-gray-600 transition-colors"
             >
               Cancel

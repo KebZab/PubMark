@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, Link } from "react-router";
+import { useNavigate, useSearchParams, Link } from "react-router";
 import { MapPin, LogIn, Search, Eye, EyeOff } from "lucide-react";
 import { setSession } from "../components/authStorage";
 import { login } from "../services/api";
@@ -13,6 +13,9 @@ const ROLE_ROUTES: Record<string, string> = {
 
 export function Login() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const stallId = searchParams.get("stallId");
+  const stallIds = stallId ? stallId.split(",").map((id) => id.trim()).filter(Boolean) : [];
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -29,7 +32,11 @@ export function Login() {
       setLoading(false);
       setSession({ userId: user.id, role: user.role, name: user.name, email: user.email });
       localStorage.setItem("pubmark_pending_toast", JSON.stringify({ message: `Welcome back, ${user.name}!`, type: "success" }));
-      navigate(ROLE_ROUTES[user.role ?? "vendor"] ?? "/dashboard");
+      if (stallIds.length > 0 && (user.role ?? "vendor") === "vendor") {
+        navigate(`/apply/${stallIds[0]}`, { state: { stallIds } });
+      } else {
+        navigate(ROLE_ROUTES[user.role ?? "vendor"] ?? "/dashboard");
+      }
     } catch (err) { setLoading(false); setError(err instanceof Error ? err.message : "Unable to sign in."); }
   };
 

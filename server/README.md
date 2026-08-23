@@ -19,5 +19,23 @@ shared database.
 
 The server implements secure registration, sign-in, sign-out, session recovery,
 and every domain endpoint under `/api` (stalls, applications, violations, check
-requests, termination requests, announcements, perimeters) — all backed by
-Postgres via the `pg` package.
+requests, termination requests, announcements, perimeters, payment receipts) —
+all backed by Postgres via the `pg` package.
+
+## Payment receipts (one-time setup)
+
+The `/api/receipts` routes upload the actual receipt file to Supabase Storage
+(everything else in this app only stores fake file metadata — this is the one
+feature with real binary uploads). One-time setup, done once per Supabase
+project, not per developer:
+
+1. Run `server/migrations/2026-08-23-payment-receipts.sql` in the Supabase
+   SQL editor to create the `payment_receipts` table.
+2. In the Supabase dashboard: **Storage** -> **New bucket** -> name it
+   `receipts`, leave it **private** (not public).
+3. Fill in `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in `server/.env`
+   (Settings -> API in the dashboard — use the `service_role` secret key, not
+   `anon`). This key must never reach the browser, same as `JWT_SECRET`.
+
+Without step 3, every other route keeps working — only receipt uploads will
+fail with a clear "not configured" error.
