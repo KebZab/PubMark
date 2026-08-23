@@ -17,10 +17,16 @@ const localDevelopmentOrigins = [
   "http://127.0.0.1:5173", "http://127.0.0.1:5174",
 ];
 const allowedOrigins = new Set([...configuredOrigins, ...localDevelopmentOrigins]);
+const devVitePorts = new Set(["5173", "5174"]);
+function isLanDevOrigin(origin) {
+  if (process.env.NODE_ENV === "production") return false;
+  try { return devVitePorts.has(new URL(origin).port); }
+  catch { return false; }
+}
 
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+    if (!origin || allowedOrigins.has(origin) || isLanDevOrigin(origin)) return callback(null, true);
     return callback(new Error("Origin is not allowed by CORS."));
   },
   credentials: true,

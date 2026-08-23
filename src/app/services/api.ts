@@ -1,6 +1,16 @@
 import type { UserRole } from "../components/authStorage";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "");
+const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "");
+// A configured URL pointing at "localhost" only works on the machine running
+// the backend. When the app is loaded from another device on the LAN (via
+// the host machine's IP), derive the API URL from that same host instead,
+// so `npm run dev` works across devices with no per-device config.
+const API_BASE_URL =
+  configuredApiBaseUrl && !/^https?:\/\/(localhost|127\.0\.0\.1)/.test(configuredApiBaseUrl)
+    ? configuredApiBaseUrl
+    : typeof window !== "undefined"
+      ? `${window.location.protocol}//${window.location.hostname}:4000/api`
+      : configuredApiBaseUrl;
 
 export interface ApiProfile {
   id: string;

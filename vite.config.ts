@@ -31,6 +31,12 @@ export default defineConfig({
     },
   },
 
+  // Bind to all network interfaces so other devices on the LAN can reach
+  // the dev server (e.g. http://<your-machine-ip>:5173).
+  server: {
+    host: true,
+  },
+
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
 })
