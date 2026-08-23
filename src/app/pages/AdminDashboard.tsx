@@ -37,7 +37,8 @@ import {
   type Announcement,
 } from "../services/announcementsApi";
 import { useApplications } from "../hooks/useApplications";
-import { updateApplicationAdmin, updateApplicationStatus, type Application } from "../services/applicationsApi";
+import { updateApplicationAdmin, updateApplicationStatus, getApplicationsPage, type Application } from "../services/applicationsApi";
+import { TablePagination } from "../components/ui/TablePagination";
 import { useStalls, type Stall } from "../hooks/useStalls";
 import { type StoredStall } from "../components/stallsStorage";
 import { getSession, getAllUsers, type PubMarkUser } from "../components/authStorage";
@@ -147,6 +148,13 @@ export function AdminDashboard() {
   const [requestOfficers, setRequestOfficers] = useState<ApiProfile[]>([]);
   const [allViolations, setAllViolations] = useState<Violation[]>([]);
 
+  // Paginated "All Applications" table view — kept separate from the full-list
+  // `applications` above, which Overview stats and the "Recent Applications" widget still need.
+  const TABLE_PAGE_SIZE = 10;
+  const [tableApplications, setTableApplications] = useState<Application[]>([]);
+  const [applicationsTotal, setApplicationsTotal] = useState(0);
+  const [applicationsPageNum, setApplicationsPageNum] = useState(1);
+
   useEffect(() => {
     const session = getSession();
     if (!session || session.role !== "admin") { navigate("/", { replace: true }); }
@@ -195,7 +203,7 @@ export function AdminDashboard() {
         permitDeadlineAt: !targetApp.permitFileName && permitDeadlineInput ? new Date(permitDeadlineInput).toISOString() : null,
       });
       await updateApplicationStatus(id, "approved", adminRemarks || undefined);
-      await refetchApplications();
+      await Promise.all([refetchApplications(), loadApplicationsTable()]);
       if (selectedApp?.id === id) setSelectedApp((prev) => prev ? { ...prev, status: "approved", adminRemarks } : null);
       setRemarksInput("");
       showToast("Application approved.", "success");
@@ -208,7 +216,7 @@ export function AdminDashboard() {
     try {
       const adminRemarks = buildPermitDeadlineRemarks(remarksInput);
       await updateApplicationStatus(id, "rejected", adminRemarks || undefined);
-      await refetchApplications();
+      await Promise.all([refetchApplications(), loadApplicationsTable()]);
       if (selectedApp?.id === id) setSelectedApp((prev) => prev ? { ...prev, status: "rejected", adminRemarks: adminRemarks || prev.adminRemarks } : null);
       setRemarksInput("");
       showToast("Application rejected.", "error");
@@ -254,6 +262,28 @@ export function AdminDashboard() {
       contractTermMonths: app.contractTermMonths,
     };
   }
+
+  async function loadApplicationsTable() {
+    try {
+      const result = await getApplicationsPage({
+        status: appStatusFilter,
+        sortField: appSortField,
+        sortDir: appSortAsc ? "asc" : "desc",
+        page: applicationsPageNum,
+        pageSize: TABLE_PAGE_SIZE,
+      });
+      setTableApplications(result.applications);
+      setApplicationsTotal(result.total);
+    } catch (error) {
+      showToast(`Failed to load applications: ${(error as Error).message}`, "error");
+    }
+  }
+
+  useEffect(() => { setApplicationsPageNum(1); }, [appStatusFilter, appSortField, appSortAsc]);
+
+  useEffect(() => {
+    if (tab === "applications") void loadApplicationsTable();
+  }, [tab, applicationsPageNum, appStatusFilter, appSortField, appSortAsc]);
 
   async function loadAnnouncements() {
     try {
@@ -430,23 +460,6 @@ export function AdminDashboard() {
     } catch (error) {
       showToast(`Failed to assign violation: ${(error as Error).message}`, "error");
     }
-  }
-
-  function sortApplications(apps: Application[]): Application[] {
-    const sorted = [...apps];
-    sorted.sort((a, b) => {
-      let comparison = 0;
-      if (appSortField === "date") {
-        comparison = new Date(a.dateApplied).getTime() - new Date(b.dateApplied).getTime();
-      } else if (appSortField === "stall") {
-        comparison = a.stallName.localeCompare(b.stallName);
-      } else if (appSortField === "status") {
-        const statusOrder = { pending: 1, approved: 2, rejected: 3 };
-        comparison = statusOrder[a.status] - statusOrder[b.status];
-      }
-      return appSortAsc ? comparison : -comparison;
-    });
-    return sorted;
   }
 
   function handleAppSort(field: "date" | "stall" | "status") {
@@ -925,15 +938,15 @@ export function AdminDashboard() {
                     {f.charAt(0).toUpperCase() + f.slice(1)}
                     {f !== "all" && (
                       <span className="ml-1.5 opacity-70">
-                        ({applications.filter((a) => f === "all" || a.status === f).length})
+                        ({applications.filter((a) => a.status === f).length})
                       </span>
                     )}
                   </button>
                 ))}
-                <span className="ml-auto text-xs text-gray-400">{applications.length} total</span>
+                <span className="ml-auto text-xs text-gray-400">{applicationsTotal} total</span>
               </div>
 
-              {!applicationsLoading && applications.filter((a) => appStatusFilter === "all" || a.status === appStatusFilter).length === 0 ? (
+              {!applicationsLoading && tableApplications.length === 0 ? (
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center py-20 text-center">
                   <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                     <FileText className="w-8 h-8 text-gray-400" />
@@ -942,33 +955,33 @@ export function AdminDashboard() {
                   <p className="text-sm text-gray-400">Applications submitted by users will appear here.</p>
                 </div>
               ) : (
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
                   <div className="overflow-x-auto">
                     <table className="w-full">
                       <thead>
-                        <tr className="border-b border-gray-200 bg-gray-50">
-                          <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase">
+                        <tr className="border-b border-gray-100 bg-gray-50">
+                          <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500">
                             <button onClick={() => handleAppSort("stall")} className="flex items-center gap-1 hover:text-gray-700">
                               Stall <ArrowUpDown className="w-3 h-3" />
                             </button>
                           </th>
-                          <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase">Applicant</th>
-                          <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase">Business</th>
-                          <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase">
+                          <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500">Applicant</th>
+                          <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500">Business</th>
+                          <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500">
                             <button onClick={() => handleAppSort("status")} className="flex items-center gap-1 hover:text-gray-700">
                               Status <ArrowUpDown className="w-3 h-3" />
                             </button>
                           </th>
-                          <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase">
+                          <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500">
                             <button onClick={() => handleAppSort("date")} className="flex items-center gap-1 hover:text-gray-700">
                               Applied <ArrowUpDown className="w-3 h-3" />
                             </button>
                           </th>
-                          <th className="px-5 py-3.5 text-right text-xs font-semibold text-gray-500 uppercase">Actions</th>
+                          <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
-                        {sortApplications(applications.filter((a) => appStatusFilter === "all" || a.status === appStatusFilter))
+                        {tableApplications
                           .map((app) => (
                             <tr
                               key={app.id}
@@ -1025,6 +1038,7 @@ export function AdminDashboard() {
                       </tbody>
                     </table>
                   </div>
+                  <TablePagination page={applicationsPageNum} pageSize={TABLE_PAGE_SIZE} total={applicationsTotal} onPageChange={setApplicationsPageNum} />
                 </div>
               )}
             </div>

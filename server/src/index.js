@@ -65,6 +65,12 @@ function requireAuth(req, res, next) {
 }
 function profile(row) { return { id: row.id, email: row.email, name: row.name, role: row.role, address: row.address, phone: row.phone, department: row.department, createdAt: row.created_at }; }
 function requireRole(...roles) { return (req, res, next) => { if (!roles.includes(req.auth?.role)) return res.status(403).json({ message: "Access denied." }); next(); }; }
+function parsePagination(req, maxLimit = 100) {
+  if (req.query.limit === undefined) return { limit: null, offset: 0 };
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 0, 1), maxLimit);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+  return { limit, offset };
+}
 
 function mapAnnouncementRow(row) {
   return {
@@ -448,19 +454,97 @@ app.get("/api/auth/users/by-email", requireAuth, async (req, res, next) => {
 });
 app.post("/api/auth/logout", (_req, res) => { res.clearCookie("pubmark_session", cookieOptions()); res.json({ ok: true }); });
 
+const USER_SORT_COLUMNS = { name: "name", email: "email", role: "role", phone: "phone", createdAt: "created_at" };
+
 app.get("/api/users", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try {
     const role = String(req.query.role || "").trim();
+    const search = String(req.query.search || "").trim();
     const values = [];
-    let sql = "SELECT id, email, name, role, address, phone, department FROM profiles";
-    if (role) {
-      values.push(role);
-      sql += ` WHERE role = $${values.length}`;
+    const conditions = [];
+    if (role) { values.push(role); conditions.push(`role = $${values.length}`); }
+    if (search) { values.push(`%${search}%`); conditions.push(`(name ILIKE $${values.length} OR email ILIKE $${values.length})`); }
+    const whereSql = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
+
+    const sortColumn = USER_SORT_COLUMNS[String(req.query.sortField || "")] || "name";
+    const sortDir = String(req.query.sortDir || "").toLowerCase() === "desc" ? "DESC" : "ASC";
+
+    let sql = `SELECT id, email, name, role, address, phone, department, created_at FROM profiles${whereSql} ORDER BY ${sortColumn} ${sortDir}`;
+    let total;
+    const { limit, offset } = parsePagination(req);
+    if (limit != null) {
+      total = Number((await db.query(`SELECT COUNT(*) FROM profiles${whereSql}`, values)).rows[0].count);
+      values.push(limit); sql += ` LIMIT $${values.length}`;
+      values.push(offset); sql += ` OFFSET $${values.length}`;
     }
-    sql += " ORDER BY name ASC";
     const { rows } = await db.query(sql, values);
-    res.json({ users: rows.map(profile) });
+    res.json({ users: rows.map(profile), ...(total !== undefined ? { total } : {}) });
   } catch (error) { next(error); }
+});
+
+const VALID_USER_ROLES = ["super_admin", "admin", "vendor", "officer"];
+function canAssignRole(req, role) {
+  return !(role === "super_admin" || role === "admin") || req.auth.role === "super_admin";
+}
+
+app.post("/api/users", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
+  try {
+    const { name, email, password, role, phone, address, department } = req.body;
+    if (!name || !email || !password || !role) return res.status(400).json({ message: "Name, email, password, and role are required." });
+    if (!VALID_USER_ROLES.includes(role)) return res.status(400).json({ message: "Invalid role." });
+    if (String(password).length < 6) return res.status(400).json({ message: "Password must be at least 6 characters." });
+    if (!canAssignRole(req, role)) return res.status(403).json({ message: "Only a super admin can create admin or super admin accounts." });
+
+    const id = crypto.randomUUID();
+    const passwordHash = await bcrypt.hash(password, 12);
+    await db.query(
+      "INSERT INTO profiles (id, email, password_hash, name, phone, address, role, department) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+      [id, String(email).toLowerCase(), passwordHash, name, phone || "", address || "", role, department || null]
+    );
+    const { rows } = await db.query("SELECT id, email, name, role, address, phone, department, created_at FROM profiles WHERE id = $1", [id]);
+    res.status(201).json({ user: profile(rows[0]) });
+  } catch (error) {
+    if (error?.code === "23505") return res.status(409).json({ message: "This email is already in use." });
+    next(error);
+  }
+});
+
+app.patch("/api/users/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
+  try {
+    const { name, phone, address, role, department, password } = req.body;
+    if (role !== undefined && !VALID_USER_ROLES.includes(role)) return res.status(400).json({ message: "Invalid role." });
+    if (role !== undefined && !canAssignRole(req, role)) return res.status(403).json({ message: "Only a super admin can assign admin or super admin roles." });
+    if (password && String(password).length < 6) return res.status(400).json({ message: "Password must be at least 6 characters." });
+
+    const updates = []; const values = [];
+    if (name !== undefined) { values.push(name); updates.push(`name = $${values.length}`); }
+    if (phone !== undefined) { values.push(phone); updates.push(`phone = $${values.length}`); }
+    if (address !== undefined) { values.push(address); updates.push(`address = $${values.length}`); }
+    if (role !== undefined) { values.push(role); updates.push(`role = $${values.length}`); }
+    if (department !== undefined) { values.push(department || null); updates.push(`department = $${values.length}`); }
+    if (password) { values.push(await bcrypt.hash(password, 12)); updates.push(`password_hash = $${values.length}`); }
+    if (updates.length === 0) return res.status(400).json({ message: "No fields to update." });
+
+    values.push(req.params.id);
+    await db.query(`UPDATE profiles SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
+    const { rows } = await db.query("SELECT id, email, name, role, address, phone, department, created_at FROM profiles WHERE id = $1", [req.params.id]);
+    if (!rows[0]) return res.status(404).json({ message: "User not found." });
+    res.json({ user: profile(rows[0]) });
+  } catch (error) {
+    if (error?.code === "23505") return res.status(409).json({ message: "This email is already in use." });
+    next(error);
+  }
+});
+
+app.delete("/api/users/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
+  try {
+    if (req.auth.sub === req.params.id) return res.status(400).json({ message: "You cannot delete your own account." });
+    await db.query("DELETE FROM profiles WHERE id = $1", [req.params.id]);
+    res.json({ ok: true });
+  } catch (error) {
+    if (error?.code === "23503") return res.status(409).json({ message: "Cannot delete this user: they have existing applications, violations, or other records linked to their account." });
+    next(error);
+  }
 });
 
 app.get("/api/announcements", requireAuth, async (_req, res, next) => {
@@ -830,7 +914,96 @@ app.patch("/api/termination-requests/:id", requireAuth, requireRole("admin", "su
 });
 
 app.get("/api/stalls", async (req, res, next) => {
-  try { const { rows } = await db.query("SELECT id, stall_name, status, business_type, section, floor, floor_area, notes, geometry, created_at FROM stalls ORDER BY created_at DESC"); res.json({ stalls: rows.map(r => ({ ...r, geometry: typeof r.geometry === "string" ? JSON.parse(r.geometry) : r.geometry })) }); } catch (error) { next(error); }
+  try {
+    const search = String(req.query.search || "").trim();
+    const values = [];
+    let whereSql = "";
+    if (search) {
+      values.push(`%${search}%`);
+      whereSql = ` WHERE (stall_name ILIKE $${values.length} OR section ILIKE $${values.length} OR business_type ILIKE $${values.length})`;
+    }
+
+    let sql = `SELECT id, stall_name, status, business_type, section, floor, floor_area, notes, geometry, created_at FROM stalls${whereSql} ORDER BY created_at DESC`;
+    let total;
+    const { limit, offset } = parsePagination(req);
+    if (limit != null) {
+      total = Number((await db.query(`SELECT COUNT(*) FROM stalls${whereSql}`, values)).rows[0].count);
+      values.push(limit); sql += ` LIMIT $${values.length}`;
+      values.push(offset); sql += ` OFFSET $${values.length}`;
+    }
+    const { rows } = await db.query(sql, values);
+    res.json({
+      stalls: rows.map(r => ({ ...r, geometry: typeof r.geometry === "string" ? JSON.parse(r.geometry) : r.geometry })),
+      ...(total !== undefined ? { total } : {}),
+    });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/stalls/management", async (req, res, next) => {
+  try {
+    const status = String(req.query.status || "").trim();
+    const floor = String(req.query.floor || "").trim();
+    const search = String(req.query.search || "").trim();
+    const values = [];
+    const conditions = [];
+    if (status === "vacant") conditions.push("a.id IS NULL");
+    else if (status === "pending") conditions.push("a.status = 'pending'");
+    else if (status === "occupied") conditions.push("a.status = 'approved'");
+    if (floor) { values.push(floor); conditions.push(`s.floor = $${values.length}`); }
+    if (search) {
+      values.push(`%${search}%`);
+      conditions.push(`(s.stall_name ILIKE $${values.length} OR s.business_type ILIKE $${values.length} OR s.section ILIKE $${values.length} OR a.business_name ILIKE $${values.length} OR p.name ILIKE $${values.length})`);
+    }
+    const whereSql = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
+
+    const baseSql = `
+      FROM stalls s
+      LEFT JOIN LATERAL (
+        SELECT * FROM applications a2 WHERE a2.stall_id = s.id AND a2.status IN ('pending', 'approved') ORDER BY a2.date_applied DESC LIMIT 1
+      ) a ON true
+      LEFT JOIN profiles p ON a.user_id = p.id
+    `;
+    const selectSql = `
+      SELECT
+        s.id, s.stall_name, s.status, s.business_type, s.section, s.floor, s.floor_area, s.notes, s.geometry, s.created_at,
+        a.id AS app_id, a.user_id AS app_user_id, a.business_name AS app_business_name, a.business_type AS app_business_type,
+        a.contract_start AS app_contract_start, a.contract_term_months AS app_contract_term_months, a.contract_end AS app_contract_end,
+        a.permit_path AS app_permit_path, a.additional_file_path AS app_additional_file_path, a.notes AS app_notes,
+        a.status AS app_status, a.admin_remarks AS app_admin_remarks, a.date_applied AS app_date_applied,
+        p.name AS app_applicant_name, p.email AS app_applicant_email, p.address AS app_applicant_address
+      ${baseSql}${whereSql}
+    `;
+
+    let sql = `${selectSql} ORDER BY s.stall_name ASC`;
+    let total;
+    const { limit, offset } = parsePagination(req);
+    if (limit != null) {
+      total = Number((await db.query(`SELECT COUNT(*) ${baseSql}${whereSql}`, values)).rows[0].count);
+      values.push(limit); sql += ` LIMIT $${values.length}`;
+      values.push(offset); sql += ` OFFSET $${values.length}`;
+    }
+    const { rows } = await db.query(sql, values);
+    const items = rows.map((r) => ({
+      stall: {
+        id: r.id, stall_name: r.stall_name, status: r.status, owner_id: null,
+        business_type: r.business_type, section: r.section, floor: r.floor,
+        floor_area: r.floor_area, notes: r.notes,
+        geometry: typeof r.geometry === "string" ? JSON.parse(r.geometry) : r.geometry,
+        created_at: r.created_at,
+      },
+      app: r.app_id ? mapApplicationRow({
+        id: r.app_id, user_id: r.app_user_id, stall_id: r.id,
+        business_name: r.app_business_name, business_type: r.app_business_type,
+        contract_start: r.app_contract_start, contract_term_months: r.app_contract_term_months,
+        contract_end: r.app_contract_end, permit_path: r.app_permit_path,
+        additional_file_path: r.app_additional_file_path, notes: r.app_notes,
+        status: r.app_status, admin_remarks: r.app_admin_remarks, date_applied: r.app_date_applied,
+        stall_name: r.stall_name, section: r.section, floor_area: r.floor_area,
+        applicant_name: r.app_applicant_name, applicant_email: r.app_applicant_email, applicant_address: r.app_applicant_address,
+      }) : null,
+    }));
+    res.json({ items, ...(total !== undefined ? { total } : {}) });
+  } catch (error) { next(error); }
 });
 
 app.post("/api/stalls", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
@@ -946,20 +1119,48 @@ app.post("/api/stalls/import", requireAuth, requireRole("admin", "super_admin"),
 app.get("/api/applications", async (req, res, next) => {
   try {
     await autoTerminateExpiredPermitDeadlines();
-    const { rows } = await db.query(`
+
+    const status = String(req.query.status || "").trim();
+    const search = String(req.query.search || "").trim();
+    const values = [];
+    const conditions = [];
+    if (status) { values.push(status); conditions.push(`a.status = $${values.length}`); }
+    if (search) {
+      values.push(`%${search}%`);
+      conditions.push(`(p.name ILIKE $${values.length} OR s.stall_name ILIKE $${values.length} OR a.business_name ILIKE $${values.length})`);
+    }
+    const whereSql = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
+
+    const APPLICATION_SORT_COLUMNS = { date: "a.date_applied", stall: "s.stall_name", status: "a.status" };
+    const sortColumn = APPLICATION_SORT_COLUMNS[String(req.query.sortField || "")] || "a.date_applied";
+    const sortDir = String(req.query.sortDir || "").toLowerCase() === "asc" ? "ASC" : "DESC";
+
+    const baseSql = `
+      FROM applications a
+      LEFT JOIN stalls s ON a.stall_id = s.id
+      LEFT JOIN profiles p ON a.user_id = p.id
+      ${whereSql}
+    `;
+    let sql = `
       SELECT
         a.id, a.user_id, a.stall_id, a.business_name, a.business_type,
         a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path,
         a.notes, a.status, a.admin_remarks, a.date_applied,
         s.stall_name, s.section, s.floor_area,
         p.name as applicant_name, p.email as applicant_email, p.address as applicant_address
-      FROM applications a
-      LEFT JOIN stalls s ON a.stall_id = s.id
-      LEFT JOIN profiles p ON a.user_id = p.id
-      ORDER BY a.date_applied DESC
-    `);
+      ${baseSql}
+      ORDER BY ${sortColumn} ${sortDir}
+    `;
+    let total;
+    const { limit, offset } = parsePagination(req);
+    if (limit != null) {
+      total = Number((await db.query(`SELECT COUNT(*) ${baseSql}`, values)).rows[0].count);
+      values.push(limit); sql += ` LIMIT $${values.length}`;
+      values.push(offset); sql += ` OFFSET $${values.length}`;
+    }
+    const { rows } = await db.query(sql, values);
     const applications = rows.map(mapApplicationRow);
-    res.json({ applications });
+    res.json({ applications, ...(total !== undefined ? { total } : {}) });
   } catch (error) { next(error); }
 });
 

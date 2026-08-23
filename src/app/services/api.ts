@@ -69,4 +69,57 @@ export async function listUsers(role?: UserRole) {
   return apiFetch<{ users: ApiProfile[] }>(`/users${suffix}`);
 }
 
+export interface ListUsersPageParams {
+  role?: UserRole | "all";
+  search?: string;
+  sortField?: "name" | "email" | "role" | "phone" | "createdAt";
+  sortDir?: "asc" | "desc";
+  page: number;
+  pageSize: number;
+}
+
+export async function listUsersPage(params: ListUsersPageParams) {
+  const query = new URLSearchParams();
+  if (params.role && params.role !== "all") query.set("role", params.role);
+  if (params.search) query.set("search", params.search);
+  if (params.sortField) query.set("sortField", params.sortField);
+  if (params.sortDir) query.set("sortDir", params.sortDir);
+  query.set("limit", String(params.pageSize));
+  query.set("offset", String((params.page - 1) * params.pageSize));
+  return apiFetch<{ users: ApiProfile[]; total: number }>(`/users?${query.toString()}`);
+}
+
+export interface CreateUserInput {
+  name: string;
+  email: string;
+  password: string;
+  role: UserRole;
+  phone?: string;
+  address?: string;
+  department?: string;
+}
+
+export async function createUser(data: CreateUserInput) {
+  const result = await apiFetch<{ user: ApiProfile }>("/users", { method: "POST", body: JSON.stringify(data) });
+  return result.user;
+}
+
+export interface UpdateUserInput {
+  name?: string;
+  phone?: string;
+  address?: string;
+  role?: UserRole;
+  department?: string;
+  password?: string;
+}
+
+export async function updateUserApi(id: string, data: UpdateUserInput) {
+  const result = await apiFetch<{ user: ApiProfile }>(`/users/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+  return result.user;
+}
+
+export async function deleteUserApi(id: string) {
+  return apiFetch<{ ok: true }>(`/users/${id}`, { method: "DELETE" });
+}
+
 export { apiFetch };

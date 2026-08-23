@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Store, Search, Filter, ScrollText, X,
   User, Building2, CalendarDays, Clock, FileText, AlertTriangle,
@@ -7,7 +7,9 @@ import {
 import { useStalls, type Stall } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
 import { type StoredStall } from "./stallsStorage";
-import { type Application } from "../services/applicationsApi";
+import { getStallsManagementPage, type Application, type StallManagementRow } from "../services/applicationsApi";
+import { TablePagination } from "./ui/TablePagination";
+import { showToast } from "./Toast";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function getActiveApp(stallId: string, apps: Application[]): Application | null {
@@ -193,11 +195,18 @@ function ContractInfoModal({
 
 // ── Panel ─────────────────────────────────────────────────────────────────────
 export function StallManagementPanel() {
+  const TABLE_PAGE_SIZE = 10;
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<"all" | "vacant" | "pending" | "occupied">("all");
   const [filterFloor, setFilterFloor] = useState<"all" | "1" | "2">("all");
   const [contractModal, setContractModal] = useState<{ stall: any; app: Application } | null>(null);
+  const [page, setPage] = useState(1);
+  const [rows, setRows] = useState<StallManagementRow[]>([]);
+  const [total, setTotal] = useState(0);
 
+  // Kept unpaginated: the stat cards (Total/Vacant/Pending/Occupied) need full counts.
+  // The table itself is fetched separately, page by page, via getStallsManagementPage below.
   const { stalls } = useStalls();
   const { applications } = useApplications();
 
@@ -213,24 +222,30 @@ export function StallManagementPanel() {
     occupied: enriched.filter(({ app }) => app?.status === "approved").length,
   }), [enriched]);
 
-  const filtered = enriched.filter(({ stall, app }) => {
-    const floorMatch = filterFloor === "all" || stall.floor === filterFloor;
-    const statusMatch =
-      filterStatus === "all" ||
-      (filterStatus === "vacant" && !app) ||
-      (filterStatus === "pending" && app?.status === "pending") ||
-      (filterStatus === "occupied" && app?.status === "approved");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery), 300);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
 
-    const q = searchQuery.toLowerCase();
-    const textMatch =
-      stall.stall_name.toLowerCase().includes(q) ||
-      stall.business_type.toLowerCase().includes(q) ||
-      `section ${stall.section}`.toLowerCase().includes(q) ||
-      (app?.businessName ?? "").toLowerCase().includes(q) ||
-      (app?.applicantName ?? "").toLowerCase().includes(q);
+  useEffect(() => { setPage(1); }, [debouncedSearch, filterStatus, filterFloor]);
 
-    return floorMatch && statusMatch && (!searchQuery || textMatch);
-  });
+  useEffect(() => {
+    void (async () => {
+      try {
+        const result = await getStallsManagementPage({
+          status: filterStatus,
+          floor: filterFloor,
+          search: debouncedSearch,
+          page,
+          pageSize: TABLE_PAGE_SIZE,
+        });
+        setRows(result.items);
+        setTotal(result.total);
+      } catch (error) {
+        showToast(`Failed to load stalls: ${(error as Error).message}`, "error");
+      }
+    })();
+  }, [page, debouncedSearch, filterStatus, filterFloor]);
 
   return (
     <div className="space-y-6">
@@ -292,8 +307,8 @@ export function StallManagementPanel() {
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        {filtered.length === 0 ? (
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        {rows.length === 0 ? (
           <div className="text-center py-20">
             <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
               <Store className="w-8 h-8 text-gray-400" />
@@ -308,21 +323,22 @@ export function StallManagementPanel() {
             </p>
           </div>
         ) : (
+          <>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
-                <tr className="border-b border-gray-200 bg-gray-50">
-                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase">Stall</th>
-                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase">Floor</th>
-                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase">Status</th>
-                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase">Tenant / Business</th>
-                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase">Contract Period</th>
-                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase">Expiry</th>
-                  <th className="px-5 py-3.5 text-right text-xs font-semibold text-gray-500 uppercase">Actions</th>
+                <tr className="border-b border-gray-100 bg-gray-50">
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500">Stall</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500">Floor</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500">Status</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500">Tenant / Business</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500">Contract Period</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500">Expiry</th>
+                  <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {filtered.map(({ stall, app }) => {
+                {rows.map(({ stall, app }) => {
                   const isOccupied = app?.status === "approved";
                   const isPending = app?.status === "pending";
                   const days = app?.status === "approved" ? daysUntilExpiry(app.contractEnd) : null;
@@ -420,6 +436,8 @@ export function StallManagementPanel() {
               </tbody>
             </table>
           </div>
+          <TablePagination page={page} pageSize={TABLE_PAGE_SIZE} total={total} onPageChange={setPage} />
+          </>
         )}
       </div>
 

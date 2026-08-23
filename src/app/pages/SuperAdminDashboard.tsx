@@ -9,16 +9,16 @@ import {
 } from "lucide-react";
 import { AdminMapView } from "../components/AdminMapView";
 import {
-  getAllUsers, deleteUser, updateUser, registerUser,
   type PubMarkUser, type UserRole, getSession,
 } from "../components/authStorage";
 import { useStalls } from "../hooks/useStalls";
 import { usePerimeters } from "../hooks/usePerimeters";
-import { importStalls, updateStall } from "../services/stallsApi";
+import { importStalls, updateStall, getStallsPage, type Stall } from "../services/stallsApi";
 import { updateStoredStall, getStoredStalls } from "../components/stallsStorage";
 import { useApplications } from "../hooks/useApplications";
-import { updateApplicationStatus, type Application } from "../services/applicationsApi";
-import { listUsers, type ApiProfile } from "../services/api";
+import { updateApplicationStatus, getApplicationsPage, type Application } from "../services/applicationsApi";
+import { listUsers, listUsersPage, createUser, updateUserApi, deleteUserApi, type ApiProfile } from "../services/api";
+import { TablePagination } from "../components/ui/TablePagination";
 import { migrateLegacyRequests } from "../services/legacyRequestMigration";
 import { getViolations, assignOfficer, type Violation } from "../components/violationsStore";
 import {
@@ -102,7 +102,7 @@ export function SuperAdminDashboard() {
   const [sortField, setSortField] = useState<SortField>("createdAt");
   const [sortAsc, setSortAsc] = useState(false);
   const [showForm, setShowForm] = useState(false);
-  const [editUser, setEditUser] = useState<PubMarkUser | null>(null);
+  const [editUser, setEditUser] = useState<ApiProfile | null>(null);
   const [form, setForm] = useState<UserFormData>(EMPTY_FORM);
   const [showPw, setShowPw] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -128,6 +128,26 @@ export function SuperAdminDashboard() {
   const [reportSearch, setReportSearch] = useState("");
   const [reportStatusFilter, setReportStatusFilter] = useState("all");
   const [requestOfficers, setRequestOfficers] = useState<ApiProfile[]>([]);
+
+  // Paginated table views (kept separate from the full-list `users`/`stalls`/`applications`
+  // state below, which is still needed unpaginated for Overview stats, role/status counts,
+  // "Recent…" widgets, and picker dropdowns elsewhere in this component).
+  const TABLE_PAGE_SIZE = 10;
+  const [tableUsers, setTableUsers] = useState<ApiProfile[]>([]);
+  const [usersTotal, setUsersTotal] = useState(0);
+  const [usersPageNum, setUsersPageNum] = useState(1);
+  const [debouncedUserSearch, setDebouncedUserSearch] = useState("");
+
+  const [tableStalls, setTableStalls] = useState<Stall[]>([]);
+  const [stallsTotal, setStallsTotal] = useState(0);
+  const [stallsPageNum, setStallsPageNum] = useState(1);
+  const [stallSearch, setStallSearch] = useState("");
+  const [debouncedStallSearch, setDebouncedStallSearch] = useState("");
+
+  const [tableApplications, setTableApplications] = useState<Application[]>([]);
+  const [applicationsTotal, setApplicationsTotal] = useState(0);
+  const [applicationsPageNum, setApplicationsPageNum] = useState(1);
+  const [appStatusFilter, setAppStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
 
   const { stalls, refetch: refetchStalls } = useStalls();
   const { applications, refetch: refetchApplications } = useApplications();
@@ -156,6 +176,71 @@ export function SuperAdminDashboard() {
       showToast(`Failed to load users: ${(error as Error).message}`, "error");
     }
   }
+
+  async function loadUsersTable() {
+    try {
+      const result = await listUsersPage({
+        role: roleFilter,
+        search: debouncedUserSearch,
+        sortField,
+        sortDir: sortAsc ? "asc" : "desc",
+        page: usersPageNum,
+        pageSize: TABLE_PAGE_SIZE,
+      });
+      setTableUsers(result.users);
+      setUsersTotal(result.total);
+    } catch (error) {
+      showToast(`Failed to load users: ${(error as Error).message}`, "error");
+    }
+  }
+
+  async function loadStallsTable() {
+    try {
+      const result = await getStallsPage({ search: debouncedStallSearch, page: stallsPageNum, pageSize: TABLE_PAGE_SIZE });
+      setTableStalls(result.stalls);
+      setStallsTotal(result.total);
+    } catch (error) {
+      showToast(`Failed to load stalls: ${(error as Error).message}`, "error");
+    }
+  }
+
+  async function loadApplicationsTable() {
+    try {
+      const result = await getApplicationsPage({ status: appStatusFilter, page: applicationsPageNum, pageSize: TABLE_PAGE_SIZE });
+      setTableApplications(result.applications);
+      setApplicationsTotal(result.total);
+    } catch (error) {
+      showToast(`Failed to load applications: ${(error as Error).message}`, "error");
+    }
+  }
+
+  // Debounce free-text search inputs before they trigger a fetch.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedUserSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedStallSearch(stallSearch), 300);
+    return () => clearTimeout(t);
+  }, [stallSearch]);
+
+  // Jump back to page 1 whenever a search/filter/sort changes the result set.
+  useEffect(() => { setUsersPageNum(1); }, [debouncedUserSearch, roleFilter, sortField, sortAsc]);
+  useEffect(() => { setStallsPageNum(1); }, [debouncedStallSearch]);
+  useEffect(() => { setApplicationsPageNum(1); }, [appStatusFilter]);
+
+  useEffect(() => {
+    if (tab === "users") void loadUsersTable();
+  }, [tab, usersPageNum, debouncedUserSearch, roleFilter, sortField, sortAsc]);
+
+  useEffect(() => {
+    if (tab === "stalls") void loadStallsTable();
+  }, [tab, stallsPageNum, debouncedStallSearch]);
+
+  useEffect(() => {
+    if (tab === "applications") void loadApplicationsTable();
+  }, [tab, applicationsPageNum, appStatusFilter]);
 
   async function loadRequestData() {
     const [violationRequestsResult, officerRequestsResult, officersResult, allUsersResult] = await Promise.allSettled([
@@ -263,37 +348,6 @@ export function SuperAdminDashboard() {
     }
   }, [tab]);
 
-  const filtered = users
-    .filter((u) => {
-      const matchRole = roleFilter === "all" || u.role === roleFilter;
-      const matchSearch =
-        !search ||
-        u.name.toLowerCase().includes(search.toLowerCase()) ||
-        u.email.toLowerCase().includes(search.toLowerCase());
-      return matchRole && matchSearch;
-    })
-    .sort((a, b) => {
-      let cmp = 0;
-      switch (sortField) {
-        case "name":
-          cmp = a.name.localeCompare(b.name);
-          break;
-        case "email":
-          cmp = a.email.localeCompare(b.email);
-          break;
-        case "role":
-          cmp = a.role.localeCompare(b.role);
-          break;
-        case "phone":
-          cmp = (a.phone || "").localeCompare(b.phone || "");
-          break;
-        case "createdAt":
-          cmp = a.createdAt.localeCompare(b.createdAt);
-          break;
-      }
-      return sortAsc ? cmp : -cmp;
-    });
-
   const stats = {
     total: users.length,
     vendors: users.filter((u) => u.role === "vendor").length,
@@ -312,13 +366,13 @@ export function SuperAdminDashboard() {
     setShowForm(true);
   }
 
-  function openEdit(u: PubMarkUser) {
+  function openEdit(u: ApiProfile) {
     setEditUser(u);
     setForm({
       name: u.name,
       email: u.email,
-      phone: u.phone,
-      address: u.address,
+      phone: u.phone || "",
+      address: u.address || "",
       password: "",
       role: u.role,
       department: u.department ?? "",
@@ -337,42 +391,49 @@ export function SuperAdminDashboard() {
     return errs;
   }
 
-  function handleSave() {
+  async function handleSave() {
     const errs = validateForm();
     if (Object.keys(errs).length > 0) { setFormErrors(errs); return; }
 
-    if (editUser) {
-      const updates: Partial<PubMarkUser> = {
-        name: form.name,
-        phone: form.phone,
-        address: form.address,
-        role: form.role,
-        department: form.department || undefined,
-      };
-      if (form.password) updates.passwordHash = form.password;
-      updateUser(editUser.id, updates);
-      showToast(`User "${form.name}" updated.`, "success");
-    } else {
-      registerUser({
-        name: form.name,
-        email: form.email,
-        phone: form.phone,
-        address: form.address,
-        passwordHash: form.password,
-        role: form.role,
-        department: form.department || undefined,
-      });
-      showToast(`User "${form.name}" created.`, "success");
+    try {
+      if (editUser) {
+        await updateUserApi(editUser.id, {
+          name: form.name,
+          phone: form.phone,
+          address: form.address,
+          role: form.role,
+          department: form.department || undefined,
+          password: form.password || undefined,
+        });
+        showToast(`User "${form.name}" updated.`, "success");
+      } else {
+        await createUser({
+          name: form.name,
+          email: form.email,
+          password: form.password,
+          role: form.role,
+          phone: form.phone,
+          address: form.address,
+          department: form.department || undefined,
+        });
+        showToast(`User "${form.name}" created.`, "success");
+      }
+      setShowForm(false);
+      await Promise.all([loadUsersTable(), loadUsers()]);
+    } catch (error) {
+      showToast(`Failed to save user: ${(error as Error).message}`, "error");
     }
-    setUsers(getAllUsers());
-    setShowForm(false);
   }
 
-  function handleDelete(id: string) {
-    deleteUser(id);
-    setUsers(getAllUsers());
-    setDeleteConfirm(null);
-    showToast("User deleted.", "success");
+  async function handleDelete(id: string) {
+    try {
+      await deleteUserApi(id);
+      setDeleteConfirm(null);
+      showToast("User deleted.", "success");
+      await Promise.all([loadUsersTable(), loadUsers()]);
+    } catch (error) {
+      showToast(`Failed to delete user: ${(error as Error).message}`, "error");
+    }
   }
 
   async function handleTerminationDecision() {
@@ -759,8 +820,8 @@ export function SuperAdminDashboard() {
             {/* Users table */}
             <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
               <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
-                <p className="text-xs text-gray-500">{filtered.length} user{filtered.length !== 1 ? "s" : ""}</p>
-                <button onClick={() => setUsers(getAllUsers())} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors">
+                <p className="text-xs text-gray-500">{usersTotal} user{usersTotal !== 1 ? "s" : ""}</p>
+                <button onClick={() => void loadUsersTable()} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors">
                   <RefreshCw className="w-3.5 h-3.5 text-gray-400" />
                 </button>
               </div>
@@ -817,7 +878,7 @@ export function SuperAdminDashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {filtered.map((u) => (
+                    {tableUsers.map((u) => (
                       <tr key={u.id} className="hover:bg-gray-50 transition-colors">
                         <td className="px-5 py-3.5">
                           <div className="flex items-center gap-2.5">
@@ -834,7 +895,7 @@ export function SuperAdminDashboard() {
                           </span>
                         </td>
                         <td className="px-5 py-3.5 text-gray-500">{u.phone || "—"}</td>
-                        <td className="px-5 py-3.5 text-gray-500">{formatDate(u.createdAt)}</td>
+                        <td className="px-5 py-3.5 text-gray-500">{u.createdAt ? formatDate(u.createdAt) : "—"}</td>
                         <td className="px-5 py-3.5">
                           <div className="flex items-center gap-1">
                             <button
@@ -857,7 +918,7 @@ export function SuperAdminDashboard() {
                         </td>
                       </tr>
                     ))}
-                    {filtered.length === 0 && (
+                    {tableUsers.length === 0 && (
                       <tr>
                         <td colSpan={6} className="px-5 py-10 text-center text-sm text-gray-400">
                           No users match your search.
@@ -867,6 +928,7 @@ export function SuperAdminDashboard() {
                   </tbody>
                 </table>
               </div>
+              <TablePagination page={usersPageNum} pageSize={TABLE_PAGE_SIZE} total={usersTotal} onPageChange={setUsersPageNum} />
             </div>
           </>
         )}
@@ -928,35 +990,45 @@ export function SuperAdminDashboard() {
             )}
 
             <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <div className="px-5 py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-semibold text-gray-900">All Stalls</h3>
-                  <p className="text-xs text-gray-500 mt-0.5">{stalls.length} total stalls</p>
+                  <p className="text-xs text-gray-500 mt-0.5">{stallsTotal} total stalls</p>
+                </div>
+                <div className="relative sm:w-64">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Search stalls…"
+                    value={stallSearch}
+                    onChange={(e) => setStallSearch(e.target.value)}
+                    className="w-full pl-9 pr-4 py-2 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
                 </div>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-700">Stall Name</th>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-700">Section</th>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-700">Floor</th>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-700">Floor Area</th>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-700">Status</th>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-700">Business Type</th>
-                      <th className="px-4 py-3 text-center font-semibold text-gray-700">Actions</th>
+                      <th className="px-5 py-3 text-left font-semibold text-gray-500">Stall Name</th>
+                      <th className="px-5 py-3 text-left font-semibold text-gray-500">Section</th>
+                      <th className="px-5 py-3 text-left font-semibold text-gray-500">Floor</th>
+                      <th className="px-5 py-3 text-left font-semibold text-gray-500">Floor Area</th>
+                      <th className="px-5 py-3 text-left font-semibold text-gray-500">Status</th>
+                      <th className="px-5 py-3 text-left font-semibold text-gray-500">Business Type</th>
+                      <th className="px-5 py-3 text-center font-semibold text-gray-500">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {stalls.map((s) => (
+                    {tableStalls.map((s) => (
                       <tr key={s.id} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-4 py-3">
+                        <td className="px-5 py-3">
                           <span className="font-semibold text-gray-900">{s.stall_name}</span>
                         </td>
-                        <td className="px-4 py-3 text-gray-700">{s.section || "—"}</td>
-                        <td className="px-4 py-3 text-gray-700">Floor {s.floor}</td>
-                        <td className="px-4 py-3 text-gray-700">{s.floor_area || "—"}</td>
-                        <td className="px-4 py-3">
+                        <td className="px-5 py-3 text-gray-700">{s.section || "—"}</td>
+                        <td className="px-5 py-3 text-gray-700">Floor {s.floor}</td>
+                        <td className="px-5 py-3 text-gray-700">{s.floor_area || "—"}</td>
+                        <td className="px-5 py-3">
                           {editingStall === s.id ? (
                             <select
                               value={editStallData.status}
@@ -978,7 +1050,7 @@ export function SuperAdminDashboard() {
                             </span>
                           )}
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="px-5 py-3">
                           {editingStall === s.id ? (
                             <input
                               type="text"
@@ -991,7 +1063,7 @@ export function SuperAdminDashboard() {
                             <span className="text-gray-600">{s.business_type || "—"}</span>
                           )}
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="px-5 py-3">
                           <div className="flex items-center justify-center gap-1">
                             {editingStall === s.id ? (
                               <>
@@ -1002,7 +1074,7 @@ export function SuperAdminDashboard() {
                                         status: editStallData.status as "vacant" | "occupied" | "unavailable",
                                         business_type: editStallData.business_type,
                                       });
-                                      await refetchStalls();
+                                      await Promise.all([refetchStalls(), loadStallsTable()]);
                                       setEditingStall(null);
                                       showToast("Stall updated successfully.", "success");
                                     } catch (error) {
@@ -1035,9 +1107,9 @@ export function SuperAdminDashboard() {
                         </td>
                       </tr>
                     ))}
-                    {stalls.length === 0 && (
+                    {tableStalls.length === 0 && (
                       <tr>
-                        <td colSpan={7} className="px-4 py-10 text-center text-sm text-gray-400">
+                        <td colSpan={7} className="px-5 py-10 text-center text-sm text-gray-400">
                           No stalls found
                         </td>
                       </tr>
@@ -1045,6 +1117,7 @@ export function SuperAdminDashboard() {
                   </tbody>
                 </table>
               </div>
+              <TablePagination page={stallsPageNum} pageSize={TABLE_PAGE_SIZE} total={stallsTotal} onPageChange={setStallsPageNum} />
             </div>
           </>
         )}
@@ -1054,27 +1127,45 @@ export function SuperAdminDashboard() {
           <div className="flex gap-5 h-[calc(100vh-14rem)]">
             {/* Left: Applications table */}
             <div className={`${selectedApplication ? "flex-1" : "w-full"} bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden flex flex-col`}>
-              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between flex-shrink-0">
-                <div>
+              <div className="px-5 py-4 border-b border-gray-100 flex flex-col gap-3 flex-shrink-0">
+                <div className="flex items-center justify-between">
                   <h3 className="text-sm font-semibold text-gray-900">All Applications</h3>
-                  <p className="text-xs text-gray-500 mt-0.5">{applications.length} total applications</p>
+                  <p className="text-xs text-gray-500">{applicationsTotal} total applications</p>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {(["all", "pending", "approved", "rejected"] as const).map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => setAppStatusFilter(f)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
+                        appStatusFilter === f
+                          ? "bg-gradient-to-r from-purple-600 to-purple-500 text-white shadow-sm"
+                          : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50"
+                      }`}
+                    >
+                      {f.charAt(0).toUpperCase() + f.slice(1)}
+                      {f !== "all" && (
+                        <span className="ml-1.5 opacity-70">
+                          ({applications.filter((a) => a.status === f).length})
+                        </span>
+                      )}
+                    </button>
+                  ))}
                 </div>
               </div>
               <div className="overflow-auto flex-1">
                 <table className="w-full text-xs">
                   <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
                     <tr>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-700">Applicant</th>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-700">Stall</th>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-700">Business Name</th>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-700">Status</th>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-700">Date Applied</th>
+                      <th className="px-5 py-3 text-left font-semibold text-gray-500">Applicant</th>
+                      <th className="px-5 py-3 text-left font-semibold text-gray-500">Stall</th>
+                      <th className="px-5 py-3 text-left font-semibold text-gray-500">Business Name</th>
+                      <th className="px-5 py-3 text-left font-semibold text-gray-500">Status</th>
+                      <th className="px-5 py-3 text-left font-semibold text-gray-500">Date Applied</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {applications
-                      .sort((a, b) => new Date(b.dateApplied).getTime() - new Date(a.dateApplied).getTime())
-                      .map((app) => (
+                    {tableApplications.map((app) => (
                         <tr
                           key={app.id}
                           onClick={() => setSelectedApplication(app)}
@@ -1082,12 +1173,12 @@ export function SuperAdminDashboard() {
                             selectedApplication?.id === app.id ? "bg-purple-50" : "hover:bg-gray-50"
                           }`}
                         >
-                          <td className="px-4 py-3">
+                          <td className="px-5 py-3">
                             <span className="font-semibold text-gray-900">{app.applicantName}</span>
                           </td>
-                          <td className="px-4 py-3 text-gray-700">{app.stallName}</td>
-                          <td className="px-4 py-3 text-gray-700">{app.businessName}</td>
-                          <td className="px-4 py-3">
+                          <td className="px-5 py-3 text-gray-700">{app.stallName}</td>
+                          <td className="px-5 py-3 text-gray-700">{app.businessName}</td>
+                          <td className="px-5 py-3">
                             <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${
                               app.status === "approved" ? "bg-green-100 text-green-700" :
                               app.status === "rejected" ? "bg-red-100 text-red-700" :
@@ -1096,12 +1187,12 @@ export function SuperAdminDashboard() {
                               {app.status}
                             </span>
                           </td>
-                          <td className="px-4 py-3 text-gray-500">{formatDate(app.dateApplied)}</td>
+                          <td className="px-5 py-3 text-gray-500">{formatDate(app.dateApplied)}</td>
                         </tr>
                       ))}
-                    {applications.length === 0 && (
+                    {tableApplications.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="px-4 py-10 text-center text-sm text-gray-400">
+                        <td colSpan={5} className="px-5 py-10 text-center text-sm text-gray-400">
                           No applications found
                         </td>
                       </tr>
@@ -1109,6 +1200,7 @@ export function SuperAdminDashboard() {
                   </tbody>
                 </table>
               </div>
+              <TablePagination page={applicationsPageNum} pageSize={TABLE_PAGE_SIZE} total={applicationsTotal} onPageChange={setApplicationsPageNum} />
             </div>
 
             {/* Right: Application details panel */}
@@ -1248,7 +1340,7 @@ export function SuperAdminDashboard() {
                       onClick={async () => {
                         try {
                           await updateApplicationStatus(selectedApplication.id, "rejected");
-                          await refetchApplications();
+                          await Promise.all([refetchApplications(), loadApplicationsTable()]);
                           setSelectedApplication(null);
                           showToast("Application rejected.", "error");
                         } catch (error) {
@@ -1264,7 +1356,7 @@ export function SuperAdminDashboard() {
                       onClick={async () => {
                         try {
                           await updateApplicationStatus(selectedApplication.id, "approved");
-                          await refetchApplications();
+                          await Promise.all([refetchApplications(), loadApplicationsTable()]);
                           setSelectedApplication(null);
                           showToast("Application approved.", "success");
                         } catch (error) {

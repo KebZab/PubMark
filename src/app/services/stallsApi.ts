@@ -19,6 +19,20 @@ export async function getStalls() {
   return result.stalls;
 }
 
+export interface GetStallsPageParams {
+  search?: string;
+  page: number;
+  pageSize: number;
+}
+
+export async function getStallsPage(params: GetStallsPageParams) {
+  const query = new URLSearchParams();
+  if (params.search) query.set("search", params.search);
+  query.set("limit", String(params.pageSize));
+  query.set("offset", String((params.page - 1) * params.pageSize));
+  return apiFetch<{ stalls: Stall[]; total: number }>(`/stalls?${query.toString()}`);
+}
+
 export async function createStall(data: Omit<Stall, "id" | "owner_id" | "status" | "created_at">) {
   const result = await apiFetch<{ stall: Stall }>("/stalls", {
     method: "POST",

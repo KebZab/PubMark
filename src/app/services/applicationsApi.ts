@@ -33,6 +33,49 @@ export async function getApplications(): Promise<Application[]> {
   return result.applications;
 }
 
+export interface GetApplicationsPageParams {
+  status?: "pending" | "approved" | "rejected" | "all";
+  search?: string;
+  sortField?: "date" | "stall" | "status";
+  sortDir?: "asc" | "desc";
+  page: number;
+  pageSize: number;
+}
+
+export async function getApplicationsPage(params: GetApplicationsPageParams) {
+  const query = new URLSearchParams();
+  if (params.status && params.status !== "all") query.set("status", params.status);
+  if (params.search) query.set("search", params.search);
+  if (params.sortField) query.set("sortField", params.sortField);
+  if (params.sortDir) query.set("sortDir", params.sortDir);
+  query.set("limit", String(params.pageSize));
+  query.set("offset", String((params.page - 1) * params.pageSize));
+  return apiFetch<{ applications: Application[]; total: number }>(`/applications?${query.toString()}`);
+}
+
+export interface StallManagementRow {
+  stall: import("./stallsApi").Stall;
+  app: Application | null;
+}
+
+export interface GetStallsManagementPageParams {
+  status?: "vacant" | "pending" | "occupied" | "all";
+  floor?: "1" | "2" | "all";
+  search?: string;
+  page: number;
+  pageSize: number;
+}
+
+export async function getStallsManagementPage(params: GetStallsManagementPageParams) {
+  const query = new URLSearchParams();
+  if (params.status && params.status !== "all") query.set("status", params.status);
+  if (params.floor && params.floor !== "all") query.set("floor", params.floor);
+  if (params.search) query.set("search", params.search);
+  query.set("limit", String(params.pageSize));
+  query.set("offset", String((params.page - 1) * params.pageSize));
+  return apiFetch<{ items: StallManagementRow[]; total: number }>(`/stalls/management?${query.toString()}`);
+}
+
 export async function getApplicationById(id: string): Promise<Application | null> {
   const apps = await getApplications();
   return apps.find(a => a.id === id) ?? null;
