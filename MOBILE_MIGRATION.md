@@ -225,10 +225,10 @@ exactly.
 
 - [x] Dashboard — Home, Applications, Notices
 - [x] Map — Leaflet + OpenStreetMap in a WebView, same as web
-- [ ] Application form
-- [ ] Application details
-- [ ] Transfer accept — unblocked, `/api/transfers` now exists
-- [ ] Phase 3 complete
+- [x] Application form — camera or file permit, contract term picker
+- [x] Application details — permit upload, transfer offer
+- [x] Transfer accept — Transfers tab, accept/decline, history
+- [x] Phase 3 complete
 
 ---
 
@@ -244,11 +244,11 @@ exactly.
 **YOU do, per screen:** same as Phase 3 — open on phone, compare to web as
 the same officer account.
 
-- [ ] Dashboard
-- [ ] Map
-- [ ] Violation reporting
-- [ ] Receipts
-- [ ] Phase 4 complete
+- [x] Violations — report with camera evidence, resolve/dismiss
+- [x] Check requests — complete inspections with findings + photos
+- [x] Map — stalls flagged by open violations
+- [x] Receipts — filename only, no real upload (same as permits/evidence)
+- [x] Phase 4 complete
 
 ---
 
@@ -278,3 +278,51 @@ later.
 - **Shared database reminder:** the mobile app talks to the same live
   Supabase database as the web app. Data created on the phone shows up on
   the web immediately, and vice versa.
+
+---
+
+## Where we left off
+
+Paused mid-Phase 3. Everything below is working and tested — nothing is
+half-finished or broken.
+
+### Working today
+
+- **Backend** — all routes on Supabase. Login returns a token *and* the old
+  cookie, so web and mobile both work.
+- **Mobile (vendor)** — login, role routing, Home, Applications, Notices, Map,
+  and the application form (with camera permit capture).
+- **Web** — unchanged from the user's point of view, but transfers and archive
+  now use the database instead of browser storage.
+
+### To resume
+
+Two vendor screens finish Phase 3:
+1. **Application details** — open one application, upload a permit if missing.
+2. **Transfer accept** — accept or decline a stall offer. The `/api/transfers`
+   routes already exist, so this is mobile-side work only.
+
+Then Phase 4 (officer screens) and Phase 5 (installable APK).
+
+### Two things to know before continuing
+
+**Officer receipts is the one genuinely tricky screen left.** Every other
+"file" in this app stores only a filename — no bytes move. Receipts are the
+exception: they upload real files to Supabase Storage. That needs one-time
+setup (a `receipts` storage bucket, plus `SUPABASE_URL` and
+`SUPABASE_SERVICE_ROLE_KEY` in `server/.env`) — see `server/README.md`. Worth
+confirming that's done before building the screen.
+
+**`CLAUDE.md` is out of date.** It still describes the pre-Supabase, pre-mobile
+layout, so a fresh session would start with a materially wrong picture. Worth
+updating before handing this to anyone (or to a new session).
+
+### Starting it up
+
+```
+npm run dev          # project root — starts both API and web app
+cd mobile && npx expo start   # separate terminal, for the phone
+```
+
+If the phone can't reach the API, it is almost always Windows Firewall on port
+4000 — see the Phase 1 notes above.

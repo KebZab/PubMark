@@ -94,6 +94,9 @@ export async function createApplication(data: Omit<Application, "id" | "status" 
       permitPath: data.permitFileName,
       additionalFilePath: data.additionalFileName,
       notes: data.notes,
+      // Was previously dropped here, so whatever the form collected was
+      // silently discarded and the profile address shown instead.
+      applicantAddress: data.applicantAddress,
     }),
   });
   return result.application;

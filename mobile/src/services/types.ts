@@ -56,3 +56,101 @@ export interface Stall {
   geometry: { type: string; coordinates: number[][][] };
   created_at: string;
 }
+
+export type TransferStatus = "pending" | "accepted" | "declined";
+
+export interface TransferRequest {
+  id: string;
+  fromUserId: string;
+  fromUserName: string;
+  fromUserEmail: string;
+  toUserId: string;
+  toUserName: string;
+  toUserEmail: string;
+  stallId: string;
+  stallName: string;
+  stallSection: string;
+  stallFloor: string;
+  floorArea: string;
+  originalApplicationId: string;
+  status: TransferStatus;
+  createdAt: string;
+  respondedAt: string | null;
+}
+
+export type ViolationCategory =
+  | "Illegal Vending" | "Health Violation" | "Fire Hazard"
+  | "Unauthorized Expansion" | "Noise Violation" | "Improper Waste Disposal"
+  | "Permit Expired" | "Other";
+
+export type ViolationStatus = "open" | "resolved" | "dismissed";
+
+export interface EvidenceFile {
+  name: string;
+  type: "image" | "video" | "document";
+  size: string;
+}
+
+export interface Violation {
+  id: string;
+  stallId: string;
+  stallName: string | null;
+  vendorName: string;
+  officerId: string;
+  officerName: string | null;
+  category: ViolationCategory;
+  description: string;
+  status: ViolationStatus;
+  evidence: EvidenceFile[];
+  remarks: string;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+export type CheckPriority = "low" | "normal" | "high" | "urgent";
+export type CheckStatus = "pending" | "completed" | "cancelled";
+
+export interface CheckRequest {
+  id: string;
+  stallId: string;
+  stallName: string | null;
+  requestedBy: string;
+  requestedByName: string | null;
+  assignedTo: string | null;
+  assignedToName: string | null;
+  priority: CheckPriority;
+  reason: string;
+  notes: string;
+  status: CheckStatus;
+  createdAt: string;
+  completedAt: string | null;
+  completionNotes: string;
+  completionSummary: string;
+  completionFiles: EvidenceFile[];
+}
+
+export type ReceiptStatus = "pending" | "verified" | "rejected";
+
+export interface PaymentReceipt {
+  id: string;
+  stallId: string;
+  stallName: string | null;
+  vendorId: string;
+  vendorName: string;
+  submittedBy: string;
+  submittedByName: string;
+  submittedByRole: string;
+  amount: number | null;
+  receiptDate: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  /** Null when the receipt is metadata-only (no file uploaded). */
+  fileUrl: string | null;
+  notes: string;
+  status: ReceiptStatus;
+  reviewedByName: string | null;
+  reviewedAt: string | null;
+  remarks: string;
+  createdAt: string;
+}

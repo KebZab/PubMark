@@ -11,7 +11,7 @@ import type { Stall } from "../../services/types";
 
 const FLOORS = ["1", "2"] as const;
 
-export default function MapScreen() {
+export default function MapScreen({ navigation }: any) {
   const { user } = useAuth();
   const stallsQuery = useApiData(getStalls);
   const appsQuery = useApiData(getApplications);
@@ -127,7 +127,17 @@ export default function MapScreen() {
           ) : selectedStyle.occupied ? (
             <Note tone="gray" text="This stall is currently taken by another vendor." />
           ) : (
-            <Note tone="teal" text="This stall is available. Applying from the app is coming next." />
+            <Pressable
+              onPress={() =>
+                navigation.navigate("ApplyForStall", {
+                  stallId: selected.id,
+                  stallName: selected.stall_name,
+                })
+              }
+              className="mt-3 items-center rounded-xl bg-primary py-3.5"
+            >
+              <Text className="text-sm font-semibold text-white">Apply for this stall</Text>
+            </Pressable>
           )}
         </View>
       ) : null}

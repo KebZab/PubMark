@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { RefreshControl, ScrollView, Text, View, Pressable } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../context/AuthContext";
 import { useApiData } from "../../hooks/useApiData";
@@ -10,7 +11,7 @@ import type { Application, ApplicationStatus } from "../../services/types";
 type Filter = "all" | ApplicationStatus;
 const FILTERS: Filter[] = ["all", "pending", "approved", "rejected"];
 
-export default function ApplicationsScreen() {
+export default function ApplicationsScreen({ navigation }: any) {
   const { user } = useAuth();
   const { data, loading, error, refetch } = useApiData(getApplications);
   const [filter, setFilter] = useState<Filter>("all");
@@ -66,10 +67,17 @@ export default function ApplicationsScreen() {
         ) : (
           <View className="gap-3 px-4 pt-4">
             {shown.map((app) => (
-              <Card key={app.id} className="p-4">
+              <Pressable
+                key={app.id}
+                onPress={() => navigation.navigate("ApplicationDetail", { application: app })}
+              >
+              <Card className="p-4">
                 <View className="flex-row items-start justify-between">
                   <View className="flex-1 pr-3">
-                    <Text className="text-sm font-semibold text-gray-900">{app.stallName ?? "Stall"}</Text>
+                    <View className="flex-row items-center gap-1">
+                      <Text className="text-sm font-semibold text-gray-900">{app.stallName ?? "Stall"}</Text>
+                      <Ionicons name="chevron-forward" size={13} color="#9ca3af" />
+                    </View>
                     <Text className="mt-0.5 text-xs text-gray-500">
                       {app.businessName} · {app.businessType}
                     </Text>
@@ -94,6 +102,7 @@ export default function ApplicationsScreen() {
                   </View>
                 ) : null}
               </Card>
+              </Pressable>
             ))}
           </View>
         )}

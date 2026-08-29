@@ -983,7 +983,9 @@ app.get("/api/stalls/management", async (req, res, next) => {
         a.contract_start AS app_contract_start, a.contract_term_months AS app_contract_term_months, a.contract_end AS app_contract_end,
         a.permit_path AS app_permit_path, a.additional_file_path AS app_additional_file_path, a.notes AS app_notes,
         a.status AS app_status, a.admin_remarks AS app_admin_remarks, a.date_applied AS app_date_applied,
-        p.name AS app_applicant_name, p.email AS app_applicant_email, p.address AS app_applicant_address
+        p.name AS app_applicant_name, p.email AS app_applicant_email,
+        -- Application's own address if set, otherwise the vendor's profile one.
+        COALESCE(a.applicant_address, p.address) AS app_applicant_address
       ${baseSql}${whereSql}
     `;
 
@@ -1160,7 +1162,10 @@ app.get("/api/applications", async (req, res, next) => {
         a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path,
         a.notes, a.status, a.admin_remarks, a.date_applied,
         s.stall_name, s.section, s.floor_area,
-        p.name as applicant_name, p.email as applicant_email, p.address as applicant_address
+        p.name as applicant_name, p.email as applicant_email,
+        -- The application's own address wins; older rows have none, so fall
+        -- back to the vendor's profile address.
+        a.applicant_address, p.address
       ${baseSql}
       ORDER BY ${sortColumn} ${sortDir}
     `;
@@ -1179,17 +1184,17 @@ app.get("/api/applications", async (req, res, next) => {
 
 app.post("/api/applications", requireAuth, requireRole("vendor"), async (req, res, next) => {
   try {
-    const { stallId, businessName, businessType, contractStart, contractTermMonths, contractEnd, permitPath, additionalFilePath, notes } = req.body;
+    const { stallId, businessName, businessType, contractStart, contractTermMonths, contractEnd, permitPath, additionalFilePath, notes, applicantAddress } = req.body;
     if (!stallId || !businessName || !businessType || !contractStart || !contractTermMonths || !contractEnd) {
       return res.status(400).json({ message: "Missing required fields." });
     }
     const id = crypto.randomUUID();
     await db.query(
-      "INSERT INTO applications (id, user_id, stall_id, business_name, business_type, contract_start, contract_term_months, contract_end, permit_path, additional_file_path, notes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
-      [id, req.auth.sub, stallId, businessName, businessType, contractStart, parseInt(contractTermMonths), contractEnd, permitPath || null, additionalFilePath || null, notes || ""]
+      "INSERT INTO applications (id, user_id, stall_id, business_name, business_type, contract_start, contract_term_months, contract_end, permit_path, additional_file_path, notes, applicant_address) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+      [id, req.auth.sub, stallId, businessName, businessType, contractStart, parseInt(contractTermMonths), contractEnd, permitPath || null, additionalFilePath || null, notes || "", (applicantAddress || "").trim() || null]
     );
     const { rows } = await db.query(
-      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
+      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
       [id]
     );
     const app = mapApplicationRow(rows[0]);
@@ -1207,7 +1212,7 @@ app.patch("/api/applications/:id", requireAuth, requireRole("admin", "super_admi
     values.push(req.params.id);
     await db.query(`UPDATE applications SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
     const { rows } = await db.query(
-      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
+      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
       [req.params.id]
     );
     if (!rows[0]) return res.status(404).json({ message: "Application not found." });
@@ -1238,7 +1243,7 @@ app.patch("/api/applications/:id/permit", requireAuth, async (req, res, next) =>
     );
 
     const { rows } = await db.query(
-      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
+      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
       [req.params.id]
     );
     if (!rows[0]) return res.status(404).json({ message: "Application not found." });
@@ -1313,7 +1318,10 @@ app.post("/api/receipts", requireAuth, requireRole("vendor", "officer"), async (
     const notes = String(req.body.notes || "").trim();
     const file = req.body.file || {};
     if (!stallId) return res.status(400).json({ message: "Stall is required." });
-    if (!file.name || !file.type || !file.base64) return res.status(400).json({ message: "A receipt file is required." });
+    // base64 is optional: clients that can upload the real file (the web app)
+    // send it and it goes to Storage. Clients that only record the file's name
+    // — the same way permits and violation evidence work — may omit it.
+    if (!file.name || !file.type) return res.status(400).json({ message: "A receipt file is required." });
     if (amount !== null && !Number.isFinite(amount)) return res.status(400).json({ message: "Amount must be a number." });
 
     const { rows: activeAppRows } = await db.query(
@@ -1336,8 +1344,13 @@ app.post("/api/receipts", requireAuth, requireRole("vendor", "officer"), async (
       "INSERT INTO payment_receipts (id, stall_id, vendor_id, submitted_by, amount, receipt_date, storage_path, file_name, mime_type, file_size, notes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
       [id, stallId, vendorId, req.auth.sub, amount, receiptDate, "", file.name, file.type, Number(file.size) || 0, notes || null]
     );
-    const storagePath = await uploadReceiptFile(id, file.base64, file.name, file.type);
-    await db.query("UPDATE payment_receipts SET storage_path = $1 WHERE id = $2", [storagePath, id]);
+    // Only upload when the client actually sent file contents. Without it the
+    // receipt is metadata only, so storage_path stays empty and no signed URL
+    // is generated later.
+    if (file.base64) {
+      const storagePath = await uploadReceiptFile(id, file.base64, file.name, file.type);
+      await db.query("UPDATE payment_receipts SET storage_path = $1 WHERE id = $2", [storagePath, id]);
+    }
 
     const { rows } = await db.query(`${PAYMENT_RECEIPT_SELECT} WHERE pr.id = $1`, [id]);
     res.status(201).json({ receipt: await mapPaymentReceiptRow(rows[0]) });

@@ -1,6 +1,6 @@
 import { getToken, type StoredProfile } from "./tokenStore";
 import { resolveApiBaseUrl } from "./apiBaseUrl";
-import type { Announcement, Application, Stall } from "./types";
+import type { Announcement, Application, CheckRequest, CheckStatus, PaymentReceipt, Stall, TransferRequest, Violation, ViolationStatus } from "./types";
 
 // Mirrors src/app/services/api.ts in the web app, with one difference:
 // the web app relies on an httpOnly session cookie, which React Native does
@@ -102,8 +102,116 @@ export async function createApplication(input: {
   permitPath?: string | null;
   additionalFilePath?: string | null;
   notes?: string;
+  /** Optional; falls back to the vendor's profile address when omitted. */
+  applicantAddress?: string;
 }) {
   return apiFetch<{ application: Application }>("/applications", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+/** Vendors may attach a permit to their own application after submitting. */
+export async function updateApplicationPermit(id: string, permitFileName: string) {
+  return apiFetch<{ application: Application }>(`/applications/${id}/permit`, {
+    method: "PATCH",
+    body: JSON.stringify({ permitFileName }),
+  });
+}
+
+// ── Stall transfers ─────────────────────────────────────────────────────────
+
+export async function getTransfers() {
+  return apiFetch<{ transfers: TransferRequest[] }>("/transfers");
+}
+
+export async function createTransfer(input: {
+  stallId: string;
+  toUserEmail: string;
+  originalApplicationId: string;
+}) {
+  return apiFetch<{ transfer: TransferRequest }>("/transfers", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function respondToTransfer(id: string, status: "accepted" | "declined") {
+  return apiFetch<{ transfer: TransferRequest }>(`/transfers/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
+}
+
+// ── Officer: violations and inspections ─────────────────────────────────────
+
+export async function getViolations() {
+  return apiFetch<{ violations: Violation[] }>("/violations");
+}
+
+export async function createViolation(input: {
+  stallId: string;
+  category: string;
+  description: string;
+  vendorId?: string | null;
+  remarks?: string;
+  evidence?: { name: string; type: string; size: string }[];
+}) {
+  return apiFetch<{ violation: Violation }>("/violations", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateViolation(
+  id: string,
+  patch: { status?: ViolationStatus; remarks?: string }
+) {
+  return apiFetch<{ violation: Violation }>(`/violations/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function getCheckRequests() {
+  return apiFetch<{ requests: CheckRequest[] }>("/check-requests");
+}
+
+export async function updateCheckRequest(
+  id: string,
+  patch: {
+    status?: CheckStatus;
+    completionNotes?: string;
+    completionSummary?: string;
+    assignedTo?: string | null;
+    completionFiles?: { name: string; type: string; size: string }[];
+  }
+) {
+  return apiFetch<{ request: CheckRequest }>(`/check-requests/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+// ── Payment receipts ────────────────────────────────────────────────────────
+
+export async function getReceipts() {
+  return apiFetch<{ receipts: PaymentReceipt[] }>("/receipts");
+}
+
+/**
+ * Records a receipt. We send the file's name and type but not its contents,
+ * matching how permits and violation evidence work elsewhere in the app — the
+ * server stores the metadata and skips the upload when no contents are given.
+ */
+export async function createReceipt(input: {
+  stallId: string;
+  amount?: string | null;
+  receiptDate?: string;
+  notes?: string;
+  file: { name: string; type: string; size?: number };
+}) {
+  return apiFetch<{ receipt: PaymentReceipt }>("/receipts", {
     method: "POST",
     body: JSON.stringify(input),
   });
