@@ -6,7 +6,7 @@ import {
 import {
   getArchivedRecords, deleteArchivedRecord, restoreArchivedRecord,
   type ArchivedRecord, type ArchiveType,
-} from "../components/archiveStore";
+} from "../services/archiveApi";
 import { getSession } from "../components/authStorage";
 import { DashboardLayout } from "../components/DashboardLayout";
 import { showToast } from "../components/Toast";
@@ -34,8 +34,24 @@ export function ArchiveManagement() {
   const [restoreConfirm, setRestoreConfirm] = useState<ArchivedRecord | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<ArchivedRecord | null>(null);
 
+  const [loading, setLoading] = useState(true);
+
+  // Archive records come from the API now, so this loads asynchronously.
   useEffect(() => {
-    setRecords(getArchivedRecords());
+    let cancelled = false;
+    getArchivedRecords()
+      .then((r) => {
+        if (!cancelled) setRecords(r);
+      })
+      .catch((e) => {
+        if (!cancelled) showToast(`Failed to load archive: ${(e as Error).message}`, "error");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const filtered = records.filter((r) => {
@@ -48,24 +64,32 @@ export function ArchiveManagement() {
     return matchType && matchSearch;
   });
 
-  function handleRestore(record: ArchivedRecord) {
-    const restored = restoreArchivedRecord(record.id);
-    if (restored) {
-      setRecords(getArchivedRecords());
+  async function handleRestore(record: ArchivedRecord) {
+    try {
+      const restored = await restoreArchivedRecord(record.id);
+      if (!restored) {
+        showToast("Restore failed. Record may not be restorable.", "error");
+        return;
+      }
+      setRecords(await getArchivedRecords());
       setRestoreConfirm(null);
       setSelectedRecord(null);
       showToast(`"${record.title}" restored successfully.`, "success");
-    } else {
-      showToast("Restore failed. Record may not be restorable.", "error");
+    } catch (e) {
+      showToast(`Restore failed: ${(e as Error).message}`, "error");
     }
   }
 
-  function handleDelete(record: ArchivedRecord) {
-    deleteArchivedRecord(record.id);
-    setRecords(getArchivedRecords());
-    setDeleteConfirm(null);
-    setSelectedRecord(null);
-    showToast("Record permanently deleted.", "success");
+  async function handleDelete(record: ArchivedRecord) {
+    try {
+      await deleteArchivedRecord(record.id);
+      setRecords(await getArchivedRecords());
+      setDeleteConfirm(null);
+      setSelectedRecord(null);
+      showToast("Record permanently deleted.", "success");
+    } catch (e) {
+      showToast(`Delete failed: ${(e as Error).message}`, "error");
+    }
   }
 
   const typeCounts = {

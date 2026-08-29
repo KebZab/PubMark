@@ -40,10 +40,13 @@ function isLocalDevOrigin(origin) {
   try {
     const url = new URL(origin);
     const port = Number(url.port || 80);
-    const isVitePort = port >= 5170 && port < 5180;
+    const isVitePort = port >= 5170 && port < 5180; // web app (Vite)
+    // Mobile app run in a browser. Expo starts at 8081 and walks upward if
+    // that port is taken, so allow a small range rather than one exact port.
+    const isExpoWebPort = (port >= 8081 && port < 8090) || port === 19006;
     const isLoopback = ["localhost", "127.0.0.1"].includes(url.hostname);
     const isLanIp = /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(url.hostname);
-    return isVitePort && (isLoopback || isLanIp);
+    return (isVitePort || isExpoWebPort) && (isLoopback || isLanIp);
   }
   catch { return false; }
 }
@@ -58,9 +61,19 @@ app.use(cors({
 app.use(express.json({ limit: "10mb" }));
 
 function cookieOptions() { return { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", maxAge: 8 * 60 * 60 * 1000 }; }
-function setSession(res, profile) { res.cookie("pubmark_session", jwt.sign({ sub: profile.id, role: profile.role }, jwtSecret, { expiresIn: "8h" }), cookieOptions()); }
+// Sets the session cookie (used by the web app) and returns the same token so
+// callers can also hand it to non-browser clients like the mobile app.
+function setSession(res, profile) {
+  const token = jwt.sign({ sub: profile.id, role: profile.role }, jwtSecret, { expiresIn: "8h" });
+  res.cookie("pubmark_session", token, cookieOptions());
+  return token;
+}
+// Accepts either an Authorization: Bearer token (mobile) or the session cookie
+// (web). React Native does not persist cookies reliably, hence the header path.
 function requireAuth(req, res, next) {
-  try { req.auth = jwt.verify(req.headers.cookie?.match(/(?:^|; )pubmark_session=([^;]+)/)?.[1] || "", jwtSecret); next(); }
+  const bearerToken = req.headers.authorization?.match(/^Bearer (.+)$/i)?.[1];
+  const cookieToken = req.headers.cookie?.match(/(?:^|; )pubmark_session=([^;]+)/)?.[1];
+  try { req.auth = jwt.verify(bearerToken || cookieToken || "", jwtSecret); next(); }
   catch { res.status(401).json({ message: "Sign in is required." }); }
 }
 function profile(row) { return { id: row.id, email: row.email, name: row.name, role: row.role, address: row.address, phone: row.phone, department: row.department, createdAt: row.created_at }; }
@@ -422,7 +435,7 @@ app.post("/api/auth/login", async (req, res, next) => {
     const { rows } = await db.query("SELECT * FROM profiles WHERE email = $1 LIMIT 1", [String(req.body.email || "").toLowerCase()]);
     const user = rows[0];
     if (!user || !(await bcrypt.compare(String(req.body.password || ""), user.password_hash))) return res.status(401).json({ message: "Invalid email or password." });
-    const result = profile(user); setSession(res, result); res.json({ profile: result });
+    const result = profile(user); const token = setSession(res, result); res.json({ profile: result, token });
   } catch (error) { next(error); }
 });
 
@@ -433,7 +446,7 @@ app.post("/api/auth/register", async (req, res, next) => {
     const id = crypto.randomUUID();
     const passwordHash = await bcrypt.hash(password, 12);
     await db.query("INSERT INTO profiles (id, email, password_hash, name, phone, address, role) VALUES ($1, $2, $3, $4, $5, $6, 'vendor')", [id, String(email).toLowerCase(), passwordHash, name, phone, address]);
-    const result = { id, email: String(email).toLowerCase(), name, phone, address, role: "vendor" }; setSession(res, result); res.status(201).json({ profile: result });
+    const result = { id, email: String(email).toLowerCase(), name, phone, address, role: "vendor" }; const token = setSession(res, result); res.status(201).json({ profile: result, token });
   } catch (error) { if (error?.code === "23505") return res.status(409).json({ message: "This email is already in use." }); next(error); }
 });
 
@@ -1343,6 +1356,195 @@ app.patch("/api/receipts/:id", requireAuth, requireRole("admin", "super_admin"),
     const { rows } = await db.query(`${PAYMENT_RECEIPT_SELECT} WHERE pr.id = $1`, [req.params.id]);
     if (!rows[0]) return res.status(404).json({ message: "Receipt not found." });
     res.json({ receipt: await mapPaymentReceiptRow(rows[0]) });
+  } catch (error) { next(error); }
+});
+
+// ── Archive ───────────────────────────────────────────────────────────────────
+// Previously localStorage-only, so archived records lived in one admin's
+// browser and were invisible to everyone else.
+
+const ARCHIVE_SELECT = `
+  SELECT a.id, a.type, a.title, a.description, a.original_id, a.original_data,
+         a.archived_by, a.reason, a.can_restore, a.archived_at,
+         p.name AS archived_by_name
+  FROM archive a
+  LEFT JOIN profiles p ON p.id = a.archived_by
+`;
+
+function mapArchiveRow(r) {
+  return {
+    id: r.id,
+    type: r.type,
+    title: r.title,
+    description: r.description ?? "",
+    originalId: r.original_id,
+    originalData: typeof r.original_data === "string" ? JSON.parse(r.original_data) : r.original_data,
+    archivedBy: r.archived_by,
+    archivedByName: r.archived_by_name ?? "Unknown",
+    reason: r.reason ?? "",
+    canRestore: r.can_restore,
+    archivedAt: r.archived_at,
+  };
+}
+
+app.get("/api/archive", requireAuth, requireRole("admin", "super_admin"), async (_req, res, next) => {
+  try {
+    const { rows } = await db.query(`${ARCHIVE_SELECT} ORDER BY a.archived_at DESC`);
+    res.json({ records: rows.map(mapArchiveRow) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/archive", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
+  try {
+    const type = String(req.body.type || "").trim();
+    const title = String(req.body.title || "").trim();
+    const originalId = String(req.body.originalId || "").trim();
+    if (!["application", "vendor", "stall", "violation"].includes(type)) {
+      return res.status(400).json({ message: "Invalid archive type." });
+    }
+    if (!title || !originalId) return res.status(400).json({ message: "Title and original record are required." });
+
+    const id = crypto.randomUUID();
+    await db.query(
+      `INSERT INTO archive (id, type, title, description, original_id, original_data, archived_by, reason, can_restore)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        id,
+        type,
+        title,
+        String(req.body.description || ""),
+        originalId,
+        JSON.stringify(req.body.originalData ?? {}),
+        req.auth.sub,
+        String(req.body.reason || ""),
+        req.body.canRestore !== false,
+      ]
+    );
+    const { rows } = await db.query(`${ARCHIVE_SELECT} WHERE a.id = $1`, [id]);
+    res.status(201).json({ record: mapArchiveRow(rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/archive/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
+  try {
+    await db.query("DELETE FROM archive WHERE id = $1", [req.params.id]);
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+// ── Stall ownership transfers ─────────────────────────────────────────────────
+// Previously browser-only (localStorage), which meant a transfer offer never
+// reached the recipient — they'd look in their own browser and find nothing.
+// Now shared through the database like everything else.
+
+const TRANSFER_SELECT = `
+  SELECT
+    t.id, t.from_user_id, t.to_user_id, t.stall_id, t.original_application_id,
+    t.status, t.created_at, t.responded_at,
+    fp.name AS from_user_name, fp.email AS from_user_email,
+    tp.name AS to_user_name, tp.email AS to_user_email,
+    s.stall_name, s.section AS stall_section, s.floor AS stall_floor, s.floor_area
+  FROM transfers t
+  LEFT JOIN profiles fp ON fp.id = t.from_user_id
+  LEFT JOIN profiles tp ON tp.id = t.to_user_id
+  LEFT JOIN stalls s ON s.id = t.stall_id
+`;
+
+// Shaped to match what the UI already expected from the old localStorage store.
+function mapTransferRow(r) {
+  return {
+    id: r.id,
+    fromUserId: r.from_user_id,
+    fromUserName: r.from_user_name,
+    fromUserEmail: r.from_user_email,
+    toUserId: r.to_user_id,
+    toUserName: r.to_user_name,
+    toUserEmail: r.to_user_email,
+    stallId: r.stall_id,
+    stallName: r.stall_name,
+    stallSection: r.stall_section,
+    stallFloor: r.stall_floor,
+    floorArea: r.floor_area,
+    originalApplicationId: r.original_application_id,
+    status: r.status,
+    createdAt: r.created_at,
+    respondedAt: r.responded_at,
+  };
+}
+
+app.get("/api/transfers", requireAuth, async (req, res, next) => {
+  try {
+    // Vendors only see transfers they sent or received; staff see everything.
+    const isStaff = ["admin", "super_admin"].includes(req.auth.role);
+    const { rows } = isStaff
+      ? await db.query(`${TRANSFER_SELECT} ORDER BY t.created_at DESC`)
+      : await db.query(
+          `${TRANSFER_SELECT} WHERE t.from_user_id = $1 OR t.to_user_id = $1 ORDER BY t.created_at DESC`,
+          [req.auth.sub]
+        );
+    res.json({ transfers: rows.map(mapTransferRow) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/transfers", requireAuth, requireRole("vendor"), async (req, res, next) => {
+  try {
+    const stallId = String(req.body.stallId || "").trim();
+    const toUserEmail = String(req.body.toUserEmail || "").trim().toLowerCase();
+    const originalApplicationId = String(req.body.originalApplicationId || "").trim();
+    if (!stallId || !toUserEmail || !originalApplicationId) {
+      return res.status(400).json({ message: "Stall, recipient email, and application are required." });
+    }
+
+    const { rows: recipients } = await db.query("SELECT id, role FROM profiles WHERE email = $1 LIMIT 1", [toUserEmail]);
+    const recipient = recipients[0];
+    if (!recipient) return res.status(404).json({ message: "No PubMark account found with this email." });
+    if (recipient.id === req.auth.sub) return res.status(400).json({ message: "You cannot transfer a stall to yourself." });
+
+    // The sender must actually hold this stall via an approved application.
+    const { rows: owned } = await db.query(
+      "SELECT id FROM applications WHERE id = $1 AND stall_id = $2 AND user_id = $3 AND status = 'approved' LIMIT 1",
+      [originalApplicationId, stallId, req.auth.sub]
+    );
+    if (!owned[0]) return res.status(403).json({ message: "You can only transfer a stall you currently hold." });
+
+    // One open offer per stall, so a stall can't be promised twice.
+    const { rows: existing } = await db.query(
+      "SELECT id FROM transfers WHERE stall_id = $1 AND status = 'pending' LIMIT 1",
+      [stallId]
+    );
+    if (existing[0]) return res.status(409).json({ message: "There is already a pending transfer for this stall." });
+
+    const id = crypto.randomUUID();
+    await db.query(
+      "INSERT INTO transfers (id, from_user_id, to_user_id, stall_id, original_application_id, status) VALUES ($1, $2, $3, $4, $5, 'pending')",
+      [id, req.auth.sub, recipient.id, stallId, originalApplicationId]
+    );
+    const { rows } = await db.query(`${TRANSFER_SELECT} WHERE t.id = $1`, [id]);
+    res.status(201).json({ transfer: mapTransferRow(rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.patch("/api/transfers/:id", requireAuth, async (req, res, next) => {
+  try {
+    const status = String(req.body.status || "").trim();
+    if (!["accepted", "declined"].includes(status)) {
+      return res.status(400).json({ message: "Status must be accepted or declined." });
+    }
+
+    const { rows: found } = await db.query("SELECT * FROM transfers WHERE id = $1 LIMIT 1", [req.params.id]);
+    const transfer = found[0];
+    if (!transfer) return res.status(404).json({ message: "Transfer not found." });
+    if (transfer.status !== "pending") return res.status(409).json({ message: "This transfer has already been answered." });
+
+    // Only the recipient decides; staff may also intervene.
+    const isStaff = ["admin", "super_admin"].includes(req.auth.role);
+    if (!isStaff && transfer.to_user_id !== req.auth.sub) {
+      return res.status(403).json({ message: "Only the recipient can respond to this transfer." });
+    }
+
+    await db.query("UPDATE transfers SET status = $1, responded_at = now() WHERE id = $2", [status, req.params.id]);
+    const { rows } = await db.query(`${TRANSFER_SELECT} WHERE t.id = $1`, [req.params.id]);
+    res.json({ transfer: mapTransferRow(rows[0]) });
   } catch (error) { next(error); }
 });
 

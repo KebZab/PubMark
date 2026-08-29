@@ -245,3 +245,57 @@ database is underneath.
 3. **Full smoke test:** `npm run dev:web` → log in as super-admin and admin →
    check stalls map, applications list, announcements, violations all load
    and can be edited — proves every rewritten route actually works, not just auth.
+
+---
+
+## Follow-up: finishing the localStorage cleanup
+
+After the main migration, an audit found three features still living in browser
+storage. All are now on Supabase.
+
+### Transfers — was a real bug, not just a gap
+
+Stall ownership transfers were stored in `localStorage`, meaning an offer was
+saved to the **sender's browser only**. The recipient — a different person on a
+different device — looked in their own browser and found nothing. The feature
+could not work as designed; it only appeared to work if both vendors shared a
+browser.
+
+Now `/api/transfers` (GET/POST/PATCH) with server-side rules:
+- Only the stall's current holder can offer it
+- One pending offer per stall
+- Only the recipient (or staff) can accept or decline
+- An answered offer can't be answered twice
+
+`transferStorage.ts` deleted; `ApplicationDetails`, `TransferAcceptForm`, and
+`UserDashboard` migrated to `services/transfersApi.ts`.
+
+### Archive — now shared
+
+`/api/archive` (GET/POST/DELETE), admin and super-admin only. Archived records
+were previously visible only to the admin whose browser created them.
+`archiveStore.ts` deleted; `ArchiveManagement` migrated to
+`services/archiveApi.ts`.
+
+### Dead code removed
+
+`inventoryStore.ts`, `announcementsStore.ts`, and `perimeterStore.ts` were
+imported by nothing — announcements and perimeters had already moved to the
+API, and inventory never had any UI at all. Deleted along with the obsolete
+"import your browser stalls to the database" banner in `SuperAdminDashboard`,
+which existed only to migrate off `localStorage` in the first place.
+
+### What legitimately stays in the browser
+
+These are UI state, not data. Storing them in a database would add latency for
+no benefit:
+
+| Key | Purpose |
+|---|---|
+| `pubmark_toast`, `pubmark_pending_toast` | Notification messages across a page navigation |
+| `pubmark_profile_cache` | Cached display name/role so the UI renders instantly on load |
+| `pubmark_seen_decisions` | Tracks which decisions a vendor has already been shown |
+
+`legacyMigration.ts` and `legacyRequestMigration.ts` also read old
+`pubmark_*` keys — that is their entire job, moving leftover pre-migration data
+into the API on first load.

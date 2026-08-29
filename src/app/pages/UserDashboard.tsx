@@ -48,7 +48,7 @@ import {
   createTransferRequest,
   updateTransferStatus,
   type TransferRequest,
-} from "../components/transferStorage";
+} from "../services/transfersApi";
 import { saveTerminationRequest } from "../components/terminationRequestsStore";
 import {
   formatPermitDeadline,
@@ -261,10 +261,28 @@ export function UserDashboard() {
   useEffect(() => {
     const s = getSession();
     if (!s) return;
-    setIncomingTransfers(
-      getTransfersByToEmail(s.email).filter((t) => t.status === "pending")
-    );
-    setOutgoingTransfers(getTransfersByFromUserId(s.userId));
+    let cancelled = false;
+
+    // Transfers come from the API now, so both lists load asynchronously.
+    (async () => {
+      try {
+        const [incoming, outgoing] = await Promise.all([
+          getTransfersByToEmail(s.email),
+          getTransfersByFromUserId(s.userId),
+        ]);
+        if (cancelled) return;
+        setIncomingTransfers(incoming.filter((t) => t.status === "pending"));
+        setOutgoingTransfers(outgoing);
+      } catch {
+        if (cancelled) return;
+        setIncomingTransfers([]);
+        setOutgoingTransfers([]);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeTab]);
 
   useEffect(() => {
@@ -360,41 +378,20 @@ export function UserDashboard() {
     if (!email) { setTransferError("Please enter an email address."); return; }
     if (email === session.email.toLowerCase()) { setTransferError("You cannot transfer to yourself."); return; }
 
-    // Check existing pending transfer for this stall
-    const existingPending = getTransfersByFromUserId(session.userId).find(
-      (t) => t.stallId === transferModal.stallId && t.status === "pending"
-    );
-    if (existingPending) {
-      setTransferError("A pending transfer already exists for this stall.");
-      return;
-    }
-
     setTransferSubmitting(true);
     try {
-      const { profile: targetUser } = await findUserByEmail(email);
-      const stalls = await (await import("../services/stallsApi")).getStalls();
-      const stallFloor = (stalls.find((s) => s.id === transferModal.stallId)?.floor ?? "1") as "1" | "2";
-
-      createTransferRequest({
-        fromUserId: session.userId,
-        fromUserName: session.name,
-        fromUserEmail: session.email,
-        toUserEmail: targetUser.email,
-        toUserId: targetUser.id,
-        toUserName: targetUser.name,
+      // The server resolves the recipient, verifies you hold this stall, and
+      // rejects a duplicate pending offer — so only the essentials go up.
+      const transfer = await createTransferRequest({
         stallId: transferModal.stallId,
-        stallName: transferModal.stallName,
-        stallSection: transferModal.stallSection,
-        stallFloor,
-        floorArea: transferModal.floorArea,
+        toUserEmail: email,
         originalApplicationId: transferModal.id,
       });
 
       setTransferModal(null);
       setTransferEmail("");
-      showToast(`Transfer offer sent to ${targetUser.name}!`, "success");
-      // Refresh outgoing transfers
-      setOutgoingTransfers(getTransfersByFromUserId(session.userId));
+      showToast(`Transfer offer sent to ${transfer.toUserName}!`, "success");
+      setOutgoingTransfers((prev) => [transfer, ...prev]);
     } catch (error) {
       setTransferError(error instanceof Error ? error.message : "Failed to find the account.");
     } finally {
@@ -402,10 +399,15 @@ export function UserDashboard() {
     }
   }
 
-  function handleDeclineTransfer(transferId: string) {
-    updateTransferStatus(transferId, "declined");
-    setIncomingTransfers((prev) => prev.filter((t) => t.id !== transferId));
-    showToast("Transfer offer declined.", "success");
+  async function handleDeclineTransfer(transferId: string) {
+    try {
+      await updateTransferStatus(transferId, "declined");
+      setIncomingTransfers((prev) => prev.filter((t) => t.id !== transferId));
+      showToast("Transfer offer declined.", "success");
+    } catch (error) {
+      // Don't drop it from the list if the server rejected the change.
+      showToast(`Failed to decline: ${(error as Error).message}`, "error");
+    }
   }
 
   return (

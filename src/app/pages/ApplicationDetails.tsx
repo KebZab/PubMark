@@ -16,7 +16,8 @@ import { getSession } from "../components/authStorage";
 import {
   getTransfersByFromUserId,
   createTransferRequest,
-} from "../components/transferStorage";
+  type TransferRequest,
+} from "../services/transfersApi";
 import { showToast } from "../components/Toast";
 import {
   formatPermitDeadline,
@@ -144,10 +145,26 @@ export function ApplicationDetails() {
     }
   }
 
-  const hasPendingTransfer = app && session
-    ? getTransfersByFromUserId(session.userId).some(
-        (t) => t.originalApplicationId === app.id && t.status === "pending"
-      )
+  // Transfers live in the database now, so this is loaded rather than computed.
+  const [myTransfers, setMyTransfers] = useState<TransferRequest[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!session) return;
+    getTransfersByFromUserId(session.userId)
+      .then((t) => {
+        if (!cancelled) setMyTransfers(t);
+      })
+      .catch(() => {
+        if (!cancelled) setMyTransfers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.userId]);
+
+  const hasPendingTransfer = app
+    ? myTransfers.some((t) => t.originalApplicationId === app.id && t.status === "pending")
     : false;
 
   async function handleTransferSubmit() {
@@ -155,34 +172,19 @@ export function ApplicationDetails() {
     const email = transferEmail.trim().toLowerCase();
     if (!email) { setTransferError("Please enter an email address."); return; }
     if (email === session.email.toLowerCase()) { setTransferError("You cannot transfer to yourself."); return; }
-    if (getTransfersByFromUserId(session.userId).some(
-      (t) => t.stallId === app.stallId && t.status === "pending"
-    )) {
-      setTransferError("A pending transfer already exists for this stall.");
-      return;
-    }
-    try {
-      const { profile: targetUser } = await findUserByEmail(email);
-      const stalls = await getStalls();
-      const stallFloor = (stalls.find((s) => s.id === app.stallId)?.floor ?? "1") as "1" | "2";
 
-      createTransferRequest({
-        fromUserId: session.userId,
-        fromUserName: session.name,
-        fromUserEmail: session.email,
-        toUserEmail: targetUser.email,
-        toUserId: targetUser.id,
-        toUserName: targetUser.name,
+    try {
+      // The server resolves the recipient, checks that you actually hold this
+      // stall, and rejects a second pending offer — so we just send the essentials.
+      const transfer = await createTransferRequest({
         stallId: app.stallId,
-        stallName: app.stallName,
-        stallSection: app.stallSection,
-        stallFloor,
-        floorArea: app.floorArea,
+        toUserEmail: email,
         originalApplicationId: app.id,
       });
+      setMyTransfers((prev) => [transfer, ...prev]);
       setShowTransferModal(false);
       setTransferEmail("");
-      showToast(`Transfer offer sent to ${targetUser.name}!`, "success");
+      showToast(`Transfer offer sent to ${transfer.toUserName}!`, "success");
     } catch (e) {
       setTransferError(`Failed to initiate transfer: ${(e as Error).message}`);
     }

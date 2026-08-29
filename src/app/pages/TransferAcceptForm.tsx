@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import {
   Upload, X, FileText, Check, ScrollText,
@@ -11,7 +11,7 @@ import {
 } from "../components/applicationsStorage";
 import { createApplication, updateApplicationStatus as updateApplicationStatusApi } from "../services/applicationsApi";
 import { getSession, getUserById } from "../components/authStorage";
-import { updateTransferStatus, getTransferById } from "../components/transferStorage";
+import { updateTransferStatus, getTransferById, type TransferRequest } from "../services/transfersApi";
 import { showToast } from "../components/Toast";
 
 const TERM_OPTIONS = [
@@ -43,7 +43,33 @@ export function TransferAcceptForm() {
 
   const session = getSession();
   const userProfile = session ? getUserById(session.userId) : null;
-  const transfer = transferId ? getTransferById(transferId) : null;
+
+  // Transfers now come from the API rather than localStorage, so this loads
+  // asynchronously. Tracking loading separately avoids flashing "not found"
+  // before the request has even come back.
+  const [transfer, setTransfer] = useState<TransferRequest | null>(null);
+  const [loadingTransfer, setLoadingTransfer] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!transferId) {
+      setLoadingTransfer(false);
+      return;
+    }
+    getTransferById(transferId)
+      .then((t) => {
+        if (!cancelled) setTransfer(t);
+      })
+      .catch(() => {
+        if (!cancelled) setTransfer(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingTransfer(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [transferId]);
 
   const [permitFile, setPermitFile] = useState<File | null>(null);
   const [additionalFile, setAdditionalFile] = useState<File | null>(null);
@@ -54,6 +80,14 @@ export function TransferAcceptForm() {
   const [startDate, setStartDate] = useState("");
   const [termMonths, setTermMonths] = useState("12");
   const [submitting, setSubmitting] = useState(false);
+
+  if (loadingTransfer) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6 max-w-md mx-auto">
+        <div className="w-8 h-8 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   // Redirect if transfer not found or not for this user or already responded
   if (!session || !transfer) {
@@ -140,8 +174,7 @@ export function TransferAcceptForm() {
         `Ownership transferred to ${session.name} (${session.email}) on ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}.`
       );
 
-      // Mark transfer as accepted (still localStorage for now, transfers domain not yet migrated)
-      updateTransferStatus(transfer.id, "accepted");
+      await updateTransferStatus(transfer.id, "accepted");
 
       showToast("Transfer accepted! Your application is now pending admin review.", "success");
       navigate(`/applications/${newApplication.id}`);

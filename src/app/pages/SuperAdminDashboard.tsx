@@ -13,8 +13,7 @@ import {
 } from "../components/authStorage";
 import { useStalls } from "../hooks/useStalls";
 import { usePerimeters } from "../hooks/usePerimeters";
-import { importStalls, updateStall, getStallsPage, type Stall } from "../services/stallsApi";
-import { updateStoredStall, getStoredStalls } from "../components/stallsStorage";
+import { updateStall, getStallsPage, type Stall } from "../services/stallsApi";
 import { useApplications } from "../hooks/useApplications";
 import { updateApplicationStatus, getApplicationsPage, type Application } from "../services/applicationsApi";
 import { listUsers, listUsersPage, createUser, updateUserApi, deleteUserApi, type ApiProfile } from "../services/api";
@@ -583,22 +582,6 @@ export function SuperAdminDashboard() {
     navigate(paths[newTab]);
   }
 
-  const handleImportStalls = async () => {
-    const localStalls = getStoredStalls();
-    if (localStalls.length === 0) {
-      showToast("No stalls to import", "info");
-      return;
-    }
-    try {
-      await importStalls(localStalls);
-      showToast(`Successfully imported ${localStalls.length} stall(s) to MySQL`, "success");
-      localStorage.removeItem("pubmark_stalls");
-      await refetchStalls();
-    } catch (error) {
-      showToast(`Import failed: ${(error as Error).message}`, "error");
-    }
-  };
-
   const openCheckRequestsCount = checkRequests.filter((r) => r.status === "pending").length;
 
   const TABS: { id: Tab; label: string; icon: React.ElementType; badge?: number | string }[] = [
@@ -943,21 +926,6 @@ export function SuperAdminDashboard() {
         {/* Stalls tab */}
         {tab === "stalls" && (
           <>
-            {getStoredStalls().length > 0 && (
-              <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 flex items-start gap-3 mb-4">
-                <AlertTriangle className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
-                <div className="flex-1">
-                  <p className="text-sm font-semibold text-blue-800">Migrate stalls to database</p>
-                  <p className="text-xs text-blue-700 mt-0.5">You have stalls in browser storage. Import them to MySQL to ensure they persist across devices.</p>
-                </div>
-                <button
-                  onClick={handleImportStalls}
-                  className="flex-shrink-0 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition-colors"
-                >
-                  Import Now
-                </button>
-              </div>
-            )}
             {perimeters.length === 0 ? (
               <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3">
                 <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
