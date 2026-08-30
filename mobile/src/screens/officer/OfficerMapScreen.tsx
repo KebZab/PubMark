@@ -3,7 +3,7 @@ import { Pressable, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useApiData } from "../../hooks/useApiData";
 import { getStalls, getViolations } from "../../services/api";
-import { ErrorState, LoadingState } from "../../components/ui";
+import { ErrorState, LoadingState, OfficerHeader } from "../../components/ui";
 import StallMap from "../../components/StallMap";
 import type { StallStyleInput } from "../../components/StallMap";
 import type { Stall } from "../../services/types";
@@ -56,6 +56,8 @@ export default function OfficerMapScreen() {
 
   return (
     <SafeAreaView className="flex-1 bg-gray-50" edges={["top"]}>
+      <OfficerHeader title="Stall Map" subtitle={`${Object.keys(openByStall).length} stall(s) with open violations`} />
+
       <View className="flex-row items-center gap-2 border-b border-gray-200 bg-white px-4 py-3">
         {FLOORS.map((f) => {
           const active = floor === f;

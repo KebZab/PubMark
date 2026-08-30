@@ -1,4 +1,6 @@
-import { ActivityIndicator, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, Text, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { useAuth } from "../context/AuthContext";
 import type { ApplicationStatus } from "../services/types";
 
 // Shared bits so every screen looks like the same app — and like the web app.
@@ -65,4 +67,57 @@ export function formatDate(value: string | null | undefined) {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+/**
+ * Header used across the officer screens. Shows who's signed in and gives them
+ * a way out from any tab, rather than hiding sign-out on a single screen.
+ */
+export function OfficerHeader({
+  title,
+  subtitle,
+  right,
+}: {
+  title: string;
+  subtitle?: string;
+  right?: React.ReactNode;
+}) {
+  const { user, signOut } = useAuth();
+
+  const confirmSignOut = () => {
+    if (Platform.OS === "web") {
+      signOut();
+      return;
+    }
+    Alert.alert("Sign out?", `You're signed in as ${user?.name}.`, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Sign out", style: "destructive", onPress: () => signOut() },
+    ]);
+  };
+
+  return (
+    <View className="border-b border-gray-200 bg-white px-5 py-4">
+      <View className="mb-2 flex-row items-center">
+        <Text className="flex-1 text-[11px] text-gray-400" numberOfLines={1}>
+          {user?.name} · Officer
+        </Text>
+        <Pressable
+          onPress={confirmSignOut}
+          hitSlop={10}
+          className="flex-row items-center rounded-lg bg-gray-100 px-2.5 py-1.5"
+        >
+          <Ionicons name="log-out-outline" size={13} color="#4b5563" />
+          <Text className="ml-1 text-[11px] font-semibold text-gray-600">Sign out</Text>
+        </Pressable>
+      </View>
+
+      <View className="flex-row items-center justify-between">
+        <View className="flex-1 pr-3">
+          <Text className="text-lg font-semibold text-gray-900">{title}</Text>
+          {subtitle ? <Text className="mt-0.5 text-xs text-gray-500">{subtitle}</Text> : null}
+        </View>
+        {right}
+      </View>
+    </View>
+  );
 }

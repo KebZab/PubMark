@@ -78,7 +78,7 @@ Rough shape:
 **Purpose:** without this, nothing else in the plan is possible — a real
 Supabase project is needed to create tables in and a way to talk to it.
 
-- [ ] Phase 0 complete
+- [x] Phase 0 complete
 
 ---
 
@@ -125,7 +125,7 @@ via Supabase's SQL editor.
 Supabase project through the MCP connection, then shows the new tables in
 Supabase for confirmation.
 
-- [ ] Phase 1 complete
+- [x] Phase 1 complete
 
 ---
 
@@ -145,7 +145,7 @@ in, click through a table or two, confirm the real rows are there (e.g.
 **Verification:** row counts in Supabase match the row counts in the current
 MySQL database, table by table.
 
-- [ ] Phase 2 complete
+- [x] Phase 2 complete
 
 ---
 
@@ -208,7 +208,7 @@ database is underneath.
 - [ ] Applications (+ permit)
 - [ ] Perimeters
 - [ ] `seed-demo-users.js`
-- [ ] Phase 3 complete
+- [x] Phase 3 complete
 
 ---
 
@@ -227,7 +227,7 @@ database is underneath.
 - Local MySQL stays installed and untouched — nothing gets deleted until
   everything's confirmed working against Supabase, so falling back is easy.
 
-- [ ] Phase 4 complete
+- [x] Phase 4 complete
 
 ---
 

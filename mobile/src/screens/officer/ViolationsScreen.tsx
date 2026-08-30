@@ -15,7 +15,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { useApiData } from "../../hooks/useApiData";
 import { createViolation, getStalls, getViolations, updateViolation } from "../../services/api";
-import { Card, EmptyState, ErrorState, LoadingState, formatDate } from "../../components/ui";
+import { Card, EmptyState, ErrorState, LoadingState, OfficerHeader, formatDate } from "../../components/ui";
 import type { EvidenceFile, Violation, ViolationStatus } from "../../services/types";
 
 // Same eight categories the web officer dashboard offers.
@@ -131,14 +131,10 @@ export default function ViolationsScreen() {
 
   return (
     <SafeAreaView className="flex-1 bg-gray-50" edges={["top"]}>
-      <View className="border-b border-gray-200 bg-white px-5 py-4">
-        <View className="flex-row items-center justify-between">
-          <View>
-            <Text className="text-lg font-semibold text-gray-900">Violations</Text>
-            <Text className="mt-0.5 text-xs text-gray-500">
-              {openCount} open · {violations.length} total
-            </Text>
-          </View>
+      <OfficerHeader
+        title="Violations"
+        subtitle={`${openCount} open · ${violations.length} total`}
+        right={
           <Pressable
             onPress={() => setReportOpen(true)}
             className="flex-row items-center rounded-xl bg-amber-500 px-3 py-2.5"
@@ -146,9 +142,11 @@ export default function ViolationsScreen() {
             <Ionicons name="add" size={16} color="#ffffff" />
             <Text className="ml-1 text-xs font-semibold text-white">Report</Text>
           </Pressable>
-        </View>
+        }
+      />
 
-        <View className="mt-3 flex-row gap-2">
+      <View className="border-b border-gray-200 bg-white px-5 pb-3">
+        <View className="flex-row gap-2">
           {(["all", "open", "resolved", "dismissed"] as Filter[]).map((f) => {
             const active = filter === f;
             return (

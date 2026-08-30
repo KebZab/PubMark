@@ -15,7 +15,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { useApiData } from "../../hooks/useApiData";
 import { getCheckRequests, updateCheckRequest } from "../../services/api";
-import { Card, EmptyState, ErrorState, LoadingState, formatDate } from "../../components/ui";
+import { Card, EmptyState, ErrorState, LoadingState, OfficerHeader, formatDate } from "../../components/ui";
 import type { CheckPriority, CheckRequest, EvidenceFile } from "../../services/types";
 
 const PRIORITY_STYLE: Record<CheckPriority, { bg: string; text: string }> = {
@@ -99,11 +99,10 @@ export default function ChecksScreen() {
 
   return (
     <SafeAreaView className="flex-1 bg-gray-50" edges={["top"]}>
-      <View className="border-b border-gray-200 bg-white px-5 py-4">
-        <Text className="text-lg font-semibold text-gray-900">Check Requests</Text>
-        <Text className="mt-0.5 text-xs text-gray-500">{pendingCount} awaiting inspection</Text>
+      <OfficerHeader title="Check Requests" subtitle={`${pendingCount} awaiting inspection`} />
 
-        <View className="mt-3 flex-row gap-2">
+      <View className="border-b border-gray-200 bg-white px-5 pb-3">
+        <View className="flex-row gap-2">
           {(["pending", "completed", "all"] as Filter[]).map((f) => {
             const activeF = filter === f;
             return (

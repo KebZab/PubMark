@@ -16,7 +16,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import { useApiData } from "../../hooks/useApiData";
 import { createReceipt, getReceipts, getStalls } from "../../services/api";
-import { Card, EmptyState, ErrorState, LoadingState, formatDate } from "../../components/ui";
+import { Card, EmptyState, ErrorState, LoadingState, OfficerHeader, formatDate } from "../../components/ui";
 import type { ReceiptStatus } from "../../services/types";
 
 const STATUS_STYLE: Record<ReceiptStatus, { bg: string; text: string; label: string }> = {
@@ -115,14 +115,10 @@ export default function ReceiptsScreen() {
 
   return (
     <SafeAreaView className="flex-1 bg-gray-50" edges={["top"]}>
-      <View className="border-b border-gray-200 bg-white px-5 py-4">
-        <View className="flex-row items-center justify-between">
-          <View>
-            <Text className="text-lg font-semibold text-gray-900">Receipts</Text>
-            <Text className="mt-0.5 text-xs text-gray-500">
-              {pendingCount} awaiting verification · {receipts.length} total
-            </Text>
-          </View>
+      <OfficerHeader
+        title="Receipts"
+        subtitle={`${pendingCount} awaiting verification · ${receipts.length} total`}
+        right={
           <Pressable
             onPress={() => setFormOpen(true)}
             className="flex-row items-center rounded-xl bg-amber-500 px-3 py-2.5"
@@ -130,8 +126,8 @@ export default function ReceiptsScreen() {
             <Ionicons name="add" size={16} color="#ffffff" />
             <Text className="ml-1 text-xs font-semibold text-white">Record</Text>
           </Pressable>
-        </View>
-      </View>
+        }
+      />
 
       <ScrollView
         className="flex-1"
