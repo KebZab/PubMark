@@ -2,7 +2,7 @@
 // Design tokens mirror the web app's src/styles/theme.css so the mobile app
 // reads as the same product. Primary teal (#14B8A6) is the source of truth.
 module.exports = {
-  content: ["./App.tsx", "./src/**/*.{js,jsx,ts,tsx}"],
+  content: ["./App.jsx", "./src/**/*.{js,jsx,ts,tsx}"],
   presets: [require("nativewind/preset")],
   theme: {
     extend: {

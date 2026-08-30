@@ -147,6 +147,13 @@ name and role is cached in the browser so the UI can render instantly on load
 
 **Location:** `mobile/` · **Expo SDK 57 · React Native 0.86 · React 19**
 
+**Written in plain JavaScript** (`.js` / `.jsx`), not TypeScript. It was
+converted from TypeScript by erasing the type annotations — nothing else
+changed, and all 439 `className` values were verified byte-for-byte identical
+before and after, so the design is untouched. API response shapes are still
+documented in `src/services/types.js`, as JSDoc `@typedef` blocks that editors
+read for autocomplete without any TypeScript setup.
+
 Its own dependencies, deliberately separate from the web app's — sharing them
 caused version conflicts.
 
