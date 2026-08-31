@@ -1,0 +1,12 @@
+# Secrets — never commit
+.mcp.json
+.env
+.env.*
+!.env.example
+!.env.local
+server/.env
+server/.env.*
+!server/.env.example
+
+# Database dumps — contain real user emails, phone numbers, password hashes
+dumps/

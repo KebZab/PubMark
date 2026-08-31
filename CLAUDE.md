@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is PubMark?
 
-PubMark is a smart public-market stall management PWA (Progressive Web App) built in React 18, TypeScript, and Vite. Four roles access it: vendors (apply for/manage market stalls), officers (inspections and violation reports), admins (day-to-day operations), and super-admins (users, maps, inventory, analytics, archives). The interactive Leaflet map lets users draw and manage stall polygons.
+PubMark is a smart public-market stall management PWA (Progressive Web App) built in React 18, JavaScript, and Vite. Four roles access it: vendors (apply for/manage market stalls), officers (inspections and violation reports), admins (day-to-day operations), and super-admins (users, maps, inventory, analytics, archives). The interactive Leaflet map lets users draw and manage stall polygons.
 
 **⚠️ Architectural status (critical, updated 2026-08-17):** the application is mid-migration from browser `localStorage` to a real backend, and **more of it has moved to MySQL than the module names suggest.** As of 2026-08-17, `server/src/index.js` exposes real MySQL-backed routes for: auth, users, announcements, stalls (`/api/stalls*`, including geometry), applications, perimeters, check-requests, violation-requests, violations, and termination-requests. The corresponding `src/app/components/*Store.ts` / `*Storage.ts` files for those entities are mostly thin `apiFetch` wrappers now, not localStorage — **do not assume a `*Store.ts`/`*Storage.ts` file name means localStorage; check whether it imports `apiFetch` before assuming either way.** Still genuinely `localStorage`-only (no backend route exists yet): **transfers** (`transferStorage.ts`), **inventory** (`inventoryStore.ts`), and **archive** (`archiveStore.ts`). Note also `stallsStorage.ts` (the old localStorage-based stall store) is legacy dead weight for most flows — `AdminMapView.tsx` uses `stallsApi.ts` (real API) — but `SuperAdminDashboard.tsx` still calls `getStoredStalls`/`updateStoredStall` from it directly in a few places, which is a latent inconsistency worth resolving if you touch stall import/export there. Do not assume `database.md` describes a running feature; that file documents the *future* Supabase/PostgreSQL target, not the current backend. For exhaustive current architecture, design system, routes, and known gaps, read [`PROJECT_CONTEXT.md`](./PROJECT_CONTEXT.md) (updated continuously as a working AI handoff doc).
 
@@ -26,7 +26,13 @@ PubMark is a smart public-market stall management PWA (Progressive Web App) buil
 2. MySQL database: create schema, run `server/mysql-schema.sql`, then `npm run seed` inside `server/`.
 3. Root `npm install && npm run dev` (frontend) in parallel with `cd server && npm install && npm run dev` (backend).
 
-**No test runner, no lint script, no TypeScript type-check command exist yet.** TypeScript is used but not validated in CI.
+**No test runner and no lint script exist yet.**
+
+**The codebase is plain JavaScript** (`.js` / `.jsx`) — both the web app and
+`mobile/`. It was converted from TypeScript by erasing type annotations only;
+no logic or styling changed. There is no `tsconfig.json` and no type-check
+step. API response shapes are documented as JSDoc `@typedef` blocks in
+`mobile/src/services/types.js`.
 
 ## Architecture and state management
 
