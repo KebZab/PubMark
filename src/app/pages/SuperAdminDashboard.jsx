@@ -63,6 +63,7 @@ import { DashboardLayout } from "../components/DashboardLayout";
 import { SuperAdminMapEditor } from "../components/SuperAdminMapEditor";
 import { showToast } from "../components/Toast";
 import { buildPermitDeadlineRemarks, parsePermitDeadlineMeta } from "../components/permitDeadline";
+import { AttachmentLink } from "../components/AttachmentLink";
 
 const ROLE_COLORS = {
   super_admin: "bg-purple-100 text-purple-700",
@@ -1820,41 +1821,16 @@ export function SuperAdminDashboard() {
                                 {v.evidence.length === 0 ? (
                                   <p className="text-xs text-gray-400 italic">No files attached</p>
                                 ) : (
-                                  <div className="grid grid-cols-2 gap-2">
+                                  <div className="space-y-2">
                                     {v.evidence.map((ev, idx) => (
-                                      <div
-                                        key={idx}
-                                        className={`rounded-xl overflow-hidden border ${ev.type === "image" ? "border-amber-200" : ev.type === "video" ? "border-blue-200" : "border-gray-200"}`}
-                                      >
-                                        {ev.type === "image" ? (
-                                          <div className="bg-gradient-to-br from-amber-50 to-orange-50 h-20 flex flex-col items-center justify-center gap-1">
-                                            <Eye className="w-6 h-6 text-amber-400" />
-                                            <span className="text-[9px] font-medium text-amber-600">
-                                              Photo
-                                            </span>
-                                          </div>
-                                        ) : ev.type === "video" ? (
-                                          <div className="bg-gradient-to-br from-blue-50 to-indigo-50 h-20 flex flex-col items-center justify-center gap-1">
-                                            <FileText className="w-6 h-6 text-blue-400" />
-                                            <span className="text-[9px] font-medium text-blue-600">
-                                              Video
-                                            </span>
-                                          </div>
-                                        ) : (
-                                          <div className="bg-gradient-to-br from-gray-50 to-gray-100 h-20 flex flex-col items-center justify-center gap-1">
-                                            <FileText className="w-6 h-6 text-gray-400" />
-                                            <span className="text-[9px] font-medium text-gray-500">
-                                              Document
-                                            </span>
-                                          </div>
-                                        )}
-                                        <div className="bg-white px-2 py-1.5 border-t border-gray-100">
-                                          <p className="text-[9px] text-gray-700 font-medium truncate">
-                                            {ev.name}
-                                          </p>
-                                          <p className="text-[9px] text-gray-400">{ev.size}</p>
-                                        </div>
-                                      </div>
+                                      <AttachmentLink
+                                        key={ev.id ?? idx}
+                                        name={ev.name}
+                                        url={ev.url}
+                                        mimeType={ev.type}
+                                        caption={`Evidence${ev.size ? ` · ${ev.size}` : ""}`}
+                                        tone="gray"
+                                      />
                                     ))}
                                   </div>
                                 )}
@@ -1990,41 +1966,16 @@ export function SuperAdminDashboard() {
                                 {r.completionFiles.length === 0 ? (
                                   <p className="text-xs text-gray-400 italic">No files attached</p>
                                 ) : (
-                                  <div className="grid grid-cols-2 gap-2">
+                                  <div className="space-y-2">
                                     {r.completionFiles.map((f, idx) => (
-                                      <div
-                                        key={idx}
-                                        className={`rounded-xl overflow-hidden border ${f.type === "image" ? "border-purple-200" : f.type === "video" ? "border-blue-200" : "border-gray-200"}`}
-                                      >
-                                        {f.type === "image" ? (
-                                          <div className="bg-gradient-to-br from-purple-50 to-indigo-50 h-20 flex flex-col items-center justify-center gap-1">
-                                            <Eye className="w-6 h-6 text-purple-400" />
-                                            <span className="text-[9px] font-medium text-purple-600">
-                                              Photo
-                                            </span>
-                                          </div>
-                                        ) : f.type === "video" ? (
-                                          <div className="bg-gradient-to-br from-blue-50 to-indigo-50 h-20 flex flex-col items-center justify-center gap-1">
-                                            <FileText className="w-6 h-6 text-blue-400" />
-                                            <span className="text-[9px] font-medium text-blue-600">
-                                              Video
-                                            </span>
-                                          </div>
-                                        ) : (
-                                          <div className="bg-gradient-to-br from-gray-50 to-gray-100 h-20 flex flex-col items-center justify-center gap-1">
-                                            <FileText className="w-6 h-6 text-gray-400" />
-                                            <span className="text-[9px] font-medium text-gray-500">
-                                              Document
-                                            </span>
-                                          </div>
-                                        )}
-                                        <div className="bg-white px-2 py-1.5 border-t border-gray-100">
-                                          <p className="text-[9px] text-gray-700 font-medium truncate">
-                                            {f.name}
-                                          </p>
-                                          <p className="text-[9px] text-gray-400">{f.size}</p>
-                                        </div>
-                                      </div>
+                                      <AttachmentLink
+                                        key={f.id ?? idx}
+                                        name={f.name}
+                                        url={f.url}
+                                        mimeType={f.type}
+                                        caption={`Inspection photo${f.size ? ` · ${f.size}` : ""}`}
+                                        tone="teal"
+                                      />
                                     ))}
                                   </div>
                                 )}
@@ -2479,13 +2430,22 @@ export function SuperAdminDashboard() {
                                         </p>
                                         <div className="flex flex-wrap gap-2">
                                           {req.completionFiles.map((f, i) => (
-                                            <span
-                                              key={i}
-                                              className="flex items-center gap-1 px-2 py-1 bg-white border border-purple-200 rounded-lg text-[10px] text-gray-700"
+                                            /* Opens the stored file; plain text when none was saved. */
+                                            <a
+                                              key={f.id ?? i}
+                                              href={f.url || undefined}
+                                              target={f.url ? "_blank" : undefined}
+                                              rel="noreferrer"
+                                              title={f.url ? `Open ${f.name}` : "No file was stored for this record."}
+                                              className={`flex items-center gap-1 px-2 py-1 bg-white border rounded-lg text-[10px] ${
+                                                f.url
+                                                  ? "border-purple-200 text-gray-700 hover:border-purple-400"
+                                                  : "border-dashed border-gray-200 text-gray-400 cursor-default"
+                                              }`}
                                             >
                                               <span>📎</span> {f.name}{" "}
                                               <span className="text-gray-400">({f.size})</span>
-                                            </span>
+                                            </a>
                                           ))}
                                         </div>
                                       </>

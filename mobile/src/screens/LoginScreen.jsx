@@ -12,7 +12,7 @@ import {
 import { StatusBar } from "expo-status-bar";
 import { useAuth } from "../context/AuthContext";
 
-export default function LoginScreen() {
+export default function LoginScreen({ navigation }) {
   const { signIn, signOut } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -121,6 +121,22 @@ export default function LoginScreen() {
             ) : (
               <Text className="text-base font-semibold text-white">Sign In</Text>
             )}
+          </Pressable>
+
+          {/* Vendors can self-register, exactly as on the web. Officers and
+              admins are created by an admin, so no sign-up link for them. */}
+          <View className="mt-6 flex-row items-center">
+            <View className="h-px flex-1 bg-gray-200" />
+            <Text className="mx-3 text-xs text-gray-400">New vendor?</Text>
+            <View className="h-px flex-1 bg-gray-200" />
+          </View>
+
+          <Pressable
+            onPress={() => navigation.navigate("Register")}
+            disabled={loading}
+            className="mt-4 items-center justify-center rounded-xl border border-primary bg-white py-3.5"
+          >
+            <Text className="text-base font-semibold text-primary-dark">Create an Account</Text>
           </Pressable>
 
           <Text className="mt-8 text-center text-xs leading-5 text-gray-400">

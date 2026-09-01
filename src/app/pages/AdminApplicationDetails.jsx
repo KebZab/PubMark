@@ -28,6 +28,7 @@ import {
   parsePermitDeadlineMeta,
   toDateTimeLocalValue,
 } from "../components/permitDeadline";
+import { AttachmentLink } from "../components/AttachmentLink";
 
 function StatusBanner({ status }) {
   if (status === "pending") {
@@ -357,39 +358,23 @@ export function AdminApplicationDetails() {
           </h2>
           <div className="space-y-2">
             {app.permitFileName ? (
-              <div className="flex items-center gap-3 bg-teal-50 border border-teal-200 rounded-xl p-3">
-                <div className="w-9 h-9 bg-teal-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                  <FileText className="w-4 h-4 text-[#14B8A6]" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-800 truncate">
-                    {app.permitFileName}
-                  </p>
-                  <p className="text-xs text-gray-500">
-                    Business Permit{app.permitFileSize ? ` · ${app.permitFileSize}` : ""}
-                  </p>
-                </div>
-                <span className="text-[10px] px-2 py-0.5 bg-teal-100 text-teal-700 rounded-full font-semibold flex-shrink-0">
-                  Required
-                </span>
-              </div>
+              <AttachmentLink
+                name={app.permitFileName}
+                url={app.permitUrl}
+                caption={`Business Permit${app.permitFileSize ? ` · ${app.permitFileSize}` : ""}`}
+                badge="Required"
+                tone="teal"
+              />
             ) : (
               <p className="text-sm text-gray-400 italic">No permit uploaded.</p>
             )}
             {app.additionalFileName && (
-              <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-xl p-3">
-                <div className="w-9 h-9 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                  <FileText className="w-4 h-4 text-blue-500" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-800 truncate">
-                    {app.additionalFileName}
-                  </p>
-                  <p className="text-xs text-gray-500">
-                    Additional Doc{app.additionalFileSize ? ` · ${app.additionalFileSize}` : ""}
-                  </p>
-                </div>
-              </div>
+              <AttachmentLink
+                name={app.additionalFileName}
+                url={app.additionalFileUrl}
+                caption={`Additional Doc${app.additionalFileSize ? ` · ${app.additionalFileSize}` : ""}`}
+                tone="blue"
+              />
             )}
           </div>
         </div>

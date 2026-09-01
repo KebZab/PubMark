@@ -1,4 +1,5 @@
 import { apiFetch } from "./api";
+import { readFileForUpload } from "./fileUpload";
 
 export async function getApplications() {
   const result = await apiFetch(`/applications`);
@@ -32,6 +33,9 @@ export async function getApplicationById(id) {
 }
 
 export async function createApplication(data) {
+  // The real files travel with the application; the server stores them and
+  // returns signed links. `permitFile` / `additionalFile` are browser File
+  // objects, read and size-checked here before being sent.
   const result = await apiFetch(`/applications`, {
     method: "POST",
     body: JSON.stringify({
@@ -41,8 +45,8 @@ export async function createApplication(data) {
       contractStart: data.contractStart,
       contractTermMonths: data.contractTermMonths,
       contractEnd: data.contractEnd,
-      permitPath: data.permitFileName,
-      additionalFilePath: data.additionalFileName,
+      permit: data.permitFile ? await readFileForUpload(data.permitFile) : null,
+      additionalFile: data.additionalFile ? await readFileForUpload(data.additionalFile) : null,
       notes: data.notes,
       // Was previously dropped here, so whatever the form collected was
       // silently discarded and the profile address shown instead.
@@ -68,10 +72,11 @@ export async function updateApplicationAdmin(id, data) {
   return result.application;
 }
 
-export async function updateApplicationPermit(id, permitFileName, permitFileSize) {
+/** @param {File} permitFile the picked file, uploaded and stored server-side. */
+export async function updateApplicationPermit(id, permitFile) {
   const result = await apiFetch(`/applications/${id}/permit`, {
     method: "PATCH",
-    body: JSON.stringify({ permitFileName, permitFileSize }),
+    body: JSON.stringify({ permit: await readFileForUpload(permitFile) }),
   });
   return result.application;
 }

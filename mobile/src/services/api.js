@@ -90,11 +90,15 @@ export async function createApplication(input) {
   });
 }
 
-/** Vendors may attach a permit to their own application after submitting. */
-export async function updateApplicationPermit(id, permitFileName) {
+/**
+ * Vendors may attach a permit to their own application after submitting.
+ * @param {{name: string, type: string, size: number, base64: string}} permit
+ *   read by readAssetForUpload — the server stores the real file.
+ */
+export async function updateApplicationPermit(id, permit) {
   return apiFetch(`/applications/${id}/permit`, {
     method: "PATCH",
-    body: JSON.stringify({ permitFileName }),
+    body: JSON.stringify({ permit }),
   });
 }
 
@@ -156,9 +160,9 @@ export async function getReceipts() {
 }
 
 /**
- * Records a receipt. We send the file's name and type but not its contents,
- * matching how permits and violation evidence work elsewhere in the app — the
- * server stores the metadata and skips the upload when no contents are given.
+ * Records a receipt, including the file itself. `input.file` comes from
+ * readAssetForUpload, so it carries base64 contents the server stores in
+ * Supabase Storage and later hands back as a short-lived signed link.
  */
 export async function createReceipt(input) {
   return apiFetch("/receipts", {

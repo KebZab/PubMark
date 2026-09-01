@@ -44,6 +44,8 @@ import { showToast } from "../components/Toast";
 import { useNavigate, useLocation } from "react-router";
 import { getReceipts, submitReceipt } from "../services/receiptsApi";
 import { formatFileSize } from "../components/applicationsStorage";
+import { describeFileProblem, readFileForUpload, FILE_ACCEPT_ATTRIBUTE } from "../services/fileUpload";
+import { AttachmentLink } from "../components/AttachmentLink";
 
 const CATEGORIES = [
   "Illegal Vending",
@@ -283,20 +285,29 @@ export function OfficerDashboard() {
     dismissed: violations.filter((v) => v.status === "dismissed").length,
   };
 
-  function handleAddEvidence(e) {
+  // Reads picked files so the real photo is stored, not just its name.
+  // Anything oversized or of the wrong type is reported and skipped, rather
+  // than failing the whole submission later. `type` stays the real MIME: the
+  // server validates against it and maps it to a display kind on the way back.
+  async function readEvidenceFiles(fileList) {
+    const added = [];
+    for (const file of Array.from(fileList || [])) {
+      const problem = describeFileProblem(file);
+      if (problem) { showToast(problem, "error"); continue; }
+      try {
+        added.push({ ...(await readFileForUpload(file)), size: formatFileSize(file.size) });
+      } catch (error) {
+        showToast(error.message, "error");
+      }
+    }
+    return added;
+  }
+
+  async function handleAddEvidence(e) {
     const files = e.target.files;
-    if (!files) return;
-    const added = Array.from(files).map((f) => ({
-      name: f.name,
-      type: f.type.startsWith("image/")
-        ? "image"
-        : f.type.startsWith("video/")
-          ? "video"
-          : "document",
-      size: `${(f.size / (1024 * 1024)).toFixed(1)} MB`,
-    }));
-    setNewEvidence((prev) => [...prev, ...added]);
     e.target.value = "";
+    const added = await readEvidenceFiles(files);
+    if (added.length) setNewEvidence((prev) => [...prev, ...added]);
   }
 
   async function handleSubmitViolation() {
@@ -334,20 +345,11 @@ export function OfficerDashboard() {
     }
   }
 
-  function handleAddResolveEvidence(e) {
+  async function handleAddResolveEvidence(e) {
     const files = e.target.files;
-    if (!files) return;
-    const added = Array.from(files).map((f) => ({
-      name: f.name,
-      type: f.type.startsWith("image/")
-        ? "image"
-        : f.type.startsWith("video/")
-          ? "video"
-          : "document",
-      size: `${(f.size / (1024 * 1024)).toFixed(1)} MB`,
-    }));
-    setResolveEvidence((prev) => [...prev, ...added]);
     e.target.value = "";
+    const added = await readEvidenceFiles(files);
+    if (added.length) setResolveEvidence((prev) => [...prev, ...added]);
   }
 
   async function handleResolve() {
@@ -956,41 +958,16 @@ export function OfficerDashboard() {
                                   <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">
                                     Evidence ({v.evidence.length})
                                   </p>
-                                  <div className="grid grid-cols-2 gap-2">
+                                  <div className="space-y-2">
                                     {v.evidence.map((ev, idx) => (
-                                      <div
-                                        key={idx}
-                                        className={`rounded-xl overflow-hidden border ${ev.type === "image" ? "border-amber-200" : ev.type === "video" ? "border-blue-200" : "border-gray-200"}`}
-                                      >
-                                        {ev.type === "image" ? (
-                                          <div className="bg-gradient-to-br from-amber-50 to-orange-50 h-20 flex flex-col items-center justify-center gap-1">
-                                            <Camera className="w-6 h-6 text-amber-400" />
-                                            <span className="text-[9px] font-medium text-amber-600">
-                                              Photo
-                                            </span>
-                                          </div>
-                                        ) : ev.type === "video" ? (
-                                          <div className="bg-gradient-to-br from-blue-50 to-indigo-50 h-20 flex flex-col items-center justify-center gap-1">
-                                            <FileText className="w-6 h-6 text-blue-400" />
-                                            <span className="text-[9px] font-medium text-blue-600">
-                                              Video
-                                            </span>
-                                          </div>
-                                        ) : (
-                                          <div className="bg-gradient-to-br from-gray-50 to-gray-100 h-20 flex flex-col items-center justify-center gap-1">
-                                            <Paperclip className="w-6 h-6 text-gray-400" />
-                                            <span className="text-[9px] font-medium text-gray-500">
-                                              Document
-                                            </span>
-                                          </div>
-                                        )}
-                                        <div className="bg-white px-2 py-1.5">
-                                          <p className="text-[9px] text-gray-700 font-medium truncate">
-                                            {ev.name}
-                                          </p>
-                                          <p className="text-[9px] text-gray-400">{ev.size}</p>
-                                        </div>
-                                      </div>
+                                      <AttachmentLink
+                                        key={ev.id ?? idx}
+                                        name={ev.name}
+                                        url={ev.url}
+                                        mimeType={ev.type}
+                                        caption={`Evidence${ev.size ? ` · ${ev.size}` : ""}`}
+                                        tone="gray"
+                                      />
                                     ))}
                                   </div>
                                 </div>
@@ -1057,9 +1034,15 @@ export function OfficerDashboard() {
                 <input
                   type="file"
                   id="officer-receipt-file"
-                  accept=".pdf,.jpg,.jpeg,.png"
+                  accept={FILE_ACCEPT_ATTRIBUTE}
                   className="hidden"
-                  onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] || null;
+                    e.target.value = "";
+                    const problem = file ? describeFileProblem(file) : null;
+                    if (problem) { showToast(problem, "error"); setReceiptFile(null); return; }
+                    setReceiptFile(file);
+                  }}
                 />
                 <label
                   htmlFor="officer-receipt-file"
@@ -1297,22 +1280,13 @@ export function OfficerDashboard() {
                   type="file"
                   ref={reqViolEvidenceRef}
                   multiple
-                  accept="image/*,video/*,.pdf"
+                  accept={FILE_ACCEPT_ATTRIBUTE}
                   className="hidden"
-                  onChange={(e) => {
+                  onChange={async (e) => {
                     const files = e.target.files;
-                    if (!files) return;
-                    const added = Array.from(files).map((f) => ({
-                      name: f.name,
-                      type: f.type.startsWith("image/")
-                        ? "image"
-                        : f.type.startsWith("video/")
-                          ? "video"
-                          : "document",
-                      size: `${(f.size / (1024 * 1024)).toFixed(1)} MB`,
-                    }));
-                    setReqViolEvidence((p) => [...p, ...added]);
                     e.target.value = "";
+                    const added = await readEvidenceFiles(files);
+                    if (added.length) setReqViolEvidence((p) => [...p, ...added]);
                   }}
                 />
                 <button
@@ -1461,7 +1435,7 @@ export function OfficerDashboard() {
                   type="file"
                   ref={evidenceRef}
                   multiple
-                  accept="image/*,video/*,.pdf,.doc,.docx"
+                  accept={FILE_ACCEPT_ATTRIBUTE}
                   className="hidden"
                   onChange={handleAddEvidence}
                 />
@@ -1550,7 +1524,7 @@ export function OfficerDashboard() {
                 type="file"
                 ref={resolveEvidenceRef}
                 multiple
-                accept="image/*"
+                accept={FILE_ACCEPT_ATTRIBUTE}
                 className="hidden"
                 onChange={handleAddResolveEvidence}
               />
@@ -1638,23 +1612,14 @@ export function OfficerDashboard() {
                 <input
                   ref={completeFileRef}
                   type="file"
-                  accept="image/*,video/*,.pdf"
+                  accept={FILE_ACCEPT_ATTRIBUTE}
                   multiple
                   className="hidden"
-                  onChange={(e) => {
+                  onChange={async (e) => {
                     const files = e.target.files;
-                    if (!files) return;
-                    const added = Array.from(files).map((f) => ({
-                      name: f.name,
-                      type: f.type.startsWith("image/")
-                        ? "image"
-                        : f.type.startsWith("video/")
-                          ? "video"
-                          : "document",
-                      size: `${(f.size / (1024 * 1024)).toFixed(1)} MB`,
-                    }));
-                    setCompleteFiles((prev) => [...prev, ...added]);
                     e.target.value = "";
+                    const added = await readEvidenceFiles(files);
+                    if (added.length) setCompleteFiles((p) => [...p, ...added]);
                   }}
                 />
                 <button

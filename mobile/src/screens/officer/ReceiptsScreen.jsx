@@ -14,6 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
+import { readAssetForUpload, DOCUMENT_PICKER_TYPES } from "../../services/fileUpload";
 import { useApiData } from "../../hooks/useApiData";
 import { createReceipt, getReceipts, getStalls } from "../../services/api";
 import { Card, EmptyState, ErrorState, LoadingState, OfficerHeader, formatDate } from "../../components/ui";
@@ -63,23 +64,37 @@ export default function ReceiptsScreen() {
       Alert.alert("Camera access needed", "Allow camera access to photograph the receipt.");
       return;
     }
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.7, base64: true });
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
-      setFile({ name: asset.fileName ?? `receipt-${Date.now()}.jpg`, type: "image/jpeg" });
-      setFormError("");
+      try {
+        setFile(await readAssetForUpload({
+          ...asset,
+          name: asset.fileName ?? `receipt-${Date.now()}.jpg`,
+          mimeType: asset.mimeType ?? "image/jpeg",
+        }));
+        setFormError("");
+      } catch (e) {
+        setFormError(e.message);
+      }
     }
   };
 
   const pickFile = async () => {
+    // copyToCacheDirectory copies the pick into app cache, giving a readable
+    // file:// uri. Without it Android hands back a content:// uri the file
+    // reader cannot open.
     const result = await DocumentPicker.getDocumentAsync({
-      type: ["application/pdf", "image/*"],
-      copyToCacheDirectory: false,
+      type: DOCUMENT_PICKER_TYPES,
+      copyToCacheDirectory: true,
     });
     if (!result.canceled && result.assets?.[0]) {
-      const asset = result.assets[0];
-      setFile({ name: asset.name, type: asset.mimeType ?? "application/octet-stream" });
-      setFormError("");
+      try {
+        setFile(await readAssetForUpload(result.assets[0]));
+        setFormError("");
+      } catch (e) {
+        setFormError(e.message);
+      }
     }
   };
 
@@ -100,7 +115,7 @@ export default function ReceiptsScreen() {
         amount: amount.trim() || null,
         receiptDate,
         notes: notes.trim(),
-        file: { name: file.name, type: file.type },
+        file, // includes base64, so the receipt image is actually stored
       });
       setFormOpen(false);
       reset();

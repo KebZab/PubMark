@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import { login as apiLogin, getCurrentProfile } from "../services/api";
+import { login as apiLogin, registerVendor, getCurrentProfile } from "../services/api";
 import { clearSession, getProfile, saveSession } from "../services/tokenStore";
 
 const AuthContext = createContext(undefined);
@@ -41,12 +41,22 @@ export function AuthProvider({ children }) {
     return profile;
   };
 
+  // Registering signs the new vendor straight in: the server returns a token
+  // with the profile, exactly as login does, so there is no second round trip
+  // and no chance of landing on the login screen right after signing up.
+  const signUp = async (details) => {
+    const { profile, token } = await registerVendor(details);
+    await saveSession(token, profile);
+    setUser(profile);
+    return profile;
+  };
+
   const signOut = async () => {
     await clearSession();
     setUser(null);
   };
 
-  return <AuthContext.Provider value={{ user, loading, signIn, signOut }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, loading, signIn, signUp, signOut }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

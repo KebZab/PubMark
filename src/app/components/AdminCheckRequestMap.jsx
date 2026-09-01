@@ -6,7 +6,6 @@ import { X, AlertTriangle, MapPin, Send, ChevronDown } from "lucide-react";
 import { FloorSwitcher } from "./FloorSwitcher";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
-import {} from "../services/applicationsApi";
 import { saveCheckRequest } from "./checkRequestsStore";
 import { listUsers } from "../services/api";
 import { showToast } from "./Toast";

@@ -5,11 +5,15 @@ import "leaflet/dist/leaflet.css";
 import { X, AlertTriangle, Camera, Upload, Paperclip, Store, User } from "lucide-react";
 import { FloorSwitcher } from "./FloorSwitcher";
 import { useStalls } from "../hooks/useStalls";
-import {} from "./stallsStorage";
 import { useApplications } from "../hooks/useApplications";
-import {} from "../services/applicationsApi";
 import { saveViolation } from "./violationsStore";
 import { showToast } from "./Toast";
+import {
+  describeFileProblem,
+  readFileForUpload,
+  formatFileSize,
+  FILE_ACCEPT_ATTRIBUTE,
+} from "../services/fileUpload";
 
 const CATEGORIES = [
   "Illegal Vending",
@@ -157,20 +161,24 @@ export function OfficerMapView({ officerId, officerName }) {
     }
   }
 
-  function handleAddEvidence(e) {
+  // Reads each picked file so the real photo is uploaded, not just its name.
+  // `type` stays the real MIME: the server validates against it and maps it to
+  // a display kind when reading back. Bad files are reported and skipped.
+  async function handleAddEvidence(e) {
     const files = e.target.files;
-    if (!files) return;
-    const added = Array.from(files).map((f) => ({
-      name: f.name,
-      type: f.type.startsWith("image/")
-        ? "image"
-        : f.type.startsWith("video/")
-          ? "video"
-          : "document",
-      size: `${(f.size / (1024 * 1024)).toFixed(1)} MB`,
-    }));
-    setEvidence((prev) => [...prev, ...added]);
     e.target.value = "";
+    if (!files) return;
+    const added = [];
+    for (const file of Array.from(files)) {
+      const problem = describeFileProblem(file);
+      if (problem) { showToast(problem, "error"); continue; }
+      try {
+        added.push({ ...(await readFileForUpload(file)), size: formatFileSize(file.size) });
+      } catch (error) {
+        showToast(error.message, "error");
+      }
+    }
+    if (added.length) setEvidence((prev) => [...prev, ...added]);
   }
 
   return (
@@ -344,7 +352,7 @@ export function OfficerMapView({ officerId, officerName }) {
                   type="file"
                   id="officer-evidence"
                   multiple
-                  accept="image/*,video/*,.pdf,.doc,.docx"
+                  accept={FILE_ACCEPT_ATTRIBUTE}
                   className="hidden"
                   onChange={handleAddEvidence}
                 />

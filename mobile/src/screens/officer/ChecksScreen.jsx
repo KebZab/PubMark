@@ -13,9 +13,10 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import { readAssetForUpload, formatFileSize } from "../../services/fileUpload";
 import { useApiData } from "../../hooks/useApiData";
 import { getCheckRequests, updateCheckRequest } from "../../services/api";
-import { Card, EmptyState, ErrorState, LoadingState, OfficerHeader, formatDate } from "../../components/ui";
+import { Attachments, Card, EmptyState, ErrorState, LoadingState, OfficerHeader, formatDate } from "../../components/ui";
 
 const PRIORITY_STYLE = {
   urgent: { bg: "bg-red-100", text: "text-red-700" },
@@ -61,14 +62,19 @@ export default function ChecksScreen() {
       Alert.alert("Camera access needed", "Allow camera access to document the inspection.");
       return;
     }
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.7, base64: true });
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
-      const sizeMb = asset.fileSize ? `${(asset.fileSize / (1024 * 1024)).toFixed(1)} MB` : "1.0 MB";
-      setFiles((prev) => [
-        ...prev,
-        { name: asset.fileName ?? `inspection-${Date.now()}.jpg`, type: "image", size: sizeMb },
-      ]);
+      try {
+        const file = await readAssetForUpload({
+          ...asset,
+          name: asset.fileName ?? `inspection-${Date.now()}.jpg`,
+          mimeType: asset.mimeType ?? "image/jpeg",
+        });
+        setFiles((prev) => [...prev, { ...file, size: formatFileSize(file.size) }]);
+      } catch (error) {
+        Alert.alert("Cannot attach photo", error.message);
+      }
     }
   };
 
@@ -85,7 +91,9 @@ export default function ChecksScreen() {
         status: "completed",
         completionSummary: summary.trim(),
         completionNotes: notes.trim(),
-        completionFiles: files.map((f) => ({ name: f.name, type: f.type, size: f.size })),
+        // Send the whole object: new photos carry `base64` (uploaded), and
+        // ones already stored carry `id` (kept as they are, server-side).
+        completionFiles: files,
       });
       setActive(null);
       await refetch();
@@ -170,6 +178,7 @@ export default function ChecksScreen() {
                         Findings
                       </Text>
                       <Text className="mt-1 text-xs leading-5 text-emerald-900">{r.completionSummary}</Text>
+                      <Attachments files={r.completionFiles ?? []} />
                     </View>
                   ) : null}
 

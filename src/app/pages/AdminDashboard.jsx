@@ -43,7 +43,6 @@ import {
 } from "../services/applicationsApi";
 import { TablePagination } from "../components/ui/TablePagination";
 import { useStalls } from "../hooks/useStalls";
-import {} from "../components/stallsStorage";
 import { getSession, getAllUsers } from "../components/authStorage";
 import { listUsers } from "../services/api";
 import { migrateLegacyRequests } from "../services/legacyRequestMigration";
@@ -61,6 +60,7 @@ import {
 import { getReceipts, reviewReceipt } from "../services/receiptsApi";
 import { DashboardLayout } from "../components/DashboardLayout";
 import { showToast } from "../components/Toast";
+import { AttachmentLink } from "../components/AttachmentLink";
 import {
   buildPermitDeadlineRemarks,
   formatPermitDeadline,
@@ -1348,45 +1348,23 @@ export function AdminDashboard() {
                         </p>
                         <div className="space-y-2">
                           {selectedApp.permitFileName ? (
-                            <div className="flex items-center gap-3 bg-teal-50 border border-teal-200 rounded-xl p-3">
-                              <div className="w-8 h-8 bg-[#14B8A6]/20 rounded-lg flex items-center justify-center flex-shrink-0">
-                                <FileText className="w-4 h-4 text-[#14B8A6]" />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs font-semibold text-gray-800 truncate">
-                                  {selectedApp.permitFileName}
-                                </p>
-                                <p className="text-[10px] text-gray-500">
-                                  Business Permit
-                                  {selectedApp.permitFileSize
-                                    ? ` · ${selectedApp.permitFileSize}`
-                                    : ""}
-                                </p>
-                              </div>
-                              <span className="text-[10px] px-2 py-0.5 bg-teal-100 text-teal-700 rounded-full font-medium flex-shrink-0">
-                                Required
-                              </span>
-                            </div>
+                            <AttachmentLink
+                              name={selectedApp.permitFileName}
+                              url={selectedApp.permitUrl}
+                              caption={`Business Permit${selectedApp.permitFileSize ? ` · ${selectedApp.permitFileSize}` : ""}`}
+                              badge="Required"
+                              tone="teal"
+                            />
                           ) : (
                             <p className="text-xs text-gray-400 italic">No permit uploaded.</p>
                           )}
                           {selectedApp.additionalFileName && (
-                            <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-xl p-3">
-                              <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                                <FileText className="w-4 h-4 text-blue-500" />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs font-semibold text-gray-800 truncate">
-                                  {selectedApp.additionalFileName}
-                                </p>
-                                <p className="text-[10px] text-gray-500">
-                                  Additional Doc
-                                  {selectedApp.additionalFileSize
-                                    ? ` · ${selectedApp.additionalFileSize}`
-                                    : ""}
-                                </p>
-                              </div>
-                            </div>
+                            <AttachmentLink
+                              name={selectedApp.additionalFileName}
+                              url={selectedApp.additionalFileUrl}
+                              caption={`Additional Doc${selectedApp.additionalFileSize ? ` · ${selectedApp.additionalFileSize}` : ""}`}
+                              tone="blue"
+                            />
                           )}
                         </div>
                       </div>
@@ -1835,41 +1813,16 @@ export function AdminDashboard() {
                                 {v.evidence.length === 0 ? (
                                   <p className="text-xs text-gray-400 italic">No files attached</p>
                                 ) : (
-                                  <div className="grid grid-cols-2 gap-2">
+                                  <div className="space-y-2">
                                     {v.evidence.map((ev, idx) => (
-                                      <div
-                                        key={idx}
-                                        className={`rounded-xl overflow-hidden border ${ev.type === "image" ? "border-amber-200" : ev.type === "video" ? "border-blue-200" : "border-gray-200"}`}
-                                      >
-                                        {ev.type === "image" ? (
-                                          <div className="bg-gradient-to-br from-amber-50 to-orange-50 h-20 flex flex-col items-center justify-center gap-1">
-                                            <Eye className="w-6 h-6 text-amber-400" />
-                                            <span className="text-[9px] font-medium text-amber-600">
-                                              Photo
-                                            </span>
-                                          </div>
-                                        ) : ev.type === "video" ? (
-                                          <div className="bg-gradient-to-br from-blue-50 to-indigo-50 h-20 flex flex-col items-center justify-center gap-1">
-                                            <FileText className="w-6 h-6 text-blue-400" />
-                                            <span className="text-[9px] font-medium text-blue-600">
-                                              Video
-                                            </span>
-                                          </div>
-                                        ) : (
-                                          <div className="bg-gradient-to-br from-gray-50 to-gray-100 h-20 flex flex-col items-center justify-center gap-1">
-                                            <FileText className="w-6 h-6 text-gray-400" />
-                                            <span className="text-[9px] font-medium text-gray-500">
-                                              Document
-                                            </span>
-                                          </div>
-                                        )}
-                                        <div className="bg-white px-2 py-1.5 border-t border-gray-100">
-                                          <p className="text-[9px] text-gray-700 font-medium truncate">
-                                            {ev.name}
-                                          </p>
-                                          <p className="text-[9px] text-gray-400">{ev.size}</p>
-                                        </div>
-                                      </div>
+                                      <AttachmentLink
+                                        key={ev.id ?? idx}
+                                        name={ev.name}
+                                        url={ev.url}
+                                        mimeType={ev.type}
+                                        caption={`Evidence${ev.size ? ` · ${ev.size}` : ""}`}
+                                        tone="gray"
+                                      />
                                     ))}
                                   </div>
                                 )}
@@ -2006,41 +1959,16 @@ export function AdminDashboard() {
                                 {r.completionFiles.length === 0 ? (
                                   <p className="text-xs text-gray-400 italic">No files attached</p>
                                 ) : (
-                                  <div className="grid grid-cols-2 gap-2">
+                                  <div className="space-y-2">
                                     {r.completionFiles.map((f, idx) => (
-                                      <div
-                                        key={idx}
-                                        className={`rounded-xl overflow-hidden border ${f.type === "image" ? "border-teal-200" : f.type === "video" ? "border-blue-200" : "border-gray-200"}`}
-                                      >
-                                        {f.type === "image" ? (
-                                          <div className="bg-gradient-to-br from-teal-50 to-emerald-50 h-20 flex flex-col items-center justify-center gap-1">
-                                            <Eye className="w-6 h-6 text-teal-400" />
-                                            <span className="text-[9px] font-medium text-teal-600">
-                                              Photo
-                                            </span>
-                                          </div>
-                                        ) : f.type === "video" ? (
-                                          <div className="bg-gradient-to-br from-blue-50 to-indigo-50 h-20 flex flex-col items-center justify-center gap-1">
-                                            <FileText className="w-6 h-6 text-blue-400" />
-                                            <span className="text-[9px] font-medium text-blue-600">
-                                              Video
-                                            </span>
-                                          </div>
-                                        ) : (
-                                          <div className="bg-gradient-to-br from-gray-50 to-gray-100 h-20 flex flex-col items-center justify-center gap-1">
-                                            <FileText className="w-6 h-6 text-gray-400" />
-                                            <span className="text-[9px] font-medium text-gray-500">
-                                              Document
-                                            </span>
-                                          </div>
-                                        )}
-                                        <div className="bg-white px-2 py-1.5 border-t border-gray-100">
-                                          <p className="text-[9px] text-gray-700 font-medium truncate">
-                                            {f.name}
-                                          </p>
-                                          <p className="text-[9px] text-gray-400">{f.size}</p>
-                                        </div>
-                                      </div>
+                                      <AttachmentLink
+                                        key={f.id ?? idx}
+                                        name={f.name}
+                                        url={f.url}
+                                        mimeType={f.type}
+                                        caption={`Inspection photo${f.size ? ` · ${f.size}` : ""}`}
+                                        tone="teal"
+                                      />
                                     ))}
                                   </div>
                                 )}
@@ -2515,13 +2443,22 @@ export function AdminDashboard() {
                                         </p>
                                         <div className="flex flex-wrap gap-2">
                                           {req.completionFiles.map((f, i) => (
-                                            <span
-                                              key={i}
-                                              className="flex items-center gap-1 px-2 py-1 bg-white border border-teal-200 rounded-lg text-[10px] text-gray-700"
+                                            /* Opens the stored file; plain text when none was saved. */
+                                            <a
+                                              key={f.id ?? i}
+                                              href={f.url || undefined}
+                                              target={f.url ? "_blank" : undefined}
+                                              rel="noreferrer"
+                                              title={f.url ? `Open ${f.name}` : "No file was stored for this record."}
+                                              className={`flex items-center gap-1 px-2 py-1 bg-white border rounded-lg text-[10px] ${
+                                                f.url
+                                                  ? "border-teal-200 text-gray-700 hover:border-teal-400"
+                                                  : "border-dashed border-gray-200 text-gray-400 cursor-default"
+                                              }`}
                                             >
                                               <span>📎</span> {f.name}{" "}
                                               <span className="text-gray-400">({f.size})</span>
-                                            </span>
+                                            </a>
                                           ))}
                                         </div>
                                       </>

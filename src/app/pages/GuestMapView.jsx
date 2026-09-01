@@ -6,7 +6,6 @@ import "leaflet/dist/leaflet.css";
 import { MapPin, Store, X, LogIn, UserPlus, User, ChevronRight, CheckSquare } from "lucide-react";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
-import {} from "../services/applicationsApi";
 import { FloorSwitcher } from "../components/FloorSwitcher";
 import { showToast } from "../components/Toast";
 

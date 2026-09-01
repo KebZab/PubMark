@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
-import {} from "../services/applicationsApi";
 import { getSession } from "../components/authStorage";
 import { saveViolation } from "../components/violationsStore";
 import { showToast } from "../components/Toast";

@@ -4,6 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
+import { readAssetForUpload, DOCUMENT_PICKER_TYPES } from "../../services/fileUpload";
 import { createTransfer, updateApplicationPermit } from "../../services/api";
 import { Card, StatusPill, formatDate } from "../../components/ui";
 
@@ -21,10 +22,10 @@ export default function ApplicationDetailScreen({ route, navigation }) {
   const canTransfer = app.status === "approved";
   const permitMissing = !app.permitFileName;
 
-  const attachPermit = async (fileName) => {
+  const attachPermit = async (file) => {
     setBusy(true);
     try {
-      const { application } = await updateApplicationPermit(app.id, fileName);
+      const { application } = await updateApplicationPermit(app.id, file);
       setApp(application);
       Alert.alert("Permit submitted", "Your business permit has been attached to this application.");
     } catch (e) {
@@ -40,19 +41,35 @@ export default function ApplicationDetailScreen({ route, navigation }) {
       Alert.alert("Camera access needed", "Allow camera access to photograph your permit.");
       return;
     }
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.7, base64: true });
     if (!result.canceled && result.assets[0]) {
-      await attachPermit(result.assets[0].fileName ?? `permit-${Date.now()}.jpg`);
+      const asset = result.assets[0];
+      try {
+        await attachPermit(await readAssetForUpload({
+          ...asset,
+          name: asset.fileName ?? `permit-${Date.now()}.jpg`,
+          mimeType: asset.mimeType ?? "image/jpeg",
+        }));
+      } catch (e) {
+        Alert.alert("Cannot attach file", e.message);
+      }
     }
   };
 
   const pickFile = async () => {
+    // copyToCacheDirectory copies the pick into app cache, giving a readable
+    // file:// uri. Without it Android hands back a content:// uri the file
+    // reader cannot open.
     const result = await DocumentPicker.getDocumentAsync({
-      type: ["application/pdf", "image/*"],
-      copyToCacheDirectory: false,
+      type: DOCUMENT_PICKER_TYPES,
+      copyToCacheDirectory: true,
     });
     if (!result.canceled && result.assets?.[0]) {
-      await attachPermit(result.assets[0].name);
+      try {
+        await attachPermit(await readAssetForUpload(result.assets[0]));
+      } catch (e) {
+        Alert.alert("Cannot attach file", e.message);
+      }
     }
   };
 

@@ -28,6 +28,8 @@ import { formatFileSize } from "../components/applicationsStorage";
 import { getSession } from "../components/authStorage";
 import { getTransfersByFromUserId, createTransferRequest } from "../services/transfersApi";
 import { showToast } from "../components/Toast";
+import { AttachmentLink } from "../components/AttachmentLink";
+import { FILE_ACCEPT_ATTRIBUTE, describeFileProblem } from "../services/fileUpload";
 import {
   formatPermitDeadline,
   getApplicationDisplayStatus,
@@ -253,9 +255,11 @@ export function ApplicationDetails() {
 
   async function handlePermitUpload(file) {
     if (!id || !app) return;
+    const problem = describeFileProblem(file);
+    if (problem) { showToast(problem, "error"); return; }
     setUploading(true);
     try {
-      const updated = await updateApplicationPermit(id, file.name, formatFileSize(file.size));
+      const updated = await updateApplicationPermit(id, file);
       setApplications((current) =>
         current.map((item) => (item.id === updated.id ? updated : item)),
       );
@@ -494,29 +498,20 @@ export function ApplicationDetails() {
             </div>
             <div className="space-y-2">
               {app.permitFileName ? (
-                <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border border-gray-200">
-                  <div className="w-9 h-9 bg-teal-50 rounded-xl flex items-center justify-center flex-shrink-0">
-                    <FileText className="w-4 h-4 text-[#14B8A6]" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-semibold text-gray-900 truncate">
-                      {app.permitFileName}
-                    </p>
-                    <p className="text-[10px] text-gray-400">
-                      Business Permit{app.permitFileSize ? ` · ${app.permitFileSize}` : ""}
-                    </p>
-                  </div>
-                  <span className="text-[10px] px-2 py-0.5 bg-teal-100 text-teal-700 rounded-full font-medium flex-shrink-0">
-                    Uploaded
-                  </span>
-                </div>
+                <AttachmentLink
+                  name={app.permitFileName}
+                  url={app.permitUrl}
+                  caption={`Business Permit${app.permitFileSize ? ` · ${app.permitFileSize}` : ""}`}
+                  badge="Uploaded"
+                  tone="teal"
+                />
               ) : (
                 /* Upload prompt — shown for any status if no permit yet */
                 <div>
                   <input
                     type="file"
                     id="permit-upload"
-                    accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                    accept={FILE_ACCEPT_ATTRIBUTE}
                     className="hidden"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
@@ -830,9 +825,15 @@ export function ApplicationDetails() {
                 <input
                   type="file"
                   id="receipt-file"
-                  accept=".pdf,.jpg,.jpeg,.png"
+                  accept={FILE_ACCEPT_ATTRIBUTE}
                   className="hidden"
-                  onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
+                  onChange={(e) => {
+                          const file = e.target.files?.[0] || null;
+                          e.target.value = "";
+                          const problem = file ? describeFileProblem(file) : null;
+                          if (problem) { showToast(problem, "error"); setReceiptFile(null); return; }
+                          setReceiptFile(file);
+                        }}
                 />
                 <label
                   htmlFor="receipt-file"

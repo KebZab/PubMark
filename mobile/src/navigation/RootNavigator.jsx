@@ -5,6 +5,7 @@ import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { useAuth } from "../context/AuthContext";
 import LoginScreen from "../screens/LoginScreen";
+import RegisterScreen from "../screens/RegisterScreen";
 import VendorHomeScreen from "../screens/vendor/HomeScreen";
 import VendorApplicationsScreen from "../screens/vendor/ApplicationsScreen";
 import VendorNoticesScreen from "../screens/vendor/NoticesScreen";
@@ -119,6 +120,18 @@ function OfficerTabs() {
   );
 }
 
+// Signed-out flow. A stack rather than a bare screen so vendors can reach
+// registration and come back. On success the session appears and RootNavigator
+// swaps this whole stack out for the role's tabs.
+function AuthNavigator() {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="Login" component={LoginScreen} />
+      <Stack.Screen name="Register" component={RegisterScreen} />
+    </Stack.Navigator>
+  );
+}
+
 export default function RootNavigator() {
   const { user, loading } = useAuth();
 
@@ -134,7 +147,7 @@ export default function RootNavigator() {
 
   return (
     <NavigationContainer>
-      {!user ? <LoginScreen /> : user.role === "officer" ? <OfficerTabs /> : <VendorNavigator />}
+      {!user ? <AuthNavigator /> : user.role === "officer" ? <OfficerTabs /> : <VendorNavigator />}
     </NavigationContainer>
   );
 }

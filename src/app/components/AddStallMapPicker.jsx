@@ -3,8 +3,6 @@ import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { X, ChevronRight } from "lucide-react";
-import {} from "../services/stallsApi";
-import {} from "../services/applicationsApi";
 import { FloorSwitcher } from "./FloorSwitcher";
 
 function getApprovedApp(stallId, apps) {
