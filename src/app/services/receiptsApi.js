@@ -1,16 +1,5 @@
 import { apiFetch } from "./api";
-
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result;
-      resolve(result.split(",").pop() ?? "");
-    };
-    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file."));
-    reader.readAsDataURL(file);
-  });
-}
+import { readFileForUpload } from "./fileUpload";
 
 export async function getReceipts() {
   const response = await apiFetch("/receipts");
@@ -18,7 +7,7 @@ export async function getReceipts() {
 }
 
 export async function submitReceipt(data) {
-  const base64 = await fileToBase64(data.file);
+  const file = await readFileForUpload(data.file);
   const response = await apiFetch("/receipts", {
     method: "POST",
     body: JSON.stringify({
@@ -26,12 +15,7 @@ export async function submitReceipt(data) {
       amount: data.amount,
       receiptDate: data.receiptDate,
       notes: data.notes,
-      file: {
-        name: data.file.name,
-        type: data.file.type || "application/octet-stream",
-        size: data.file.size,
-        base64,
-      },
+      file,
     }),
   });
   return response.receipt;

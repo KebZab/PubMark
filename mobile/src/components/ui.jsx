@@ -1,4 +1,4 @@
-import { ActivityIndicator, Alert, Platform, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Linking, Platform, Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 
@@ -109,6 +109,58 @@ export function OfficerHeader({ title, subtitle, right }) {
         </View>
         {right}
       </View>
+    </View>
+  );
+}
+
+/**
+ * Attachments on a record — evidence photos, inspection shots, permits.
+ *
+ * `url` is a short-lived signed link the server produces only for people
+ * allowed to see the record, so anything rendered here is already permitted.
+ * Older records kept a file name with no file behind it; those show as a
+ * plain dimmed chip rather than a thumbnail that cannot load.
+ */
+export function Attachments({ files = [], emptyLabel }) {
+  if (!files.length) {
+    return emptyLabel ? <Text className="mt-3 text-[11px] italic text-gray-400">{emptyLabel}</Text> : null;
+  }
+  return (
+    <View className="mt-3 flex-row flex-wrap gap-2">
+      {files.map((file, index) => {
+        const isImage = String(file.type || "").startsWith("image");
+        if (file.url && isImage) {
+          return (
+            <Pressable
+              key={file.id ?? index}
+              onPress={() => Linking.openURL(file.url)}
+              className="h-16 w-16 overflow-hidden rounded-lg border border-gray-200"
+            >
+              <Image source={{ uri: file.url }} className="h-full w-full" resizeMode="cover" />
+            </Pressable>
+          );
+        }
+        return (
+          <Pressable
+            key={file.id ?? index}
+            onPress={() => (file.url ? Linking.openURL(file.url) : null)}
+            disabled={!file.url}
+            className={`flex-row items-center rounded-lg px-2 py-1.5 ${file.url ? "bg-gray-100" : "bg-gray-50"}`}
+          >
+            <Ionicons
+              name={file.url ? "document-outline" : "close-circle-outline"}
+              size={11}
+              color={file.url ? "#6b7280" : "#9ca3af"}
+            />
+            <Text
+              className={`ml-1 max-w-[9rem] text-[10px] ${file.url ? "text-gray-600" : "text-gray-400"}`}
+              numberOfLines={1}
+            >
+              {file.name}
+            </Text>
+          </Pressable>
+        );
+      })}
     </View>
   );
 }

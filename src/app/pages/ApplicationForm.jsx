@@ -16,12 +16,12 @@ import {
   Plus,
 } from "lucide-react";
 import { useStalls } from "../hooks/useStalls";
-import {} from "../services/stallsApi";
 import { useApplications } from "../hooks/useApplications";
 import { createApplication } from "../services/applicationsApi";
 import { addMonths, formatFileSize } from "../components/applicationsStorage";
 import { getSession, getUserById } from "../components/authStorage";
 import { showToast } from "../components/Toast";
+import { describeFileProblem, FILE_ACCEPT_ATTRIBUTE } from "../services/fileUpload";
 import { AddStallMapPicker } from "../components/AddStallMapPicker";
 
 const TERM_OPTIONS = [
@@ -68,6 +68,20 @@ export function ApplicationForm() {
 
   const session = getSession();
   const userProfile = session ? getUserById(session.userId) : null;
+
+  // Checks the picked file against the same size and type limits the server
+  // enforces, so an oversized document is refused instantly instead of after
+  // a slow upload.
+  function pickFile(setter) {
+    return (event) => {
+      const file = event.target.files?.[0] || null;
+      event.target.value = ""; // let the same file be re-picked after an error
+      if (!file) { setter(null); return; }
+      const problem = describeFileProblem(file);
+      if (problem) { showToast(problem, "error"); setter(null); return; }
+      setter(file);
+    };
+  }
 
   const [permitFile, setPermitFile] = useState(null);
   const [additionalFile, setAdditionalFile] = useState(null);
@@ -173,10 +187,8 @@ export function ApplicationForm() {
             contractStart: startDate,
             contractTermMonths: termMonths,
             contractEnd,
-            permitFileName: permitFile?.name ?? null,
-            permitFileSize: permitFile ? formatFileSize(permitFile.size) : null,
-            additionalFileName: additionalFile?.name ?? null,
-            additionalFileSize: additionalFile ? formatFileSize(additionalFile.size) : null,
+            permitFile,
+            additionalFile,
             notes,
           });
         }),
@@ -499,10 +511,10 @@ export function ApplicationForm() {
                 </label>
                 <input
                   type="file"
-                  onChange={(e) => setPermitFile(e.target.files?.[0] || null)}
+                  onChange={pickFile(setPermitFile)}
                   className="hidden"
                   id="permit"
-                  accept=".pdf,.doc,.docx,.jpg,.png"
+                  accept={FILE_ACCEPT_ATTRIBUTE}
                 />
                 <label
                   htmlFor="permit"
@@ -545,9 +557,10 @@ export function ApplicationForm() {
                 </label>
                 <input
                   type="file"
-                  onChange={(e) => setAdditionalFile(e.target.files?.[0] || null)}
+                  onChange={pickFile(setAdditionalFile)}
                   className="hidden"
                   id="additional"
+                  accept={FILE_ACCEPT_ATTRIBUTE}
                 />
                 <label
                   htmlFor="additional"

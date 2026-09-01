@@ -13,9 +13,10 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import { readAssetForUpload, formatFileSize } from "../../services/fileUpload";
 import { useApiData } from "../../hooks/useApiData";
 import { createViolation, getStalls, getViolations, updateViolation } from "../../services/api";
-import { Card, EmptyState, ErrorState, LoadingState, OfficerHeader, formatDate } from "../../components/ui";
+import { Attachments, Card, EmptyState, ErrorState, LoadingState, OfficerHeader, formatDate } from "../../components/ui";
 
 // Same eight categories the web officer dashboard offers.
 const CATEGORIES = [
@@ -65,14 +66,21 @@ export default function ViolationsScreen() {
       Alert.alert("Camera access needed", "Allow camera access to photograph evidence.");
       return;
     }
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+    // base64 so the real photo is stored, not just its name. quality 0.7 keeps
+    // a phone camera shot comfortably under the 5 MB limit.
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.7, base64: true });
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
-      const sizeMb = asset.fileSize ? `${(asset.fileSize / (1024 * 1024)).toFixed(1)} MB` : "1.0 MB";
-      setEvidence((prev) => [
-        ...prev,
-        { name: asset.fileName ?? `evidence-${Date.now()}.jpg`, type: "image", size: sizeMb },
-      ]);
+      try {
+        const file = await readAssetForUpload({
+          ...asset,
+          name: asset.fileName ?? `evidence-${Date.now()}.jpg`,
+          mimeType: asset.mimeType ?? "image/jpeg",
+        });
+        setEvidence((prev) => [...prev, { ...file, size: formatFileSize(file.size) }]);
+      } catch (error) {
+        Alert.alert("Cannot attach photo", error.message);
+      }
     }
   };
 
@@ -100,7 +108,8 @@ export default function ViolationsScreen() {
         stallId,
         category,
         description: description.trim(),
-        evidence: evidence.map((e) => ({ name: e.name, type: e.type, size: e.size })),
+        // Whole object, so the photo contents reach the server.
+        evidence,
       });
       setReportOpen(false);
       resetForm();
@@ -206,18 +215,7 @@ export default function ViolationsScreen() {
 
                   <Text className="mt-3 text-xs leading-5 text-gray-600">{v.description}</Text>
 
-                  {v.evidence.length > 0 ? (
-                    <View className="mt-3 flex-row flex-wrap gap-1.5">
-                      {v.evidence.map((e, i) => (
-                        <View key={i} className="flex-row items-center rounded-lg bg-gray-100 px-2 py-1">
-                          <Ionicons name="image-outline" size={11} color="#6b7280" />
-                          <Text className="ml-1 text-[10px] text-gray-600" numberOfLines={1}>
-                            {e.name}
-                          </Text>
-                        </View>
-                      ))}
-                    </View>
-                  ) : null}
+                  <Attachments files={v.evidence} />
 
                   <Text className="mt-3 text-[11px] text-gray-400">
                     {v.officerName ? `By ${v.officerName} · ` : ""}

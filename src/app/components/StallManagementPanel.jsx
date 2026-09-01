@@ -18,10 +18,10 @@ import {
 } from "lucide-react";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
-import {} from "./stallsStorage";
 import { getStallsManagementPage } from "../services/applicationsApi";
 import { TablePagination } from "./ui/TablePagination";
 import { showToast } from "./Toast";
+import { AttachmentLink } from "./AttachmentLink";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function getActiveApp(stallId, apps) {
@@ -240,33 +240,19 @@ function ContractInfoModal({ stall, app, onClose }) {
                 Submitted Documents
               </p>
               <div className="space-y-2">
-                <div className="flex items-center gap-3 bg-teal-50 border border-teal-200 rounded-xl p-3">
-                  <div className="w-8 h-8 bg-teal-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <FileText className="w-4 h-4 text-[#14B8A6]" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-semibold text-gray-800 truncate">
-                      {app.permitFileName}
-                    </p>
-                    <p className="text-[10px] text-gray-500">
-                      Business Permit{app.permitFileSize ? ` · ${app.permitFileSize}` : ""}
-                    </p>
-                  </div>
-                </div>
+                <AttachmentLink
+                  name={app.permitFileName}
+                  url={app.permitUrl}
+                  caption={`Business Permit${app.permitFileSize ? ` · ${app.permitFileSize}` : ""}`}
+                  tone="teal"
+                />
                 {app.additionalFileName && (
-                  <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-xl p-3">
-                    <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                      <FileText className="w-4 h-4 text-blue-500" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold text-gray-800 truncate">
-                        {app.additionalFileName}
-                      </p>
-                      <p className="text-[10px] text-gray-500">
-                        Additional Doc{app.additionalFileSize ? ` · ${app.additionalFileSize}` : ""}
-                      </p>
-                    </div>
-                  </div>
+                  <AttachmentLink
+                    name={app.additionalFileName}
+                    url={app.additionalFileUrl}
+                    caption={`Additional Doc${app.additionalFileSize ? ` · ${app.additionalFileSize}` : ""}`}
+                    tone="blue"
+                  />
                 )}
               </div>
             </div>

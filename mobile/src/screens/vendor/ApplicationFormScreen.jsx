@@ -14,6 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
+import { readAssetForUpload, DOCUMENT_PICKER_TYPES } from "../../services/fileUpload";
 import { createApplication } from "../../services/api";
 import { Card } from "../../components/ui";
 
@@ -69,20 +70,35 @@ export default function ApplicationFormScreen({ route, navigation }) {
       Alert.alert("Camera access needed", "Allow camera access to photograph your permit.");
       return;
     }
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.7, base64: true });
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
-      setter({ name: asset.fileName ?? `permit-${Date.now()}.jpg` });
+      try {
+        setter(await readAssetForUpload({
+          ...asset,
+          name: asset.fileName ?? `permit-${Date.now()}.jpg`,
+          mimeType: asset.mimeType ?? "image/jpeg",
+        }));
+      } catch (e) {
+        Alert.alert("Cannot attach file", e.message);
+      }
     }
   };
 
   const pickFile = async (setter) => {
+    // copyToCacheDirectory copies the pick into app cache, giving a readable
+    // file:// uri. Without it Android hands back a content:// uri the file
+    // reader cannot open.
     const result = await DocumentPicker.getDocumentAsync({
-      type: ["application/pdf", "image/*"],
-      copyToCacheDirectory: false,
+      type: DOCUMENT_PICKER_TYPES,
+      copyToCacheDirectory: true,
     });
     if (!result.canceled && result.assets?.[0]) {
-      setter({ name: result.assets[0].name });
+      try {
+        setter(await readAssetForUpload(result.assets[0]));
+      } catch (e) {
+        Alert.alert("Cannot attach file", e.message);
+      }
     }
   };
 
@@ -98,8 +114,9 @@ export default function ApplicationFormScreen({ route, navigation }) {
         contractStart: startDate,
         contractTermMonths: termMonths,
         contractEnd,
-        permitPath: permit?.name ?? null,
-        additionalFilePath: additional?.name ?? null,
+        // Whole file objects: the server uploads them and returns links.
+        permit: permit ?? null,
+        additionalFile: additional ?? null,
         notes: notes.trim(),
         applicantAddress: applicantAddress.trim() || undefined,
       });

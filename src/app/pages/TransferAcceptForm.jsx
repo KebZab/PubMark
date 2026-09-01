@@ -23,6 +23,7 @@ import {
 import { getSession, getUserById } from "../components/authStorage";
 import { updateTransferStatus, getTransferById } from "../services/transfersApi";
 import { showToast } from "../components/Toast";
+import { describeFileProblem, FILE_ACCEPT_ATTRIBUTE } from "../services/fileUpload";
 
 const TERM_OPTIONS = [
   { value: "6", label: "6 Months" },
@@ -88,6 +89,19 @@ export function TransferAcceptForm() {
       cancelled = true;
     };
   }, [transferId]);
+
+  // Same size/type limits the server enforces, reported immediately rather
+  // than after the upload attempt.
+  function pickFile(setter) {
+    return (event) => {
+      const file = event.target.files?.[0] || null;
+      event.target.value = "";
+      if (!file) { setter(null); return; }
+      const problem = describeFileProblem(file);
+      if (problem) { showToast(problem, "error"); setter(null); return; }
+      setter(file);
+    };
+  }
 
   const [permitFile, setPermitFile] = useState(null);
   const [additionalFile, setAdditionalFile] = useState(null);
@@ -183,10 +197,8 @@ export function TransferAcceptForm() {
         contractStart: startDate,
         contractTermMonths: termMonths,
         contractEnd,
-        permitFileName: permitFile?.name ?? null,
-        permitFileSize: permitFile ? formatFileSize(permitFile.size) : null,
-        additionalFileName: additionalFile?.name ?? null,
-        additionalFileSize: additionalFile ? formatFileSize(additionalFile.size) : null,
+        permitFile,
+        additionalFile,
         notes: notes ? `${notes}\n\n${transferNote}` : transferNote,
       });
 
@@ -411,10 +423,10 @@ export function TransferAcceptForm() {
               </label>
               <input
                 type="file"
-                onChange={(e) => setPermitFile(e.target.files?.[0] || null)}
+                onChange={pickFile(setPermitFile)}
                 className="hidden"
                 id="permit"
-                accept=".pdf,.doc,.docx,.jpg,.png"
+                accept={FILE_ACCEPT_ATTRIBUTE}
               />
               <label
                 htmlFor="permit"
@@ -457,9 +469,10 @@ export function TransferAcceptForm() {
               </label>
               <input
                 type="file"
-                onChange={(e) => setAdditionalFile(e.target.files?.[0] || null)}
+                onChange={pickFile(setAdditionalFile)}
                 className="hidden"
                 id="additional"
+                accept={FILE_ACCEPT_ATTRIBUTE}
               />
               <label
                 htmlFor="additional"

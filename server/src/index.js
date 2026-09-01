@@ -13,25 +13,121 @@ if (!jwtSecret) throw new Error("JWT_SECRET is required.");
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required. Copy server/.env.example to server/.env and fill in real values.");
 const db = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 
-const RECEIPTS_BUCKET = "receipts";
+// ── Attachments (Supabase Storage) ──────────────────────────────────────────
+// One private bucket holds every attachment, separated by prefix:
+//   permits/<applicationId>/…  violations/<violationId>/…
+//   checks/<checkRequestId>/…  receipts/<receiptId>/…
+// The bucket has no RLS policies on purpose. This server connects with the
+// service role and bypasses RLS, so nothing can be read with an anon key —
+// files only ever leave here as short-lived signed URLs, and only for rows the
+// caller was already allowed to receive.
+const ATTACHMENTS_BUCKET = "attachments";
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024; // 5 MB
+const SIGNED_URL_TTL_SECONDS = 600;
+const ALLOWED_ATTACHMENT_MIME = new Set([
+  "image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "application/pdf",
+]);
+// Marks rows recorded before real uploads existed: a file name with no file.
+const VIRTUAL_PATH_PREFIX = "virtual://";
+
 const supabaseStorage = process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
   ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
   : null;
 
-async function uploadReceiptFile(receiptId, base64Data, fileName, mimeType) {
-  if (!supabaseStorage) throw new Error("Receipt uploads are not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in server/.env.");
-  const buffer = Buffer.from(base64Data, "base64");
-  const storagePath = `${receiptId}/${fileName}`;
-  const { error } = await supabaseStorage.storage.from(RECEIPTS_BUCKET).upload(storagePath, buffer, { contentType: mimeType, upsert: true });
-  if (error) throw new Error(`Receipt upload failed: ${error.message}`);
-  return storagePath;
+class AttachmentError extends Error {
+  constructor(message, status = 400) { super(message); this.status = status; }
 }
 
-async function getReceiptSignedUrl(storagePath) {
+function humanSize(bytes) { return `${(bytes / (1024 * 1024)).toFixed(1)} MB`; }
+
+// Storage keys must be predictable, so strip anything that isn't safe. Real
+// data already contains names like "Screenshot_20260828_152723_Expo Go.jpg".
+function sanitizeFileName(name) {
+  const cleaned = String(name || "attachment")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "");
+  return (cleaned || "attachment").slice(0, 120);
+}
+
+/**
+ * Uploads one base64 attachment and returns its storage path.
+ * Size is measured from the decoded bytes, never from a client-supplied
+ * value, so a forged `size` field cannot get a large file through.
+ */
+async function uploadAttachment(prefix, ownerId, file) {
+  // The uploader's own mistakes are reported first: telling someone their
+  // file is too large is more useful than a server-configuration error they
+  // cannot act on.
+  const mimeType = String(file?.type || "").toLowerCase();
+  if (!ALLOWED_ATTACHMENT_MIME.has(mimeType)) {
+    throw new AttachmentError(`"${file?.name || "file"}" is not an accepted file type. Upload a JPEG, PNG, WebP, HEIC image or a PDF.`);
+  }
+  const buffer = Buffer.from(String(file?.base64 || ""), "base64");
+  if (buffer.length === 0) throw new AttachmentError("The uploaded file is empty.");
+  if (buffer.length > MAX_ATTACHMENT_BYTES) {
+    throw new AttachmentError(`"${file?.name || "file"}" is ${humanSize(buffer.length)}. The limit is ${humanSize(MAX_ATTACHMENT_BYTES)}.`);
+  }
+  if (!supabaseStorage) {
+    throw new AttachmentError("File uploads are not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in server/.env.", 500);
+  }
+  const storagePath = `${prefix}/${ownerId}/${crypto.randomUUID()}-${sanitizeFileName(file?.name)}`;
+  const { error } = await supabaseStorage.storage
+    .from(ATTACHMENTS_BUCKET)
+    .upload(storagePath, buffer, { contentType: mimeType, upsert: false });
+  if (error) throw new AttachmentError(`Upload failed: ${error.message}`, 502);
+  return { storagePath, byteSize: buffer.length, mimeType };
+}
+
+// True when the client actually sent file contents to store.
+function hasFileContents(file) {
+  return Boolean(file && file.base64 && file.name && file.type);
+}
+
+async function signedUrlFor(storagePath) {
   if (!supabaseStorage || !storagePath) return null;
-  const { data, error } = await supabaseStorage.storage.from(RECEIPTS_BUCKET).createSignedUrl(storagePath, 600);
+  if (String(storagePath).startsWith(VIRTUAL_PATH_PREFIX)) return null;
+  const { data, error } = await supabaseStorage.storage
+    .from(ATTACHMENTS_BUCKET)
+    .createSignedUrl(storagePath, SIGNED_URL_TTL_SECONDS);
   if (error) return null;
   return data.signedUrl;
+}
+
+async function removeAttachment(storagePath) {
+  if (!supabaseStorage || !storagePath) return;
+  if (String(storagePath).startsWith(VIRTUAL_PATH_PREFIX)) return;
+  await supabaseStorage.storage.from(ATTACHMENTS_BUCKET).remove([storagePath]).catch(() => {});
+}
+
+/**
+ * Uploads a list of attachments for one owning record and returns the rows to
+ * insert. If any file is rejected, everything already uploaded in this batch
+ * is removed first, so a failed request leaves nothing orphaned in Storage.
+ *
+ * Every attachment must carry its contents. Accepting a name with no file
+ * behind it is what left older records showing a document nobody could open,
+ * so a client that fails to read a file is told, rather than silently
+ * recording a placeholder.
+ */
+async function storeAttachments(prefix, ownerId, files, uploadedBy) {
+  const list = (Array.isArray(files) ? files : []).filter(Boolean);
+  const stored = [];
+  try {
+    for (const file of list) {
+      if (!hasFileContents(file)) {
+        throw new AttachmentError(
+          `"${file?.name || "The attachment"}" could not be read, so it was not saved. Please attach it again.`
+        );
+      }
+      const { storagePath, byteSize, mimeType } = await uploadAttachment(prefix, ownerId, file);
+      stored.push({ storagePath, fileName: String(file.name), mimeType, fileSize: byteSize, uploadedBy });
+    }
+  } catch (error) {
+    await Promise.all(stored.map((f) => removeAttachment(f.storagePath)));
+    throw error;
+  }
+  return stored;
 }
 const configuredOrigins = (process.env.CLIENT_ORIGIN || "").split(",").map((origin) => origin.trim()).filter(Boolean);
 const allowedOrigins = new Set(configuredOrigins);
@@ -122,25 +218,10 @@ function buildPermitMetaRemarks(visibleRemarks, meta = {}) {
   return parts.join("\n");
 }
 
-function mapCompletionMimeType(type) {
-  if (type === "image") return "image/*";
-  if (type === "video") return "video/*";
-  return "application/octet-stream";
-}
-
 function mapCompletionFileType(mimeType) {
   if ((mimeType || "").startsWith("image/")) return "image";
   if ((mimeType || "").startsWith("video/")) return "video";
   return "document";
-}
-
-function parseDisplaySizeToBytes(size) {
-  const match = String(size || "").trim().match(/^([\d.]+)\s*(B|KB|MB|GB)$/i);
-  if (!match) return 0;
-  const value = Number(match[1]);
-  const unit = match[2].toUpperCase();
-  const multipliers = { B: 1, KB: 1024, MB: 1024 * 1024, GB: 1024 * 1024 * 1024 };
-  return Number.isFinite(value) ? Math.round(value * multipliers[unit]) : 0;
 }
 
 function formatBytes(bytes) {
@@ -156,16 +237,20 @@ async function getCheckRequestFilesMap(requestIds) {
   if (requestIds.length === 0) return new Map();
   const placeholders = requestIds.map((_, i) => `$${i + 1}`).join(", ");
   const { rows } = await db.query(
-    `SELECT check_request_id, file_name, mime_type, file_size FROM check_request_files WHERE check_request_id IN (${placeholders}) ORDER BY created_at ASC`,
+    `SELECT id, check_request_id, storage_path, file_name, mime_type, file_size FROM check_request_files WHERE check_request_id IN (${placeholders}) ORDER BY created_at ASC`,
     requestIds
   );
   const filesMap = new Map();
   for (const row of rows) {
     const existing = filesMap.get(row.check_request_id) || [];
     existing.push({
+      // `id` lets a client hand an existing file back on update without
+      // re-uploading it; `url` is null for rows recorded before real uploads.
+      id: row.id,
       name: row.file_name,
       type: mapCompletionFileType(row.mime_type),
       size: formatBytes(row.file_size),
+      url: await signedUrlFor(row.storage_path),
     });
     filesMap.set(row.check_request_id, existing);
   }
@@ -279,16 +364,18 @@ async function getViolationEvidenceMap(violationIds) {
   if (violationIds.length === 0) return new Map();
   const placeholders = violationIds.map((_, i) => `$${i + 1}`).join(", ");
   const { rows } = await db.query(
-    `SELECT violation_id, file_name, mime_type, file_size FROM violation_evidence WHERE violation_id IN (${placeholders}) ORDER BY created_at ASC`,
+    `SELECT id, violation_id, storage_path, file_name, mime_type, file_size FROM violation_evidence WHERE violation_id IN (${placeholders}) ORDER BY created_at ASC`,
     violationIds
   );
   const evidenceMap = new Map();
   for (const row of rows) {
     const existing = evidenceMap.get(row.violation_id) || [];
     existing.push({
+      id: row.id,
       name: row.file_name,
       type: mapCompletionFileType(row.mime_type),
       size: formatBytes(row.file_size),
+      url: await signedUrlFor(row.storage_path),
     });
     evidenceMap.set(row.violation_id, existing);
   }
@@ -329,7 +416,16 @@ function mapTerminationRequestRow(row) {
   };
 }
 
-async function listViolationsInternal() {
+/**
+ * @param {string|null} vendorId When set, restricts the result to that
+ *   vendor's own violations. Evidence photos are only signed for rows that
+ *   come back, so this filter is what keeps one vendor from opening another
+ *   vendor's evidence.
+ */
+async function listViolationsInternal(vendorId = null) {
+  const params = [];
+  let where = "";
+  if (vendorId) { params.push(vendorId); where = `WHERE v.vendor_id = $${params.length}`; }
   const { rows } = await db.query(`
     SELECT
       v.id, v.stall_id, v.vendor_id, v.officer_id, v.category, v.description, v.status, v.remarks, v.created_at, v.resolved_at,
@@ -340,8 +436,9 @@ async function listViolationsInternal() {
     LEFT JOIN stalls s ON s.id = v.stall_id
     LEFT JOIN profiles vp ON vp.id = v.vendor_id
     LEFT JOIN profiles op ON op.id = v.officer_id
+    ${where}
     ORDER BY v.created_at DESC
-  `);
+  `, params);
   const evidenceMap = await getViolationEvidenceMap(rows.map((row) => row.id));
   return rows.map((row) => mapViolationRow(row, evidenceMap));
 }
@@ -361,7 +458,15 @@ async function listTerminationRequestsInternal() {
   return rows.map(mapTerminationRequestRow);
 }
 
-function mapApplicationRow(r) {
+// Stored paths look like "permits/<id>/<uuid>-my-permit.jpg". Strip the folder
+// and the uuid the server added so the vendor sees the name they uploaded.
+function displayFileName(storagePath) {
+  if (!storagePath) return null;
+  const base = String(storagePath).split("/").pop() || "";
+  return base.replace(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-/i, "") || null;
+}
+
+async function mapApplicationRow(r) {
   const permitMeta = parsePermitMeta(r.admin_remarks || "");
 
   return {
@@ -379,10 +484,14 @@ function mapApplicationRow(r) {
     contractStart: r.contract_start,
     contractTermMonths: r.contract_term_months.toString(),
     contractEnd: r.contract_end,
-    permitFileName: r.permit_path ? r.permit_path.split("/").pop() : null,
+    permitFileName: displayFileName(r.permit_path),
     permitFileSize: null,
-    additionalFileName: r.additional_file_path ? r.additional_file_path.split("/").pop() : null,
+    // Null when no file was actually stored, so the UI can show the name
+    // without offering a link that cannot open.
+    permitUrl: await signedUrlFor(r.permit_path),
+    additionalFileName: displayFileName(r.additional_file_path),
     additionalFileSize: null,
+    additionalFileUrl: await signedUrlFor(r.additional_file_path),
     notes: r.notes || "",
     status: r.status,
     adminRemarks: r.admin_remarks || "",
@@ -630,25 +739,17 @@ app.post("/api/check-requests", requireAuth, requireRole("admin", "super_admin")
     if (!["pending", "completed", "cancelled"].includes(status)) return res.status(400).json({ message: "Invalid status." });
 
     const id = crypto.randomUUID();
+    const storedFiles = await storeAttachments("checks", id, req.body.completionFiles, req.auth.sub);
+
     await db.query(
       "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
       [id, stallId, requestedBy, assignedTo, priority, reason, notes || null, status, createdAt, completedAt, completionNotes, completionSummary]
     );
-    if (Array.isArray(req.body.completionFiles)) {
-      for (const file of req.body.completionFiles) {
-        await db.query(
-          "INSERT INTO check_request_files (id, check_request_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-          [
-            crypto.randomUUID(),
-            id,
-            `virtual://check-requests/${id}/${String(file.name || "attachment")}`,
-            String(file.name || "attachment"),
-            mapCompletionMimeType(file.type),
-            parseDisplaySizeToBytes(file.size),
-            req.auth.sub,
-          ]
-        );
-      }
+    for (const file of storedFiles) {
+      await db.query(
+        "INSERT INTO check_request_files (id, check_request_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        [crypto.randomUUID(), id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
+      );
     }
     res.status(201).json({ request: (await listCheckRequestsInternal()).find((item) => item.id === id) });
   } catch (error) { next(error); }
@@ -676,19 +777,29 @@ app.patch("/api/check-requests/:id", requireAuth, requireRole("admin", "super_ad
     }
 
     if (Array.isArray(req.body.completionFiles)) {
-      await db.query("DELETE FROM check_request_files WHERE check_request_id = $1", [req.params.id]);
-      for (const file of req.body.completionFiles) {
+      // A client editing an inspection sends back the files it already had
+      // (identified by id, with no contents) plus any new ones. Keep the
+      // former untouched — re-inserting them would throw away the real
+      // uploads — and delete only what was actually removed.
+      const { rows: currentFiles } = await db.query(
+        "SELECT id, storage_path FROM check_request_files WHERE check_request_id = $1",
+        [req.params.id]
+      );
+      const keptIds = new Set(
+        req.body.completionFiles.map((file) => file?.id).filter(Boolean).map(String)
+      );
+      const incoming = req.body.completionFiles.filter((file) => !file?.id);
+      const storedFiles = await storeAttachments("checks", req.params.id, incoming, req.auth.sub);
+
+      for (const row of currentFiles) {
+        if (keptIds.has(String(row.id))) continue;
+        await db.query("DELETE FROM check_request_files WHERE id = $1", [row.id]);
+        await removeAttachment(row.storage_path);
+      }
+      for (const file of storedFiles) {
         await db.query(
           "INSERT INTO check_request_files (id, check_request_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-          [
-            crypto.randomUUID(),
-            req.params.id,
-            `virtual://check-requests/${req.params.id}/${String(file.name || "attachment")}`,
-            String(file.name || "attachment"),
-            mapCompletionMimeType(file.type),
-            parseDisplaySizeToBytes(file.size),
-            req.auth.sub,
-          ]
+          [crypto.randomUUID(), req.params.id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
         );
       }
     }
@@ -701,7 +812,12 @@ app.patch("/api/check-requests/:id", requireAuth, requireRole("admin", "super_ad
 
 app.delete("/api/check-requests/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try {
+    const { rows } = await db.query(
+      "SELECT storage_path FROM check_request_files WHERE check_request_id = $1",
+      [req.params.id]
+    );
     await db.query("DELETE FROM check_requests WHERE id = $1", [req.params.id]);
+    await Promise.all(rows.map((r) => removeAttachment(r.storage_path)));
     res.json({ ok: true });
   } catch (error) { next(error); }
 });
@@ -803,9 +919,10 @@ app.patch("/api/violation-requests/:id", requireAuth, requireRole("admin", "supe
   } catch (error) { next(error); }
 });
 
-app.get("/api/violations", requireAuth, requireRole("admin", "super_admin", "officer", "vendor"), async (_req, res, next) => {
+app.get("/api/violations", requireAuth, requireRole("admin", "super_admin", "officer", "vendor"), async (req, res, next) => {
   try {
-    res.json({ violations: await listViolationsInternal() });
+    const vendorId = req.auth.role === "vendor" ? req.auth.sub : null;
+    res.json({ violations: await listViolationsInternal(vendorId) });
   } catch (error) { next(error); }
 });
 
@@ -824,22 +941,19 @@ app.post("/api/violations", requireAuth, requireRole("admin", "super_admin", "of
     if (!stallId || !category || !description) return res.status(400).json({ message: "Stall, category, and description are required." });
 
     const id = crypto.randomUUID();
+    // Upload every attachment before writing anything, so a rejected photo
+    // fails the whole request instead of creating a violation with evidence
+    // that silently went missing.
+    const storedEvidence = await storeAttachments("violations", id, evidence, req.auth.sub);
+
     await db.query(
       "INSERT INTO violations (id, stall_id, vendor_id, officer_id, category, description, status, remarks, created_at, resolved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
       [id, stallId, vendorId, officerId, category, description, status, remarks || null, createdAt, resolvedAt]
     );
-    for (const file of evidence) {
+    for (const file of storedEvidence) {
       await db.query(
         "INSERT INTO violation_evidence (id, violation_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        [
-          crypto.randomUUID(),
-          id,
-          `virtual://violations/${id}/${String(file.name || "attachment")}`,
-          String(file.name || "attachment"),
-          mapCompletionMimeType(file.type),
-          parseDisplaySizeToBytes(file.size),
-          req.auth.sub,
-        ]
+        [crypto.randomUUID(), id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
       );
     }
     res.status(201).json({ violation: (await listViolationsInternal()).find((item) => item.id === id) });
@@ -865,18 +979,14 @@ app.patch("/api/violations/:id", requireAuth, requireRole("admin", "super_admin"
       await db.query(`UPDATE violations SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
     }
     if (Array.isArray(req.body.evidence) && req.body.evidence.length > 0) {
-      for (const file of req.body.evidence) {
+      // Files carrying an id are ones the client already had; re-inserting
+      // them would duplicate the attachment list on every edit.
+      const incoming = req.body.evidence.filter((file) => !file?.id);
+      const storedEvidence = await storeAttachments("violations", req.params.id, incoming, req.auth.sub);
+      for (const file of storedEvidence) {
         await db.query(
           "INSERT INTO violation_evidence (id, violation_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-          [
-            crypto.randomUUID(),
-            req.params.id,
-            `virtual://violations/${req.params.id}/${String(file.name || "attachment")}`,
-            String(file.name || "attachment"),
-            mapCompletionMimeType(file.type),
-            parseDisplaySizeToBytes(file.size),
-            req.auth.sub,
-          ]
+          [crypto.randomUUID(), req.params.id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
         );
       }
     }
@@ -998,7 +1108,7 @@ app.get("/api/stalls/management", async (req, res, next) => {
       values.push(offset); sql += ` OFFSET $${values.length}`;
     }
     const { rows } = await db.query(sql, values);
-    const items = rows.map((r) => ({
+    const items = await Promise.all(rows.map(async (r) => ({
       stall: {
         id: r.id, stall_name: r.stall_name, status: r.status, owner_id: null,
         business_type: r.business_type, section: r.section, floor: r.floor,
@@ -1006,7 +1116,7 @@ app.get("/api/stalls/management", async (req, res, next) => {
         geometry: typeof r.geometry === "string" ? JSON.parse(r.geometry) : r.geometry,
         created_at: r.created_at,
       },
-      app: r.app_id ? mapApplicationRow({
+      app: r.app_id ? await mapApplicationRow({
         id: r.app_id, user_id: r.app_user_id, stall_id: r.id,
         business_name: r.app_business_name, business_type: r.app_business_type,
         contract_start: r.app_contract_start, contract_term_months: r.app_contract_term_months,
@@ -1016,7 +1126,7 @@ app.get("/api/stalls/management", async (req, res, next) => {
         stall_name: r.stall_name, section: r.section, floor_area: r.floor_area,
         applicant_name: r.app_applicant_name, applicant_email: r.app_applicant_email, applicant_address: r.app_applicant_address,
       }) : null,
-    }));
+    })));
     res.json({ items, ...(total !== undefined ? { total } : {}) });
   } catch (error) { next(error); }
 });
@@ -1074,6 +1184,29 @@ async function findOwnedStallNames(ids) {
   return rows.map((r) => r.stall_name);
 }
 
+/**
+ * Every stored file belonging to one stall. Collected before the rows are
+ * deleted, because afterwards there is nothing left pointing at them and the
+ * files would sit in Storage forever, consuming quota.
+ */
+async function collectStallAttachmentPaths(conn, id) {
+  const { rows } = await conn.query(
+    `SELECT permit_path AS p FROM applications WHERE stall_id = $1 AND permit_path IS NOT NULL
+     UNION ALL
+     SELECT additional_file_path FROM applications WHERE stall_id = $1 AND additional_file_path IS NOT NULL
+     UNION ALL
+     SELECT storage_path FROM payment_receipts WHERE stall_id = $1 AND storage_path <> ''
+     UNION ALL
+     SELECT ve.storage_path FROM violation_evidence ve
+       JOIN violations v ON v.id = ve.violation_id WHERE v.stall_id = $1
+     UNION ALL
+     SELECT crf.storage_path FROM check_request_files crf
+       JOIN check_requests cr ON cr.id = crf.check_request_id WHERE cr.stall_id = $1`,
+    [id]
+  );
+  return rows.map((r) => r.p).filter(Boolean);
+}
+
 async function cascadeDeleteStall(conn, id) {
   await conn.query("DELETE FROM check_requests WHERE stall_id = $1", [id]);
   await conn.query("DELETE FROM violation_requests WHERE stall_id = $1", [id]);
@@ -1095,8 +1228,15 @@ app.delete("/api/stalls", requireAuth, requireRole("admin", "super_admin"), asyn
     }
     const conn = await db.connect();
     try { await conn.query("BEGIN");
+      // Gather file paths first — once the rows are gone nothing references
+      // them, and the files would linger in Storage forever.
+      const paths = [];
+      for (const id of ids) { paths.push(...(await collectStallAttachmentPaths(conn, id))); }
       for (const id of ids) { await cascadeDeleteStall(conn, id); }
-      await conn.query("COMMIT"); res.json({ ok: true });
+      await conn.query("COMMIT");
+      // After the commit: if this fails the data is still correctly deleted.
+      await Promise.all(paths.map(removeAttachment));
+      res.json({ ok: true });
     } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
     finally { conn.release(); }
   } catch (error) { next(error); }
@@ -1110,8 +1250,11 @@ app.delete("/api/stalls/:id", requireAuth, requireRole("admin", "super_admin"), 
     }
     const conn = await db.connect();
     try { await conn.query("BEGIN");
+      const paths = await collectStallAttachmentPaths(conn, req.params.id);
       await cascadeDeleteStall(conn, req.params.id);
-      await conn.query("COMMIT"); res.json({ ok: true });
+      await conn.query("COMMIT");
+      await Promise.all(paths.map(removeAttachment));
+      res.json({ ok: true });
     } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
     finally { conn.release(); }
   } catch (error) { next(error); }
@@ -1131,7 +1274,7 @@ app.post("/api/stalls/import", requireAuth, requireRole("admin", "super_admin"),
   } catch (error) { next(error); }
 });
 
-app.get("/api/applications", async (req, res, next) => {
+app.get("/api/applications", requireAuth, async (req, res, next) => {
   try {
     await autoTerminateExpiredPermitDeadlines();
 
@@ -1139,6 +1282,13 @@ app.get("/api/applications", async (req, res, next) => {
     const search = String(req.query.search || "").trim();
     const values = [];
     const conditions = [];
+    // A vendor may only ever see their own applications. This is also what
+    // keeps permit documents private: a signed URL is only produced for rows
+    // that survive this filter.
+    if (req.auth.role === "vendor") {
+      values.push(req.auth.sub);
+      conditions.push(`a.user_id = $${values.length}`);
+    }
     if (status) { values.push(status); conditions.push(`a.status = $${values.length}`); }
     if (search) {
       values.push(`%${search}%`);
@@ -1177,27 +1327,37 @@ app.get("/api/applications", async (req, res, next) => {
       values.push(offset); sql += ` OFFSET $${values.length}`;
     }
     const { rows } = await db.query(sql, values);
-    const applications = rows.map(mapApplicationRow);
+    const applications = await Promise.all(rows.map(mapApplicationRow));
     res.json({ applications, ...(total !== undefined ? { total } : {}) });
   } catch (error) { next(error); }
 });
 
 app.post("/api/applications", requireAuth, requireRole("vendor"), async (req, res, next) => {
   try {
-    const { stallId, businessName, businessType, contractStart, contractTermMonths, contractEnd, permitPath, additionalFilePath, notes, applicantAddress } = req.body;
+    const { stallId, businessName, businessType, contractStart, contractTermMonths, contractEnd, permit, additionalFile, notes, applicantAddress } = req.body;
     if (!stallId || !businessName || !businessType || !contractStart || !contractTermMonths || !contractEnd) {
       return res.status(400).json({ message: "Missing required fields." });
     }
     const id = crypto.randomUUID();
+    // Upload both documents before inserting, and clean up the first if the
+    // second is rejected, so a failed submission leaves nothing behind.
+    const [storedPermit] = await storeAttachments("permits", id, permit ? [permit] : [], req.auth.sub);
+    let storedAdditional;
+    try {
+      [storedAdditional] = await storeAttachments("permits", id, additionalFile ? [additionalFile] : [], req.auth.sub);
+    } catch (error) {
+      if (storedPermit) await removeAttachment(storedPermit.storagePath);
+      throw error;
+    }
     await db.query(
       "INSERT INTO applications (id, user_id, stall_id, business_name, business_type, contract_start, contract_term_months, contract_end, permit_path, additional_file_path, notes, applicant_address) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
-      [id, req.auth.sub, stallId, businessName, businessType, contractStart, parseInt(contractTermMonths), contractEnd, permitPath || null, additionalFilePath || null, notes || "", (applicantAddress || "").trim() || null]
+      [id, req.auth.sub, stallId, businessName, businessType, contractStart, parseInt(contractTermMonths), contractEnd, storedPermit?.storagePath || null, storedAdditional?.storagePath || null, notes || "", (applicantAddress || "").trim() || null]
     );
     const { rows } = await db.query(
       `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
       [id]
     );
-    const app = mapApplicationRow(rows[0]);
+    const app = await mapApplicationRow(rows[0]);
     res.status(201).json({ application: app });
   } catch (error) { next(error); }
 });
@@ -1216,18 +1376,18 @@ app.patch("/api/applications/:id", requireAuth, requireRole("admin", "super_admi
       [req.params.id]
     );
     if (!rows[0]) return res.status(404).json({ message: "Application not found." });
-    const app = mapApplicationRow(rows[0]);
+    const app = await mapApplicationRow(rows[0]);
     res.json({ application: app });
   } catch (error) { next(error); }
 });
 
 app.patch("/api/applications/:id/permit", requireAuth, async (req, res, next) => {
   try {
-    const { permitFileName } = req.body;
-    if (!permitFileName) return res.status(400).json({ message: "Permit file name is required." });
+    const permit = req.body.permit;
+    if (!permit?.name) return res.status(400).json({ message: "A permit file is required." });
 
     const { rows: existingRows } = await db.query(
-      "SELECT id, user_id, admin_remarks FROM applications WHERE id = $1",
+      "SELECT id, user_id, admin_remarks, permit_path FROM applications WHERE id = $1",
       [req.params.id]
     );
     const existing = existingRows[0];
@@ -1236,23 +1396,41 @@ app.patch("/api/applications/:id/permit", requireAuth, async (req, res, next) =>
       return res.status(403).json({ message: "Access denied." });
     }
 
+    const [stored] = await storeAttachments("permits", req.params.id, [permit], req.auth.sub);
     const meta = parsePermitMeta(existing.admin_remarks || "");
     await db.query(
       "UPDATE applications SET permit_path = $1, admin_remarks = $2 WHERE id = $3",
-      [permitFileName, buildPermitMetaRemarks(meta.visibleRemarks, {}), req.params.id]
+      [stored.storagePath, buildPermitMetaRemarks(meta.visibleRemarks, {}), req.params.id]
     );
+    // Drop the file this one replaced, so re-uploads don't accumulate.
+    if (existing.permit_path && existing.permit_path !== stored.storagePath) {
+      await removeAttachment(existing.permit_path);
+    }
 
     const { rows } = await db.query(
       `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
       [req.params.id]
     );
     if (!rows[0]) return res.status(404).json({ message: "Application not found." });
-    res.json({ application: mapApplicationRow(rows[0]) });
+    res.json({ application: await mapApplicationRow(rows[0]) });
   } catch (error) { next(error); }
 });
 
 app.delete("/api/applications/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
-  try { await db.query("DELETE FROM applications WHERE id = $1", [req.params.id]); res.json({ ok: true }); } catch (error) { next(error); }
+  try {
+    // Read the file paths before the row goes, or the permit is stranded in
+    // Storage with nothing left pointing at it.
+    const { rows } = await db.query(
+      "SELECT permit_path, additional_file_path FROM applications WHERE id = $1",
+      [req.params.id]
+    );
+    await db.query("DELETE FROM applications WHERE id = $1", [req.params.id]);
+    if (rows[0]) {
+      await removeAttachment(rows[0].permit_path);
+      await removeAttachment(rows[0].additional_file_path);
+    }
+    res.json({ ok: true });
+  } catch (error) { next(error); }
 });
 
 // ── Payment Receipts ──────────────────────────────────────────────────────────
@@ -1271,7 +1449,7 @@ async function mapPaymentReceiptRow(row) {
     fileName: row.file_name,
     mimeType: row.mime_type,
     fileSize: row.file_size,
-    fileUrl: await getReceiptSignedUrl(row.storage_path),
+    fileUrl: await signedUrlFor(row.storage_path),
     notes: row.notes || "",
     status: row.status,
     reviewedBy: row.reviewed_by,
@@ -1340,17 +1518,19 @@ app.post("/api/receipts", requireAuth, requireRole("vendor", "officer"), async (
     }
 
     const id = crypto.randomUUID();
+    // Upload first: if the file is rejected (too large, wrong type) we fail
+    // before writing a row, rather than leaving a receipt with no file.
+    let storagePath = "";
+    let byteSize = Number(file.size) || 0;
+    if (hasFileContents(file)) {
+      const uploaded = await uploadAttachment("receipts", id, file);
+      storagePath = uploaded.storagePath;
+      byteSize = uploaded.byteSize;
+    }
     await db.query(
       "INSERT INTO payment_receipts (id, stall_id, vendor_id, submitted_by, amount, receipt_date, storage_path, file_name, mime_type, file_size, notes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
-      [id, stallId, vendorId, req.auth.sub, amount, receiptDate, "", file.name, file.type, Number(file.size) || 0, notes || null]
+      [id, stallId, vendorId, req.auth.sub, amount, receiptDate, storagePath, file.name, file.type, byteSize, notes || null]
     );
-    // Only upload when the client actually sent file contents. Without it the
-    // receipt is metadata only, so storage_path stays empty and no signed URL
-    // is generated later.
-    if (file.base64) {
-      const storagePath = await uploadReceiptFile(id, file.base64, file.name, file.type);
-      await db.query("UPDATE payment_receipts SET storage_path = $1 WHERE id = $2", [storagePath, id]);
-    }
 
     const { rows } = await db.query(`${PAYMENT_RECEIPT_SELECT} WHERE pr.id = $1`, [id]);
     res.status(201).json({ receipt: await mapPaymentReceiptRow(rows[0]) });
@@ -1618,5 +1798,18 @@ app.delete("/api/perimeters/:id", requireAuth, requireRole("super_admin"), async
   } catch (error) { next(error); }
 });
 
-app.use((error, _req, res, _next) => { console.error(error); res.status(500).json({ message: "Unexpected server error." }); });
+app.use((error, _req, res, _next) => {
+  console.error(error);
+  // Attachment problems (too large, wrong type, upload rejected) carry a
+  // message written for the person uploading, so pass it through instead of
+  // flattening it into a generic 500 they cannot act on.
+  if (error instanceof AttachmentError) {
+    return res.status(error.status || 400).json({ message: error.message });
+  }
+  // express.json() rejects bodies over its limit before any route runs.
+  if (error?.type === "entity.too.large") {
+    return res.status(413).json({ message: `That file is too large. The limit is ${humanSize(MAX_ATTACHMENT_BYTES)} per file.` });
+  }
+  res.status(500).json({ message: "Unexpected server error." });
+});
 app.listen(port, () => console.log(`PubMark API listening on ${port}`));

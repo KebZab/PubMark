@@ -7,7 +7,6 @@ import "leaflet-draw";
 import { MapPin, Trash2, CheckCircle, AlertTriangle, PenLine, X } from "lucide-react";
 import { createPerimeter, deletePerimeter } from "../services/perimeterApi";
 import { usePerimeters } from "../hooks/usePerimeters";
-import {} from "./authStorage";
 import { showToast } from "./Toast";
 
 const PERIMETER_STYLE = {

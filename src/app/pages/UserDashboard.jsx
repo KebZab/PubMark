@@ -37,7 +37,6 @@ import "leaflet/dist/leaflet.css";
 import { getAnnouncements } from "../services/announcementsApi";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
-import {} from "../services/applicationsApi";
 import { getSession, clearSession } from "../components/authStorage";
 import { findUserByEmail } from "../services/api";
 import { showToast } from "../components/Toast";
