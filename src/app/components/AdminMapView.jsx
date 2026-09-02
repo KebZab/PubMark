@@ -37,13 +37,20 @@ import {
 import { showToast } from "./Toast";
 import { AttachmentLink } from "./AttachmentLink";
 
+// Every active (non-rejected) application on a stall, oldest first. A stall
+// stays open to further applications until one is approved, so more than one
+// vendor can be waiting on the same stall at once.
+function getActiveApps(stallId, applications) {
+  return applications
+    .filter((a) => a.stallId === stallId && a.status !== "rejected")
+    .sort((a, b) => new Date(a.dateApplied).getTime() - new Date(b.dateApplied).getTime());
+}
+
+// The one application that represents the stall's current state: the
+// approved tenant if there is one, otherwise whoever applied first.
 function getActiveApp(stallId, applications) {
-  return (
-    applications
-      .filter((a) => a.stallId === stallId && a.status !== "rejected")
-      .sort((a, b) => new Date(b.dateApplied).getTime() - new Date(a.dateApplied).getTime())[0] ??
-    null
-  );
+  const active = getActiveApps(stallId, applications);
+  return active.find((a) => a.status === "approved") ?? active[0] ?? null;
 }
 
 function calculatePolygonArea(geometry) {
@@ -227,8 +234,15 @@ function DrawControl({
       const app = getActiveApp(stall.id, applications);
       if (app?.status === "approved")
         return `<strong>${stall.stall_name}</strong> · ${app.businessName} (Occupied)`;
-      if (app?.status === "pending")
-        return `<strong>${stall.stall_name}</strong> · ${app.businessName} (Pending)`;
+      if (app?.status === "pending") {
+        // A stall stays open to further applications until one is approved,
+        // so more than one vendor can be waiting — a hover tooltip has no
+        // room to list every name, so show a count. With exactly one
+        // applicant, show their name as before.
+        const apps = getActiveApps(stall.id, applications);
+        const label = apps.length > 1 ? `${apps.length} applicants` : app.businessName;
+        return `<strong>${stall.stall_name}</strong> · ${label} (Pending)`;
+      }
       return `<strong>${stall.stall_name}</strong> · Vacant`;
     }
 
@@ -1025,7 +1039,11 @@ export function AdminMapView() {
   };
 
   // Precompute detail-panel vars to avoid IIFE in JSX
-  const detailApp = selectedStall ? getActiveApp(selectedStall.id, applications) : null;
+  const detailApps = selectedStall ? getActiveApps(selectedStall.id, applications) : [];
+  const detailApp = detailApps.find((a) => a.status === "approved") ?? detailApps[0] ?? null;
+  // More than one vendor waiting on a decision — nothing is approved yet, so
+  // every entry in detailApps is still pending.
+  const hasCompetingApplicants = detailApp?.status !== "approved" && detailApps.length > 1;
   const detailIsOccupied = detailApp?.status === "approved";
   const detailIsPending = detailApp?.status === "pending";
   const detailHeroBg = detailIsOccupied
@@ -1272,6 +1290,19 @@ export function AdminMapView() {
                   const app = getActiveApp(stall.id, applications);
                   const isOccupied = app?.status === "approved";
                   const isPending = app?.status === "pending";
+                  // A pending stall still accepts more applications, so more
+                  // than one vendor can be waiting — this row is too narrow
+                  // for every name, so show a count instead. With exactly one
+                  // applicant there's nothing to disambiguate, so show their
+                  // name as before; the full per-applicant list lives in the
+                  // detail panel once this stall is selected.
+                  const pendingApps = isPending ? getActiveApps(stall.id, applications) : [];
+                  const previewText =
+                    isPending && pendingApps.length > 1
+                      ? `${pendingApps.length} applicants`
+                      : app
+                        ? app.businessName
+                        : `Sec. ${stall.section} · ${stall.business_type}`;
                   const iconBg = isOccupied
                     ? "from-red-500 to-red-600"
                     : isPending
@@ -1305,11 +1336,7 @@ export function AdminMapView() {
                         <p className="text-sm font-semibold text-gray-900 truncate">
                           {stall.stall_name}
                         </p>
-                        <p className="text-xs text-gray-500 truncate">
-                          {app
-                            ? app.businessName
-                            : `Sec. ${stall.section} · ${stall.business_type}`}
-                        </p>
+                        <p className="text-xs text-gray-500 truncate">{previewText}</p>
                       </div>
                       {badge}
                     </button>
@@ -1334,13 +1361,61 @@ export function AdminMapView() {
                     {selectedStall.stall_name}
                   </p>
                   <div className="mt-0.5">{detailBadge}</div>
-                  {detailApp && (
+                  {detailApp && !hasCompetingApplicants && (
                     <p className="text-xs text-gray-500 mt-1 truncate">
                       {detailApp.businessName} · {detailApp.applicantName}
                     </p>
                   )}
                 </div>
               </div>
+
+              {/* All applicants, oldest first — this stall still accepts
+                  applications until one is approved, so more than one vendor
+                  can be waiting at once. The panel already scrolls
+                  (overflow-y-auto on the body above), so this list just adds
+                  more content rather than needing its own scroll area. */}
+              {hasCompetingApplicants && (
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">
+                    {detailApps.length} Applicants · none approved yet
+                  </p>
+                  <div className="space-y-2">
+                    {detailApps.map((app, i) => (
+                      <button
+                        key={app.id}
+                        onClick={() => setContractModal({ stall: selectedStall, app })}
+                        className="w-full text-left bg-gray-50 hover:bg-amber-50 rounded-xl p-3 transition-colors"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="w-6 h-6 rounded-lg bg-amber-100 flex items-center justify-center flex-shrink-0 text-[11px] font-bold text-amber-700">
+                            {i + 1}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-semibold text-gray-900 truncate">
+                              {app.businessName}
+                            </p>
+                            <p className="text-[11px] text-gray-500 truncate">
+                              {app.applicantName}
+                            </p>
+                          </div>
+                        </div>
+                        <p className="mt-1.5 text-[10px] text-gray-400 flex items-center gap-1">
+                          <Clock className="w-2.5 h-2.5" />
+                          {new Date(app.dateApplied).toLocaleDateString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                          })}{" "}
+                          at{" "}
+                          {new Date(app.dateApplied).toLocaleTimeString("en-US", {
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Key/value info rows */}
               <div className="bg-gray-50 rounded-xl divide-y divide-gray-100">
@@ -1408,8 +1483,10 @@ export function AdminMapView() {
                 </div>
               </div>
 
-              {/* Primary action: View Contract / Pending Application */}
-              {detailApp && (
+              {/* Primary action: View Contract / Pending Application. Hidden
+                  when the applicant list above already covers this — each
+                  row there opens the same contract view for that applicant. */}
+              {detailApp && !hasCompetingApplicants && (
                 <button
                   onClick={() => setContractModal({ stall: selectedStall, app: detailApp })}
                   className={`w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-all shadow-sm ${
