@@ -3,7 +3,16 @@ import { useNavigate, Link } from "react-router";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { MapPin, Store, X, LogIn, UserPlus, User, ChevronRight, CheckSquare } from "lucide-react";
+import {
+  MapPin,
+  Store,
+  X,
+  LogIn,
+  UserPlus,
+  User,
+  ChevronRight,
+  CheckSquare,
+} from "lucide-react";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
 import { FloorSwitcher } from "../components/FloorSwitcher";
@@ -28,7 +37,9 @@ function getGeometryCentroid(geometry) {
 }
 
 function getApprovedApp(stallId, apps) {
-  return apps.find((a) => a.stallId === stallId && a.status === "approved") ?? null;
+  return (
+    apps.find((a) => a.stallId === stallId && a.status === "approved") ?? null
+  );
 }
 
 function DrawnStallsLayer({
@@ -44,7 +55,9 @@ function DrawnStallsLayer({
     const layers = [];
     stalls.forEach((stall) => {
       const occupied = !!getApprovedApp(stall.id, applications);
-      const isSelected = multiSelectMode ? selectedIds.has(stall.id) : stall.id === selectedId;
+      const isSelected = multiSelectMode
+        ? selectedIds.has(stall.id)
+        : stall.id === selectedId;
       const color = occupied ? "#9ca3af" : isSelected ? "#0d9488" : "#14B8A6";
       const fillOpacity = isSelected ? 0.4 : 0.22;
       const layer = L.geoJSON(
@@ -70,7 +83,15 @@ function DrawnStallsLayer({
     return () => {
       layers.forEach((l) => map.removeLayer(l));
     };
-  }, [stalls, applications, selectedId, selectedIds, multiSelectMode, map, onSelect]);
+  }, [
+    stalls,
+    applications,
+    selectedId,
+    selectedIds,
+    multiSelectMode,
+    map,
+    onSelect,
+  ]);
   return null;
 }
 
@@ -103,7 +124,10 @@ export function GuestMapView() {
   function handleSelectStall(stall) {
     if (multiSelectMode) {
       if (getApprovedApp(stall.id, applications)) {
-        showToast("That stall is occupied and can't be added to your selection.", "error");
+        showToast(
+          "That stall is occupied and can't be added to your selection.",
+          "error",
+        );
         return;
       }
       setSelectedIds((prev) => {
@@ -135,9 +159,13 @@ export function GuestMapView() {
     setPendingStallIds(ids);
   }
 
-  const approvedApp = selected ? getApprovedApp(selected.id, applications) : null;
+  const approvedApp = selected
+    ? getApprovedApp(selected.id, applications)
+    : null;
   const selectedOccupied = !!approvedApp;
-  const vacantCount = floorStalls.filter((s) => !getApprovedApp(s.id, applications)).length;
+  const vacantCount = floorStalls.filter(
+    (s) => !getApprovedApp(s.id, applications),
+  ).length;
   const occupiedCount = floorStalls.length - vacantCount;
 
   const floorCounts = {
@@ -185,7 +213,9 @@ export function GuestMapView() {
               <MapPin className="w-4 h-4 text-white" />
             </div>
             <div className="min-w-0">
-              <span className="text-sm font-bold text-gray-900 leading-tight">PubMark</span>
+              <span className="text-sm font-bold text-gray-900 leading-tight">
+                PubMark
+              </span>
               <span className="text-[10px] text-gray-400 block leading-tight">
                 Browse Available Stalls
               </span>
@@ -234,12 +264,16 @@ export function GuestMapView() {
           </button>
           <div className="bg-white/96 backdrop-blur-md rounded-xl px-3 py-1.5 shadow-md border border-gray-100/80 flex items-center gap-1.5">
             <div className="w-2.5 h-2.5 rounded-full bg-[#14B8A6]" />
-            <span className="text-xs font-semibold text-gray-700">{vacantCount} Vacant</span>
+            <span className="text-xs font-semibold text-gray-700">
+              {vacantCount} Vacant
+            </span>
           </div>
           {occupiedCount > 0 && (
             <div className="bg-white/96 backdrop-blur-md rounded-xl px-3 py-1.5 shadow-md border border-gray-100/80 flex items-center gap-1.5">
               <div className="w-2.5 h-2.5 rounded-full bg-gray-400" />
-              <span className="text-xs font-semibold text-gray-700">{occupiedCount} Occupied</span>
+              <span className="text-xs font-semibold text-gray-700">
+                {occupiedCount} Occupied
+              </span>
             </div>
           )}
         </div>
@@ -253,8 +287,12 @@ export function GuestMapView() {
         >
           <div className="bg-white/90 backdrop-blur-md rounded-2xl px-6 py-5 shadow-xl border border-gray-100 text-center mx-6">
             <Store className="w-8 h-8 text-gray-300 mx-auto mb-2" />
-            <p className="text-sm font-semibold text-gray-600">No stalls available</p>
-            <p className="text-xs text-gray-400 mt-1">Check back later for available stalls.</p>
+            <p className="text-sm font-semibold text-gray-600">
+              No stalls available
+            </p>
+            <p className="text-xs text-gray-400 mt-1">
+              Check back later for available stalls.
+            </p>
           </div>
         </div>
       )}
@@ -283,7 +321,9 @@ export function GuestMapView() {
           style={{ bottom: "16px" }}
         >
           <div className="bg-[#14B8A6]/90 backdrop-blur-md rounded-xl px-3 py-2 flex-shrink-0">
-            <span className="text-xs font-semibold text-white">{selectedIds.size} selected</span>
+            <span className="text-xs font-semibold text-white">
+              {selectedIds.size} selected
+            </span>
           </div>
           <button
             onClick={handleApplyToSelection}
@@ -312,7 +352,9 @@ export function GuestMapView() {
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <p className="font-bold text-gray-900 text-base">{selected.stall_name}</p>
+                <p className="font-bold text-gray-900 text-base">
+                  {selected.stall_name}
+                </p>
                 <span
                   className={`text-xs font-semibold px-2 py-0.5 rounded-full ${selectedOccupied ? "bg-gray-100 text-gray-600" : "bg-teal-100 text-teal-700"}`}
                 >
@@ -341,7 +383,9 @@ export function GuestMapView() {
                   <User className="w-4 h-4 text-gray-500" />
                 </div>
                 <div>
-                  <p className="text-sm font-semibold text-gray-800">{approvedApp.businessName}</p>
+                  <p className="text-sm font-semibold text-gray-800">
+                    {approvedApp.businessName}
+                  </p>
                   <p className="text-xs text-gray-500">
                     {approvedApp.applicantName} · {approvedApp.businessType}
                   </p>
@@ -356,7 +400,9 @@ export function GuestMapView() {
                   <p className="text-sm font-semibold text-gray-800">
                     {selected.business_type || "General"}
                   </p>
-                  <p className="text-xs text-gray-500">No current owner · Open for applications</p>
+                  <p className="text-xs text-gray-500">
+                    No current owner · Open for applications
+                  </p>
                 </div>
               </div>
             )}
@@ -388,22 +434,30 @@ export function GuestMapView() {
             <div className="w-12 h-12 bg-teal-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
               <MapPin className="w-6 h-6 text-[#14B8A6]" />
             </div>
-            <h3 className="text-base font-bold text-gray-900 text-center mb-1">Account Required</h3>
+            <h3 className="text-base font-bold text-gray-900 text-center mb-1">
+              Account Required
+            </h3>
             <p className="text-sm text-gray-500 text-center mb-6 leading-relaxed">
               You need an account to apply for{" "}
-              {pendingStallIds.length > 1 ? `these ${pendingStallIds.length} stalls` : "a stall"}.
-              Create a free account or log in to continue.
+              {pendingStallIds.length > 1
+                ? `these ${pendingStallIds.length} stalls`
+                : "a stall"}
+              . Create a free account or log in to continue.
             </p>
             <div className="flex flex-col gap-3">
               <button
-                onClick={() => navigate(`/register?stallId=${pendingStallIds.join(",")}`)}
+                onClick={() =>
+                  navigate(`/register?stallId=${pendingStallIds.join(",")}`)
+                }
                 className="w-full py-3 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl font-semibold text-sm shadow-md flex items-center justify-center gap-2"
               >
                 <UserPlus className="w-4 h-4" />
                 Create Account
               </button>
               <button
-                onClick={() => navigate(`/?stallId=${pendingStallIds.join(",")}`)}
+                onClick={() =>
+                  navigate(`/?stallId=${pendingStallIds.join(",")}`)
+                }
                 className="w-full py-3 border border-[#14B8A6] text-[#14B8A6] rounded-xl font-semibold text-sm flex items-center justify-center gap-2 hover:bg-teal-50 transition-colors"
               >
                 <LogIn className="w-4 h-4" />

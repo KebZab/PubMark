@@ -35,10 +35,18 @@ export function Login() {
     try {
       const { profile: user } = await login(email, password);
       setLoading(false);
-      setSession({ userId: user.id, role: user.role, name: user.name, email: user.email });
+      setSession({
+        userId: user.id,
+        role: user.role,
+        name: user.name,
+        email: user.email,
+      });
       localStorage.setItem(
         "pubmark_pending_toast",
-        JSON.stringify({ message: `Welcome back, ${user.name}!`, type: "success" }),
+        JSON.stringify({
+          message: `Welcome back, ${user.name}!`,
+          type: "success",
+        }),
       );
       if (stallIds.length > 0 && (user.role ?? "vendor") === "vendor") {
         navigate(`/apply/${stallIds[0]}`, { state: { stallIds } });
@@ -94,7 +102,9 @@ export function Login() {
               </div>
               <div>
                 <p className="text-2xl font-bold text-white">PubMark</p>
-                <p className="text-teal-200 text-sm">Smart Market Management System</p>
+                <p className="text-teal-200 text-sm">
+                  Smart Market Management System
+                </p>
               </div>
             </div>
             <h2 className="text-3xl font-bold text-white leading-snug mb-4">
@@ -105,8 +115,9 @@ export function Login() {
               <span className="text-teal-200">Digitally.</span>
             </h2>
             <p className="text-teal-100 text-sm leading-relaxed">
-              Complete marketplace management — interactive maps, stall applications, vendor
-              management, violation tracking, and real-time analytics.
+              Complete marketplace management — interactive maps, stall
+              applications, vendor management, violation tracking, and real-time
+              analytics.
             </p>
           </div>
 
@@ -117,7 +128,10 @@ export function Login() {
               { n: "500+", l: "Stalls" },
               { n: "24/7", l: "Monitoring" },
             ].map((s) => (
-              <div key={s.l} className="text-center bg-white/10 rounded-2xl py-3">
+              <div
+                key={s.l}
+                className="text-center bg-white/10 rounded-2xl py-3"
+              >
                 <div className="text-2xl font-bold text-white">{s.n}</div>
                 <div className="text-xs text-teal-200 mt-0.5">{s.l}</div>
               </div>
@@ -134,8 +148,12 @@ export function Login() {
             <span className="font-bold text-gray-900">PubMark</span>
           </div>
 
-          <h1 className="text-2xl font-bold text-gray-900 mb-1">Welcome Back</h1>
-          <p className="text-gray-500 text-sm mb-6">Sign in to your PubMark account</p>
+          <h1 className="text-2xl font-bold text-gray-900 mb-1">
+            Welcome Back
+          </h1>
+          <p className="text-gray-500 text-sm mb-6">
+            Sign in to your PubMark account
+          </p>
 
           {/* Google login (mockup) */}
           <button
@@ -187,7 +205,9 @@ export function Login() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Password</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                Password
+              </label>
               <div className="relative">
                 <input
                   type={showPassword ? "text" : "password"}
@@ -202,7 +222,11 @@ export function Login() {
                   onClick={() => setShowPassword(!showPassword)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 transition-colors"
                 >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  {showPassword ? (
+                    <EyeOff className="w-4 h-4" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
                 </button>
               </div>
             </div>
@@ -232,7 +256,9 @@ export function Login() {
 
           {/* Demo accounts */}
           <div className="mt-5">
-            <p className="text-xs text-gray-400 text-center mb-2">Demo accounts</p>
+            <p className="text-xs text-gray-400 text-center mb-2">
+              Demo accounts
+            </p>
             <div className="flex flex-wrap gap-1.5 justify-center">
               {DEMO_ACCOUNTS.map((a) => (
                 <button
@@ -261,7 +287,10 @@ export function Login() {
             </button>
             <span className="text-xs text-gray-500">
               No account?{" "}
-              <Link to="/register" className="text-[#14B8A6] font-medium hover:underline">
+              <Link
+                to="/register"
+                className="text-[#14B8A6] font-medium hover:underline"
+              >
                 Register
               </Link>
             </span>

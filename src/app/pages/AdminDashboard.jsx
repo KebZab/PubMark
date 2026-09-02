@@ -179,8 +179,10 @@ export function AdminDashboard() {
   const [reportSubTab, setReportSubTab] = useState("violations");
   const [receiptsList, setReceiptsList] = useState([]);
   const [terminationsList, setTerminationsList] = useState([]);
-  const [announcementDeleteConfirm, setAnnouncementDeleteConfirm] = useState(null);
-  const [terminationActionConfirm, setTerminationActionConfirm] = useState(null);
+  const [announcementDeleteConfirm, setAnnouncementDeleteConfirm] =
+    useState(null);
+  const [terminationActionConfirm, setTerminationActionConfirm] =
+    useState(null);
   const [reportSearch, setReportSearch] = useState("");
   const [reportStatusFilter, setReportStatusFilter] = useState("all");
   const [permitDeadlineInput, setPermitDeadlineInput] = useState("");
@@ -210,7 +212,9 @@ export function AdminDashboard() {
     applications.filter((a) => a.status === "approved").map((a) => a.stallId),
   );
   const totalStalls = storedStalls.length;
-  const occupiedCount = storedStalls.filter((s) => approvedStallIds.has(s.id)).length;
+  const occupiedCount = storedStalls.filter((s) =>
+    approvedStallIds.has(s.id),
+  ).length;
   const vacantCount = totalStalls - occupiedCount;
 
   const stats = {
@@ -236,8 +240,15 @@ export function AdminDashboard() {
   const handleApprove = async (id) => {
     const targetApp = applications.find((application) => application.id === id);
     if (!targetApp) return;
-    if (!targetApp.permitFileName && selectedApp?.id === id && !permitDeadlineInput) {
-      showToast("Set a business permit deadline before approving this application.", "error");
+    if (
+      !targetApp.permitFileName &&
+      selectedApp?.id === id &&
+      !permitDeadlineInput
+    ) {
+      showToast(
+        "Set a business permit deadline before approving this application.",
+        "error",
+      );
       return;
     }
     if (!targetApp.permitFileName && selectedApp?.id !== id) {
@@ -258,7 +269,9 @@ export function AdminDashboard() {
       await updateApplicationStatus(id, "approved", adminRemarks || undefined);
       await Promise.all([refetchApplications(), loadApplicationsTable()]);
       if (selectedApp?.id === id)
-        setSelectedApp((prev) => (prev ? { ...prev, status: "approved", adminRemarks } : null));
+        setSelectedApp((prev) =>
+          prev ? { ...prev, status: "approved", adminRemarks } : null,
+        );
       setRemarksInput("");
       showToast("Application approved.", "success");
     } catch (error) {
@@ -274,7 +287,11 @@ export function AdminDashboard() {
       if (selectedApp?.id === id)
         setSelectedApp((prev) =>
           prev
-            ? { ...prev, status: "rejected", adminRemarks: adminRemarks || prev.adminRemarks }
+            ? {
+                ...prev,
+                status: "rejected",
+                adminRemarks: adminRemarks || prev.adminRemarks,
+              }
             : null,
         );
       setRemarksInput("");
@@ -296,7 +313,9 @@ export function AdminDashboard() {
         permitDeadlineAt: new Date(permitDeadlineInput).toISOString(),
         permitDeadlineUpdatedAt: new Date().toISOString(),
       });
-      const updated = await updateApplicationAdmin(selectedApp.id, { adminRemarks: nextRemarks });
+      const updated = await updateApplicationAdmin(selectedApp.id, {
+        adminRemarks: nextRemarks,
+      });
       await refetchApplications();
       setSelectedApp(updated);
       showToast("Permit deadline updated.", "success");
@@ -359,13 +378,17 @@ export function AdminDashboard() {
   }
 
   async function loadRequestData() {
-    const [violationRequestsResult, officerRequestsResult, officersResult, allUsersResult] =
-      await Promise.allSettled([
-        getViolationRequests(),
-        getCheckRequests(),
-        listUsers("officer"),
-        listUsers(),
-      ]);
+    const [
+      violationRequestsResult,
+      officerRequestsResult,
+      officersResult,
+      allUsersResult,
+    ] = await Promise.allSettled([
+      getViolationRequests(),
+      getCheckRequests(),
+      listUsers("officer"),
+      listUsers(),
+    ]);
 
     if (violationRequestsResult.status === "fulfilled") {
       setCheckRequests(violationRequestsResult.value);
@@ -380,10 +403,11 @@ export function AdminDashboard() {
     if (allUsersResult.status === "fulfilled") {
       try {
         await migrateLegacyRequests(session.userId, allUsersResult.value.users);
-        const [nextViolationRequestsResult, nextOfficerRequestsResult] = await Promise.allSettled([
-          getViolationRequests(),
-          getCheckRequests(),
-        ]);
+        const [nextViolationRequestsResult, nextOfficerRequestsResult] =
+          await Promise.allSettled([
+            getViolationRequests(),
+            getCheckRequests(),
+          ]);
         if (nextViolationRequestsResult.status === "fulfilled") {
           setCheckRequests(nextViolationRequestsResult.value);
         }
@@ -441,8 +465,15 @@ export function AdminDashboard() {
     if (allUsersResult.status === "fulfilled") {
       try {
         await migrateLegacyRequests(session.userId, allUsersResult.value.users);
-        const [nextViolationsResult, nextCheckRequestsResult, nextTerminationsResult] =
-          await Promise.allSettled([getViolations(), getCheckRequests(), getTerminationRequests()]);
+        const [
+          nextViolationsResult,
+          nextCheckRequestsResult,
+          nextTerminationsResult,
+        ] = await Promise.allSettled([
+          getViolations(),
+          getCheckRequests(),
+          getTerminationRequests(),
+        ]);
         if (nextViolationsResult.status === "fulfilled") {
           setViolationsList(nextViolationsResult.value);
           setAllViolations(nextViolationsResult.value);
@@ -476,7 +507,9 @@ export function AdminDashboard() {
   async function handleReviewReceipt(id, status) {
     try {
       const updated = await reviewReceipt(id, status);
-      setReceiptsList((current) => current.map((r) => (r.id === updated.id ? updated : r)));
+      setReceiptsList((current) =>
+        current.map((r) => (r.id === updated.id ? updated : r)),
+      );
       showToast(`Receipt ${status}.`, "success");
     } catch (error) {
       showToast(`Failed to update receipt: ${error.message}`, "error");
@@ -522,7 +555,9 @@ export function AdminDashboard() {
   async function handleDelete(id) {
     try {
       await deleteAnnouncement(id);
-      setAnnouncements((prev) => prev.filter((announcement) => announcement.id !== id));
+      setAnnouncements((prev) =>
+        prev.filter((announcement) => announcement.id !== id),
+      );
       showToast("Announcement deleted.", "success");
     } catch (error) {
       showToast(`Failed to delete announcement: ${error.message}`, "error");
@@ -581,7 +616,10 @@ export function AdminDashboard() {
       await assignRequestToOfficer(requestId, officerId, officer.name);
       await loadRequestData();
       setAssigningRequest(null);
-      showToast(`Officer "${officer.name}" assigned to check request.`, "success");
+      showToast(
+        `Officer "${officer.name}" assigned to check request.`,
+        "success",
+      );
     } catch (error) {
       showToast(`Failed to assign request: ${error.message}`, "error");
     }
@@ -591,7 +629,9 @@ export function AdminDashboard() {
     if (!terminationActionConfirm) return;
 
     try {
-      const request = terminationsList.find((item) => item.id === terminationActionConfirm.id);
+      const request = terminationsList.find(
+        (item) => item.id === terminationActionConfirm.id,
+      );
 
       if (
         terminationActionConfirm.action === "approved" &&
@@ -605,22 +645,33 @@ export function AdminDashboard() {
               application.stallId === request.stallId &&
               application.status === "approved",
           )
-          .sort((a, b) => new Date(b.dateApplied).getTime() - new Date(a.dateApplied).getTime())[0];
+          .sort(
+            (a, b) =>
+              new Date(b.dateApplied).getTime() -
+              new Date(a.dateApplied).getTime(),
+          )[0];
 
         if (activeContract) {
           const terminationRemarks = buildPermitDeadlineRemarks(
-            parsePermitDeadlineMeta(activeContract.adminRemarks).visibleRemarks ||
-              "Contract terminated by admin approval.",
+            parsePermitDeadlineMeta(activeContract.adminRemarks)
+              .visibleRemarks || "Contract terminated by admin approval.",
             {
               permitTerminatedAt: new Date().toISOString(),
             },
           );
-          await updateApplicationStatus(activeContract.id, "rejected", terminationRemarks);
+          await updateApplicationStatus(
+            activeContract.id,
+            "rejected",
+            terminationRemarks,
+          );
           await refetchApplications();
         }
       }
 
-      await updateTerminationStatus(terminationActionConfirm.id, terminationActionConfirm.action);
+      await updateTerminationStatus(
+        terminationActionConfirm.id,
+        terminationActionConfirm.action,
+      );
       setTerminationsList(await getTerminationRequests());
       showToast(
         terminationActionConfirm.action === "approved"
@@ -630,7 +681,10 @@ export function AdminDashboard() {
       );
       setTerminationActionConfirm(null);
     } catch (error) {
-      showToast(`Failed to process termination request: ${error.message}`, "error");
+      showToast(
+        `Failed to process termination request: ${error.message}`,
+        "error",
+      );
     }
   }
 
@@ -648,17 +702,36 @@ export function AdminDashboard() {
     navigate(paths[newTab]);
   }
 
-  const openViolations = allViolations.filter((v) => v.status === "open").length;
-  const pendingRequests = checkRequests.filter((r) => r.status === "pending").length;
+  const openViolations = allViolations.filter(
+    (v) => v.status === "open",
+  ).length;
+  const pendingRequests = checkRequests.filter(
+    (r) => r.status === "pending",
+  ).length;
 
   const TABS = [
     { id: "dashboard", label: "Overview", icon: LayoutDashboard },
     { id: "stalls", label: "Stall Map", icon: MapPin },
-    { id: "applications", label: "Applications", icon: FileText, badge: stats.pending },
+    {
+      id: "applications",
+      label: "Applications",
+      icon: FileText,
+      badge: stats.pending,
+    },
     { id: "stall-management", label: "Stall Management", icon: Store },
     { id: "announcements", label: "Announcements", icon: Megaphone },
-    { id: "violations", label: "Reports & Requests", icon: AlertTriangle, badge: openViolations },
-    { id: "check-requests", label: "Send Request", icon: Search, badge: pendingRequests },
+    {
+      id: "violations",
+      label: "Reports & Requests",
+      icon: AlertTriangle,
+      badge: openViolations,
+    },
+    {
+      id: "check-requests",
+      label: "Send Request",
+      icon: Search,
+      badge: pendingRequests,
+    },
   ];
 
   return (
@@ -713,7 +786,9 @@ export function AdminDashboard() {
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow">
                 <div className="flex items-center justify-between mb-3">
-                  <div className="text-sm font-medium text-gray-600">Total Applications</div>
+                  <div className="text-sm font-medium text-gray-600">
+                    Total Applications
+                  </div>
                   <div className="w-12 h-12 bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl flex items-center justify-center">
                     <FileText className="w-6 h-6 text-blue-600" />
                   </div>
@@ -729,41 +804,57 @@ export function AdminDashboard() {
 
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow">
                 <div className="flex items-center justify-between mb-3">
-                  <div className="text-sm font-medium text-gray-600">Pending</div>
+                  <div className="text-sm font-medium text-gray-600">
+                    Pending
+                  </div>
                   <div className="w-12 h-12 bg-gradient-to-br from-amber-50 to-amber-100 rounded-xl flex items-center justify-center">
                     <Clock className="w-6 h-6 text-amber-600" />
                   </div>
                 </div>
-                <div className="text-3xl font-bold text-amber-600 mb-1">{stats.pending}</div>
+                <div className="text-3xl font-bold text-amber-600 mb-1">
+                  {stats.pending}
+                </div>
                 <div className="text-sm text-gray-500">Awaiting review</div>
               </div>
 
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow">
                 <div className="flex items-center justify-between mb-3">
-                  <div className="text-sm font-medium text-gray-600">Approved</div>
+                  <div className="text-sm font-medium text-gray-600">
+                    Approved
+                  </div>
                   <div className="w-12 h-12 bg-gradient-to-br from-emerald-50 to-emerald-100 rounded-xl flex items-center justify-center">
                     <CheckCircle className="w-6 h-6 text-emerald-600" />
                   </div>
                 </div>
-                <div className="text-3xl font-bold text-emerald-600 mb-1">{stats.approved}</div>
-                <div className="text-sm text-gray-500">Successfully approved</div>
+                <div className="text-3xl font-bold text-emerald-600 mb-1">
+                  {stats.approved}
+                </div>
+                <div className="text-sm text-gray-500">
+                  Successfully approved
+                </div>
               </div>
 
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow">
                 <div className="flex items-center justify-between mb-3">
-                  <div className="text-sm font-medium text-gray-600">Rejected</div>
+                  <div className="text-sm font-medium text-gray-600">
+                    Rejected
+                  </div>
                   <div className="w-12 h-12 bg-gradient-to-br from-red-50 to-red-100 rounded-xl flex items-center justify-center">
                     <XCircle className="w-6 h-6 text-red-600" />
                   </div>
                 </div>
-                <div className="text-3xl font-bold text-red-600 mb-1">{stats.rejected}</div>
+                <div className="text-3xl font-bold text-red-600 mb-1">
+                  {stats.rejected}
+                </div>
                 <div className="text-sm text-gray-500">Not approved</div>
               </div>
             </div>
 
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
               <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-gray-900">Recent Applications</h2>
+                <h2 className="text-lg font-semibold text-gray-900">
+                  Recent Applications
+                </h2>
                 <button
                   onClick={() => handleTabChange("applications")}
                   className="text-sm text-[#14B8A6] hover:text-[#0d9488] font-medium"
@@ -797,13 +888,21 @@ export function AdminDashboard() {
                     {applications
                       .sort(
                         (a, b) =>
-                          new Date(b.dateApplied).getTime() - new Date(a.dateApplied).getTime(),
+                          new Date(b.dateApplied).getTime() -
+                          new Date(a.dateApplied).getTime(),
                       )
                       .slice(0, 5)
                       .map((app) => (
-                        <tr key={app.id} className="hover:bg-gray-50 transition-colors">
-                          <td className="px-6 py-4 font-medium text-gray-900">{app.stallName}</td>
-                          <td className="px-6 py-4 text-gray-600">{app.applicantName}</td>
+                        <tr
+                          key={app.id}
+                          className="hover:bg-gray-50 transition-colors"
+                        >
+                          <td className="px-6 py-4 font-medium text-gray-900">
+                            {app.stallName}
+                          </td>
+                          <td className="px-6 py-4 text-gray-600">
+                            {app.applicantName}
+                          </td>
                           <td className="px-6 py-4">
                             <span
                               className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${
@@ -814,20 +913,26 @@ export function AdminDashboard() {
                                     : "bg-red-50 text-red-700 ring-1 ring-red-600/20"
                               }`}
                             >
-                              {app.status.charAt(0).toUpperCase() + app.status.slice(1)}
+                              {app.status.charAt(0).toUpperCase() +
+                                app.status.slice(1)}
                             </span>
                           </td>
                           <td className="px-6 py-4 text-sm text-gray-600">
-                            {new Date(app.dateApplied).toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                              year: "numeric",
-                            })}
+                            {new Date(app.dateApplied).toLocaleDateString(
+                              "en-US",
+                              {
+                                month: "short",
+                                day: "numeric",
+                                year: "numeric",
+                              },
+                            )}
                           </td>
                           <td className="px-6 py-4 text-right">
                             <div className="flex items-center justify-end gap-2">
                               <button
-                                onClick={() => navigate(`/admin/application/${app.id}`)}
+                                onClick={() =>
+                                  navigate(`/admin/application/${app.id}`)
+                                }
                                 className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-200 transition-colors"
                               >
                                 <Eye className="w-4 h-4" />
@@ -877,8 +982,12 @@ export function AdminDashboard() {
                     <Megaphone className="w-4.5 h-4.5 text-[#14B8A6]" />
                   </div>
                   <div>
-                    <h2 className="text-base font-semibold text-gray-900">Make Announcement</h2>
-                    <p className="text-xs text-gray-500">Broadcast a message to all users</p>
+                    <h2 className="text-base font-semibold text-gray-900">
+                      Make Announcement
+                    </h2>
+                    <p className="text-xs text-gray-500">
+                      Broadcast a message to all users
+                    </p>
                   </div>
                 </div>
                 <button
@@ -932,8 +1041,8 @@ export function AdminDashboard() {
 
                 <div className="flex items-center justify-between pt-1">
                   <p className="text-xs text-gray-400">
-                    {announcements.length} announcement{announcements.length !== 1 ? "s" : ""}{" "}
-                    published
+                    {announcements.length} announcement
+                    {announcements.length !== 1 ? "s" : ""} published
                   </p>
                   <button
                     onClick={handlePostAnnouncement}
@@ -972,7 +1081,9 @@ export function AdminDashboard() {
                             <p className="text-sm font-medium text-gray-900 truncate">
                               {item.title}
                             </p>
-                            <p className="text-xs text-gray-400">{formatDate(item.createdAt)}</p>
+                            <p className="text-xs text-gray-400">
+                              {formatDate(item.createdAt)}
+                            </p>
                           </div>
                           <span
                             className={`flex-shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full ${cfg.badge}`}
@@ -980,7 +1091,9 @@ export function AdminDashboard() {
                             {cfg.label}
                           </span>
                           <button
-                            onClick={() => setAnnouncementDeleteConfirm(item.id)}
+                            onClick={() =>
+                              setAnnouncementDeleteConfirm(item.id)
+                            }
                             className="flex-shrink-0 w-7 h-7 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -1013,19 +1126,22 @@ export function AdminDashboard() {
               <div className="flex items-center gap-2">
                 <Store className="w-4 h-4 text-[#14B8A6]" />
                 <span className="text-sm text-gray-600">
-                  Total: <strong className="text-gray-900">{stats.totalStalls}</strong>
+                  Total:{" "}
+                  <strong className="text-gray-900">{stats.totalStalls}</strong>
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-2.5 h-2.5 rounded-full bg-emerald-500"></div>
                 <span className="text-sm text-gray-600">
-                  Occupied: <strong className="text-emerald-600">{stats.occupied}</strong>
+                  Occupied:{" "}
+                  <strong className="text-emerald-600">{stats.occupied}</strong>
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-2.5 h-2.5 rounded-full bg-[#14B8A6]"></div>
                 <span className="text-sm text-gray-600">
-                  Vacant: <strong className="text-[#14B8A6]">{stats.vacant}</strong>
+                  Vacant:{" "}
+                  <strong className="text-[#14B8A6]">{stats.vacant}</strong>
                 </span>
               </div>
               <div className="ml-auto text-xs text-gray-400">
@@ -1067,7 +1183,9 @@ export function AdminDashboard() {
                     )}
                   </button>
                 ))}
-                <span className="ml-auto text-xs text-gray-400">{applicationsTotal} total</span>
+                <span className="ml-auto text-xs text-gray-400">
+                  {applicationsTotal} total
+                </span>
               </div>
 
               {!applicationsLoading && tableApplications.length === 0 ? (
@@ -1075,7 +1193,9 @@ export function AdminDashboard() {
                   <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                     <FileText className="w-8 h-8 text-gray-400" />
                   </div>
-                  <p className="text-base font-semibold text-gray-700 mb-1">No applications yet</p>
+                  <p className="text-base font-semibold text-gray-700 mb-1">
+                    No applications yet
+                  </p>
                   <p className="text-sm text-gray-400">
                     Applications submitted by users will appear here.
                   </p>
@@ -1149,15 +1269,19 @@ export function AdminDashboard() {
                                       : "bg-red-50 text-red-700 ring-1 ring-red-600/20"
                                 }`}
                               >
-                                {app.status.charAt(0).toUpperCase() + app.status.slice(1)}
+                                {app.status.charAt(0).toUpperCase() +
+                                  app.status.slice(1)}
                               </span>
                             </td>
                             <td className="px-5 py-3.5 text-xs text-gray-500">
-                              {new Date(app.dateApplied).toLocaleDateString("en-US", {
-                                month: "short",
-                                day: "numeric",
-                                year: "numeric",
-                              })}
+                              {new Date(app.dateApplied).toLocaleDateString(
+                                "en-US",
+                                {
+                                  month: "short",
+                                  day: "numeric",
+                                  year: "numeric",
+                                },
+                              )}
                             </td>
                             <td className="px-5 py-3.5 text-right">
                               <div className="flex items-center justify-end gap-2">
@@ -1216,14 +1340,20 @@ export function AdminDashboard() {
             {/* Right: detail panel */}
             {selectedApp &&
               (() => {
-                const permitMeta = parsePermitDeadlineMeta(selectedApp.adminRemarks);
+                const permitMeta = parsePermitDeadlineMeta(
+                  selectedApp.adminRemarks,
+                );
                 return (
                   <div className="w-96 flex-shrink-0 bg-white rounded-xl shadow-sm border border-gray-200 overflow-y-auto flex flex-col">
                     {/* Panel header */}
                     <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-teal-50 to-white flex items-center justify-between flex-shrink-0">
                       <div>
-                        <p className="font-semibold text-gray-900">{selectedApp.stallName}</p>
-                        <p className="text-xs text-gray-500">{selectedApp.businessName}</p>
+                        <p className="font-semibold text-gray-900">
+                          {selectedApp.stallName}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {selectedApp.businessName}
+                        </p>
                       </div>
                       <button
                         onClick={() => setSelectedApp(null)}
@@ -1244,35 +1374,39 @@ export function AdminDashboard() {
                               : "bg-red-100 text-red-700"
                         }`}
                       >
-                        {selectedApp.status.charAt(0).toUpperCase() + selectedApp.status.slice(1)}
+                        {selectedApp.status.charAt(0).toUpperCase() +
+                          selectedApp.status.slice(1)}
                       </span>
 
-                      {selectedApp.status === "approved" && !selectedApp.permitFileName && (
-                        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-                          <p className="text-xs font-semibold text-amber-900">
-                            Business Permit Deadline
-                          </p>
-                          <p className="text-xs text-amber-700 mt-1">
-                            {permitMeta.permitDeadlineAt
-                              ? `Current deadline: ${formatPermitDeadline(permitMeta.permitDeadlineAt)}`
-                              : "No deadline set yet."}
-                          </p>
-                          <div className="mt-3 space-y-2">
-                            <input
-                              type="datetime-local"
-                              value={permitDeadlineInput}
-                              onChange={(e) => setPermitDeadlineInput(e.target.value)}
-                              className="w-full px-3 py-2 bg-white border border-amber-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-                            />
-                            <button
-                              onClick={handleSavePermitDeadline}
-                              className="w-full py-2 bg-amber-500 text-white rounded-lg text-xs font-semibold hover:bg-amber-600 transition-colors"
-                            >
-                              Move Deadline
-                            </button>
+                      {selectedApp.status === "approved" &&
+                        !selectedApp.permitFileName && (
+                          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+                            <p className="text-xs font-semibold text-amber-900">
+                              Business Permit Deadline
+                            </p>
+                            <p className="text-xs text-amber-700 mt-1">
+                              {permitMeta.permitDeadlineAt
+                                ? `Current deadline: ${formatPermitDeadline(permitMeta.permitDeadlineAt)}`
+                                : "No deadline set yet."}
+                            </p>
+                            <div className="mt-3 space-y-2">
+                              <input
+                                type="datetime-local"
+                                value={permitDeadlineInput}
+                                onChange={(e) =>
+                                  setPermitDeadlineInput(e.target.value)
+                                }
+                                className="w-full px-3 py-2 bg-white border border-amber-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                              />
+                              <button
+                                onClick={handleSavePermitDeadline}
+                                className="w-full py-2 bg-amber-500 text-white rounded-lg text-xs font-semibold hover:bg-amber-600 transition-colors"
+                              >
+                                Move Deadline
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        )}
 
                       {/* Applicant info */}
                       <div>
@@ -1286,7 +1420,9 @@ export function AdminDashboard() {
                               {selectedApp.applicantName}
                             </span>
                           </div>
-                          <p className="text-xs text-gray-500 pl-5">{selectedApp.applicantEmail}</p>
+                          <p className="text-xs text-gray-500 pl-5">
+                            {selectedApp.applicantEmail}
+                          </p>
                           <p className="text-xs text-gray-500 pl-5">
                             {selectedApp.applicantAddress}
                           </p>
@@ -1321,7 +1457,9 @@ export function AdminDashboard() {
                           <div className="flex justify-between text-sm">
                             <span className="text-gray-500">Start</span>
                             <span className="font-medium text-gray-800">
-                              {new Date(selectedApp.contractStart).toLocaleDateString("en-US", {
+                              {new Date(
+                                selectedApp.contractStart,
+                              ).toLocaleDateString("en-US", {
                                 month: "short",
                                 day: "numeric",
                                 year: "numeric",
@@ -1331,7 +1469,9 @@ export function AdminDashboard() {
                           <div className="flex justify-between text-sm">
                             <span className="text-gray-500">End</span>
                             <span className="font-medium text-gray-800">
-                              {new Date(selectedApp.contractEnd).toLocaleDateString("en-US", {
+                              {new Date(
+                                selectedApp.contractEnd,
+                              ).toLocaleDateString("en-US", {
                                 month: "short",
                                 day: "numeric",
                                 year: "numeric",
@@ -1356,7 +1496,9 @@ export function AdminDashboard() {
                               tone="teal"
                             />
                           ) : (
-                            <p className="text-xs text-gray-400 italic">No permit uploaded.</p>
+                            <p className="text-xs text-gray-400 italic">
+                              No permit uploaded.
+                            </p>
                           )}
                           {selectedApp.additionalFileName && (
                             <AttachmentLink
@@ -1395,7 +1537,9 @@ export function AdminDashboard() {
                             }`}
                           >
                             {permitMeta.visibleRemarks || (
-                              <span className="italic text-gray-400">No remarks provided.</span>
+                              <span className="italic text-gray-400">
+                                No remarks provided.
+                              </span>
                             )}
                           </div>
                         ) : (
@@ -1415,12 +1559,14 @@ export function AdminDashboard() {
                                 <input
                                   type="datetime-local"
                                   value={permitDeadlineInput}
-                                  onChange={(e) => setPermitDeadlineInput(e.target.value)}
+                                  onChange={(e) =>
+                                    setPermitDeadlineInput(e.target.value)
+                                  }
                                   className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#14B8A6]"
                                 />
                                 <p className="text-[11px] text-gray-400 mt-2">
-                                  Required before approval if the vendor still has not uploaded the
-                                  permit.
+                                  Required before approval if the vendor still
+                                  has not uploaded the permit.
                                 </p>
                               </div>
                             )}
@@ -1470,13 +1616,17 @@ export function AdminDashboard() {
                   <div className="w-8 h-8 bg-[#14B8A6]/20 rounded-lg flex items-center justify-center">
                     <Megaphone className="w-4 h-4 text-[#14B8A6]" />
                   </div>
-                  <h3 className="text-base font-semibold text-gray-900">Create New Announcement</h3>
+                  <h3 className="text-base font-semibold text-gray-900">
+                    Create New Announcement
+                  </h3>
                 </div>
 
                 <div className="p-6 space-y-4">
                   {/* Type selector */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Type</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Type
+                    </label>
                     <div className="flex gap-2">
                       {["info", "warning", "urgent", "success"].map((t) => {
                         const cfg = announcementTypeConfig[t];
@@ -1500,7 +1650,9 @@ export function AdminDashboard() {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Title</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                      Title
+                    </label>
                     <input
                       type="text"
                       value={newTitle}
@@ -1548,7 +1700,9 @@ export function AdminDashboard() {
                 <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                   <Megaphone className="w-8 h-8 text-gray-400" />
                 </div>
-                <p className="text-lg font-medium text-gray-900 mb-1">No announcements yet</p>
+                <p className="text-lg font-medium text-gray-900 mb-1">
+                  No announcements yet
+                </p>
                 <p className="text-sm text-gray-500">
                   Create your first announcement to notify users
                 </p>
@@ -1563,13 +1717,17 @@ export function AdminDashboard() {
                       key={item.id}
                       className={`bg-white rounded-xl shadow-sm border ${cfg.border} overflow-hidden group`}
                     >
-                      <div className={`${cfg.bg} px-6 py-4 flex items-start gap-4`}>
+                      <div
+                        className={`${cfg.bg} px-6 py-4 flex items-start gap-4`}
+                      >
                         <div className="w-10 h-10 bg-white/70 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5 shadow-sm">
                           <Icon className={`w-5 h-5 ${cfg.color}`} />
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-3 flex-wrap">
-                            <h3 className="text-base font-semibold text-gray-900">{item.title}</h3>
+                            <h3 className="text-base font-semibold text-gray-900">
+                              {item.title}
+                            </h3>
                             <span
                               className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${cfg.badge}`}
                             >
@@ -1577,7 +1735,8 @@ export function AdminDashboard() {
                             </span>
                           </div>
                           <p className="text-xs text-gray-500 mt-1">
-                            Posted by {item.author} · {formatDate(item.createdAt)}
+                            Posted by {item.author} ·{" "}
+                            {formatDate(item.createdAt)}
                           </p>
                         </div>
                         <button
@@ -1588,7 +1747,9 @@ export function AdminDashboard() {
                         </button>
                       </div>
                       <div className="px-6 py-4">
-                        <p className="text-sm text-gray-700 leading-relaxed">{item.message}</p>
+                        <p className="text-sm text-gray-700 leading-relaxed">
+                          {item.message}
+                        </p>
                       </div>
                     </div>
                   );
@@ -1603,9 +1764,12 @@ export function AdminDashboard() {
           <>
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h2 className="text-sm font-semibold text-gray-900">Reports & Requests</h2>
+                <h2 className="text-sm font-semibold text-gray-900">
+                  Reports & Requests
+                </h2>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  All officer-submitted violation reports and inspection completion reports
+                  All officer-submitted violation reports and inspection
+                  completion reports
                 </p>
               </div>
             </div>
@@ -1631,7 +1795,12 @@ export function AdminDashboard() {
                 className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${reportSubTab === "inspections" ? "bg-white text-[#14B8A6] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
               >
                 Inspection Reports (
-                {mapRequests.filter((r) => r.status === "completed" && r.completionSummary).length})
+                {
+                  mapRequests.filter(
+                    (r) => r.status === "completed" && r.completionSummary,
+                  ).length
+                }
+                )
               </button>
               <button
                 onClick={() => {
@@ -1641,15 +1810,22 @@ export function AdminDashboard() {
                   void getTerminationRequests()
                     .then(setTerminationsList)
                     .catch((error) => {
-                      showToast(`Failed to load termination requests: ${error.message}`, "error");
+                      showToast(
+                        `Failed to load termination requests: ${error.message}`,
+                        "error",
+                      );
                     });
                 }}
                 className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all relative ${reportSubTab === "terminations" ? "bg-white text-red-600 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
               >
                 Termination Requests
-                {terminationsList.filter((t) => t.status === "pending").length > 0 && (
+                {terminationsList.filter((t) => t.status === "pending").length >
+                  0 && (
                   <span className="ml-1 inline-flex items-center justify-center w-4 h-4 bg-red-500 text-white rounded-full text-[9px] font-bold">
-                    {terminationsList.filter((t) => t.status === "pending").length}
+                    {
+                      terminationsList.filter((t) => t.status === "pending")
+                        .length
+                    }
                   </span>
                 )}
               </button>
@@ -1662,7 +1838,8 @@ export function AdminDashboard() {
                 className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all relative ${reportSubTab === "receipts" ? "bg-white text-[#14B8A6] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
               >
                 Payment Receipts
-                {receiptsList.filter((r) => r.status === "pending").length > 0 && (
+                {receiptsList.filter((r) => r.status === "pending").length >
+                  0 && (
                   <span className="ml-1 inline-flex items-center justify-center w-4 h-4 bg-red-500 text-white rounded-full text-[9px] font-bold">
                     {receiptsList.filter((r) => r.status === "pending").length}
                   </span>
@@ -1701,19 +1878,30 @@ export function AdminDashboard() {
               (() => {
                 const filtered = violationsList.filter((v) => {
                   const matchStatus =
-                    reportStatusFilter === "all" || v.status === reportStatusFilter;
+                    reportStatusFilter === "all" ||
+                    v.status === reportStatusFilter;
                   const matchSearch =
                     !reportSearch ||
-                    v.stallName.toLowerCase().includes(reportSearch.toLowerCase()) ||
-                    v.officerName.toLowerCase().includes(reportSearch.toLowerCase()) ||
-                    v.category.toLowerCase().includes(reportSearch.toLowerCase()) ||
-                    v.vendorName.toLowerCase().includes(reportSearch.toLowerCase());
+                    v.stallName
+                      .toLowerCase()
+                      .includes(reportSearch.toLowerCase()) ||
+                    v.officerName
+                      .toLowerCase()
+                      .includes(reportSearch.toLowerCase()) ||
+                    v.category
+                      .toLowerCase()
+                      .includes(reportSearch.toLowerCase()) ||
+                    v.vendorName
+                      .toLowerCase()
+                      .includes(reportSearch.toLowerCase());
                   return matchStatus && matchSearch;
                 });
                 return filtered.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center">
                     <AlertTriangle className="w-10 h-10 text-gray-200 mx-auto mb-3" />
-                    <p className="text-sm text-gray-400">No violation reports found</p>
+                    <p className="text-sm text-gray-400">
+                      No violation reports found
+                    </p>
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -1721,8 +1909,14 @@ export function AdminDashboard() {
                       const isExpanded = expandedViolation === v.id;
                       const statusCfg = {
                         open: { label: "Open", cls: "bg-red-100 text-red-700" },
-                        resolved: { label: "Resolved", cls: "bg-green-100 text-green-700" },
-                        dismissed: { label: "Dismissed", cls: "bg-gray-100 text-gray-600" },
+                        resolved: {
+                          label: "Resolved",
+                          cls: "bg-green-100 text-green-700",
+                        },
+                        dismissed: {
+                          label: "Dismissed",
+                          cls: "bg-gray-100 text-gray-600",
+                        },
                       }[v.status];
                       return (
                         <div
@@ -1731,7 +1925,9 @@ export function AdminDashboard() {
                         >
                           <div
                             className="flex items-start gap-4 px-5 py-4 cursor-pointer hover:bg-gray-50 transition-colors"
-                            onClick={() => setExpandedViolation(isExpanded ? null : v.id)}
+                            onClick={() =>
+                              setExpandedViolation(isExpanded ? null : v.id)
+                            }
                           >
                             <div
                               className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${v.status === "open" ? "bg-red-500" : v.status === "resolved" ? "bg-green-500" : "bg-gray-400"}`}
@@ -1811,7 +2007,9 @@ export function AdminDashboard() {
                                   Evidence ({v.evidence.length})
                                 </p>
                                 {v.evidence.length === 0 ? (
-                                  <p className="text-xs text-gray-400 italic">No files attached</p>
+                                  <p className="text-xs text-gray-400 italic">
+                                    No files attached
+                                  </p>
                                 ) : (
                                   <div className="space-y-2">
                                     {v.evidence.map((ev, idx) => (
@@ -1840,20 +2038,28 @@ export function AdminDashboard() {
             {reportSubTab === "inspections" &&
               (() => {
                 const completedReqs = mapRequests.filter((r) => {
-                  const hasReport = r.status === "completed" && r.completionSummary;
+                  const hasReport =
+                    r.status === "completed" && r.completionSummary;
                   const matchSearch =
                     !reportSearch ||
-                    r.stallName.toLowerCase().includes(reportSearch.toLowerCase()) ||
-                    (r.assignedToName ?? "").toLowerCase().includes(reportSearch.toLowerCase()) ||
+                    r.stallName
+                      .toLowerCase()
+                      .includes(reportSearch.toLowerCase()) ||
+                    (r.assignedToName ?? "")
+                      .toLowerCase()
+                      .includes(reportSearch.toLowerCase()) ||
                     r.reason.toLowerCase().includes(reportSearch.toLowerCase());
                   return hasReport && matchSearch;
                 });
                 return completedReqs.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center">
                     <FileText className="w-10 h-10 text-gray-200 mx-auto mb-3" />
-                    <p className="text-sm text-gray-400">No completed inspection reports yet</p>
+                    <p className="text-sm text-gray-400">
+                      No completed inspection reports yet
+                    </p>
                     <p className="text-xs text-gray-400 mt-1">
-                      Reports appear here after officers submit completion summaries
+                      Reports appear here after officers submit completion
+                      summaries
                     </p>
                   </div>
                 ) : (
@@ -1873,7 +2079,9 @@ export function AdminDashboard() {
                         >
                           <div
                             className="flex items-start gap-4 px-5 py-4 cursor-pointer hover:bg-gray-50 transition-colors"
-                            onClick={() => setExpandedMapReq(isExpanded ? null : r.id)}
+                            onClick={() =>
+                              setExpandedMapReq(isExpanded ? null : r.id)
+                            }
                           >
                             <div className="mt-1.5 w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
                             <div className="flex-1 min-w-0">
@@ -1914,7 +2122,8 @@ export function AdminDashboard() {
                                 </div>
                               </div>
                               <p className="text-xs text-gray-500 mt-1 truncate">
-                                <span className="font-medium">Reason:</span> {r.reason}
+                                <span className="font-medium">Reason:</span>{" "}
+                                {r.reason}
                               </p>
                             </div>
                             <span className="text-gray-400 text-xs flex-shrink-0">
@@ -1957,7 +2166,9 @@ export function AdminDashboard() {
                                   Photo Evidence ({r.completionFiles.length})
                                 </p>
                                 {r.completionFiles.length === 0 ? (
-                                  <p className="text-xs text-gray-400 italic">No files attached</p>
+                                  <p className="text-xs text-gray-400 italic">
+                                    No files attached
+                                  </p>
                                 ) : (
                                   <div className="space-y-2">
                                     {r.completionFiles.map((f, idx) => (
@@ -1988,7 +2199,9 @@ export function AdminDashboard() {
                 {terminationsList.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center">
                     <AlertTriangle className="w-10 h-10 text-gray-200 mx-auto mb-3" />
-                    <p className="text-sm text-gray-400">No termination requests submitted yet</p>
+                    <p className="text-sm text-gray-400">
+                      No termination requests submitted yet
+                    </p>
                   </div>
                 ) : (
                   terminationsList.map((t) => {
@@ -2020,7 +2233,9 @@ export function AdminDashboard() {
                                   )}
                                 </p>
                                 <p className="text-xs text-gray-500 mt-0.5">
-                                  <span className="font-medium text-gray-700">{t.vendorName}</span>{" "}
+                                  <span className="font-medium text-gray-700">
+                                    {t.vendorName}
+                                  </span>{" "}
                                   · {t.vendorEmail}
                                 </p>
                                 <p className="text-xs text-gray-500 mt-0.5">
@@ -2042,13 +2257,16 @@ export function AdminDashboard() {
                                 <span
                                   className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${t.type === "account" ? "bg-red-50 text-red-700" : "bg-orange-50 text-orange-700"}`}
                                 >
-                                  {t.type === "account" ? "Account" : "Contract"}
+                                  {t.type === "account"
+                                    ? "Account"
+                                    : "Contract"}
                                 </span>
                               </div>
                             </div>
                             {t.reason && (
                               <p className="text-xs text-gray-600 mt-2 bg-gray-50 rounded-lg px-3 py-2 leading-relaxed">
-                                <span className="font-medium">Reason:</span> {t.reason}
+                                <span className="font-medium">Reason:</span>{" "}
+                                {t.reason}
                               </p>
                             )}
                             {isPending && (
@@ -2096,14 +2314,22 @@ export function AdminDashboard() {
                 const filtered = receiptsList.filter(
                   (r) =>
                     !reportSearch ||
-                    r.stallName.toLowerCase().includes(reportSearch.toLowerCase()) ||
-                    r.vendorName.toLowerCase().includes(reportSearch.toLowerCase()) ||
-                    r.submittedByName.toLowerCase().includes(reportSearch.toLowerCase()),
+                    r.stallName
+                      .toLowerCase()
+                      .includes(reportSearch.toLowerCase()) ||
+                    r.vendorName
+                      .toLowerCase()
+                      .includes(reportSearch.toLowerCase()) ||
+                    r.submittedByName
+                      .toLowerCase()
+                      .includes(reportSearch.toLowerCase()),
                 );
                 return filtered.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center">
                     <ReceiptIcon className="w-10 h-10 text-gray-200 mx-auto mb-3" />
-                    <p className="text-sm text-gray-400">No payment receipts submitted yet</p>
+                    <p className="text-sm text-gray-400">
+                      No payment receipts submitted yet
+                    </p>
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -2128,18 +2354,25 @@ export function AdminDashboard() {
                                   )}
                                 </p>
                                 <p className="text-xs text-gray-500 mt-0.5">
-                                  <span className="font-medium text-gray-700">{r.vendorName}</span>{" "}
+                                  <span className="font-medium text-gray-700">
+                                    {r.vendorName}
+                                  </span>{" "}
                                   · Paid{" "}
-                                  {new Date(r.receiptDate).toLocaleDateString("en-US", {
-                                    month: "short",
-                                    day: "numeric",
-                                    year: "numeric",
-                                  })}
+                                  {new Date(r.receiptDate).toLocaleDateString(
+                                    "en-US",
+                                    {
+                                      month: "short",
+                                      day: "numeric",
+                                      year: "numeric",
+                                    },
+                                  )}
                                 </p>
                                 <p className="text-xs text-gray-400 mt-0.5">
                                   Submitted by {r.submittedByName}
-                                  {r.submittedByRole === "officer" ? " (officer)" : ""} ·{" "}
-                                  {formatDate(r.createdAt)}
+                                  {r.submittedByRole === "officer"
+                                    ? " (officer)"
+                                    : ""}{" "}
+                                  · {formatDate(r.createdAt)}
                                 </p>
                               </div>
                               <span
@@ -2173,13 +2406,17 @@ export function AdminDashboard() {
                             {r.status === "pending" && (
                               <div className="flex gap-2 mt-3">
                                 <button
-                                  onClick={() => handleReviewReceipt(r.id, "verified")}
+                                  onClick={() =>
+                                    handleReviewReceipt(r.id, "verified")
+                                  }
                                   className="px-3 py-1.5 bg-green-500 text-white rounded-lg text-xs font-semibold hover:bg-green-600 transition-colors"
                                 >
                                   Verify
                                 </button>
                                 <button
-                                  onClick={() => handleReviewReceipt(r.id, "rejected")}
+                                  onClick={() =>
+                                    handleReviewReceipt(r.id, "rejected")
+                                  }
                                   className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-xs font-semibold hover:bg-gray-200 transition-colors"
                                 >
                                   Reject
@@ -2201,7 +2438,9 @@ export function AdminDashboard() {
           <>
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h2 className="text-sm font-semibold text-gray-900">Send Request</h2>
+                <h2 className="text-sm font-semibold text-gray-900">
+                  Send Request
+                </h2>
                 <p className="text-xs text-gray-500 mt-0.5">
                   Request officers to check specific stalls for violations
                 </p>
@@ -2226,16 +2465,24 @@ export function AdminDashboard() {
                   <table className="w-full text-xs">
                     <thead className="bg-gray-50 border-b border-gray-200">
                       <tr>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-700">Stall</th>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-700">
+                          Stall
+                        </th>
                         <th className="px-4 py-3 text-left font-semibold text-gray-700">
                           Requested By
                         </th>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-700">Reason</th>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-700">Status</th>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-700">
+                          Reason
+                        </th>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-700">
+                          Status
+                        </th>
                         <th className="px-4 py-3 text-left font-semibold text-gray-700">
                           Assigned Officer
                         </th>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-700">Date</th>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-700">
+                          Date
+                        </th>
                         <th className="px-4 py-3 text-center font-semibold text-gray-700">
                           Actions
                         </th>
@@ -2245,11 +2492,13 @@ export function AdminDashboard() {
                       {[...mapRequests, ...checkRequests]
                         .sort(
                           (a, b) =>
-                            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+                            new Date(b.createdAt).getTime() -
+                            new Date(a.createdAt).getTime(),
                         )
                         .map((req) => {
                           const officers = requestOfficers;
-                          const assignedOfficerName = getAssignedOfficerName(req);
+                          const assignedOfficerName =
+                            getAssignedOfficerName(req);
                           const isMapRequest = isMapCheckRequest(req);
                           const statusLabel = isMapRequest
                             ? req.status === "completed"
@@ -2275,7 +2524,9 @@ export function AdminDashboard() {
                                   )}
                                 </div>
                               </td>
-                              <td className="px-4 py-3 text-gray-700">{req.requestedByName}</td>
+                              <td className="px-4 py-3 text-gray-700">
+                                {req.requestedByName}
+                              </td>
                               <td className="px-4 py-3 text-gray-600 max-w-xs truncate">
                                 {req.reason}
                               </td>
@@ -2301,7 +2552,10 @@ export function AdminDashboard() {
                                   <select
                                     value={req.assignedOfficerId || ""}
                                     onChange={(e) =>
-                                      handleAssignCheckRequest(req.id, e.target.value)
+                                      handleAssignCheckRequest(
+                                        req.id,
+                                        e.target.value,
+                                      )
                                     }
                                     className="text-xs px-2 py-1 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#14B8A6]"
                                     autoFocus
@@ -2315,7 +2569,9 @@ export function AdminDashboard() {
                                     ))}
                                   </select>
                                 ) : (
-                                  <span className="text-gray-700">{assignedOfficerName}</span>
+                                  <span className="text-gray-700">
+                                    {assignedOfficerName}
+                                  </span>
                                 )}
                               </td>
                               <td className="px-4 py-3 text-gray-500">
@@ -2351,7 +2607,9 @@ export function AdminDashboard() {
                     <table className="w-full text-xs">
                       <thead className="bg-gray-50 border-b border-gray-200">
                         <tr>
-                          <th className="px-4 py-3 text-left font-semibold text-gray-700">Stall</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-700">
+                            Stall
+                          </th>
                           <th className="px-4 py-3 text-left font-semibold text-gray-700">
                             Officer
                           </th>
@@ -2364,7 +2622,9 @@ export function AdminDashboard() {
                           <th className="px-4 py-3 text-left font-semibold text-gray-700">
                             Status
                           </th>
-                          <th className="px-4 py-3 text-left font-semibold text-gray-700">Date</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-700">
+                            Date
+                          </th>
                           <th className="px-4 py-3 text-center font-semibold text-gray-700">
                             Report
                           </th>
@@ -2417,14 +2677,19 @@ export function AdminDashboard() {
                                   {new Date(req.createdAt).toLocaleDateString()}
                                 </td>
                                 <td className="px-4 py-3 text-center">
-                                  {req.status === "completed" && req.completionSummary && (
-                                    <button
-                                      onClick={() => setExpandedMapReq(isExpanded ? null : req.id)}
-                                      className="px-2 py-1 bg-[#14B8A6] bg-opacity-20 text-[#14B8A6] text-[10px] font-semibold rounded-lg hover:bg-opacity-30 transition-colors"
-                                    >
-                                      {isExpanded ? "Hide" : "View"}
-                                    </button>
-                                  )}
+                                  {req.status === "completed" &&
+                                    req.completionSummary && (
+                                      <button
+                                        onClick={() =>
+                                          setExpandedMapReq(
+                                            isExpanded ? null : req.id,
+                                          )
+                                        }
+                                        className="px-2 py-1 bg-[#14B8A6] bg-opacity-20 text-[#14B8A6] text-[10px] font-semibold rounded-lg hover:bg-opacity-30 transition-colors"
+                                      >
+                                        {isExpanded ? "Hide" : "View"}
+                                      </button>
+                                    )}
                                 </td>
                               </tr>
                               {isExpanded && req.status === "completed" && (
@@ -2439,7 +2704,8 @@ export function AdminDashboard() {
                                     {req.completionFiles.length > 0 && (
                                       <>
                                         <p className="text-xs font-semibold text-gray-700 mb-1">
-                                          Attached Files ({req.completionFiles.length}):
+                                          Attached Files (
+                                          {req.completionFiles.length}):
                                         </p>
                                         <div className="flex flex-wrap gap-2">
                                           {req.completionFiles.map((f, i) => (
@@ -2447,9 +2713,15 @@ export function AdminDashboard() {
                                             <a
                                               key={f.id ?? i}
                                               href={f.url || undefined}
-                                              target={f.url ? "_blank" : undefined}
+                                              target={
+                                                f.url ? "_blank" : undefined
+                                              }
                                               rel="noreferrer"
-                                              title={f.url ? `Open ${f.name}` : "No file was stored for this record."}
+                                              title={
+                                                f.url
+                                                  ? `Open ${f.name}`
+                                                  : "No file was stored for this record."
+                                              }
                                               className={`flex items-center gap-1 px-2 py-1 bg-white border rounded-lg text-[10px] ${
                                                 f.url
                                                   ? "border-teal-200 text-gray-700 hover:border-teal-400"
@@ -2457,7 +2729,9 @@ export function AdminDashboard() {
                                               }`}
                                             >
                                               <span>📎</span> {f.name}{" "}
-                                              <span className="text-gray-400">({f.size})</span>
+                                              <span className="text-gray-400">
+                                                ({f.size})
+                                              </span>
                                             </a>
                                           ))}
                                         </div>
@@ -2488,7 +2762,9 @@ export function AdminDashboard() {
                 <div className="w-9 h-9 bg-white/20 rounded-xl flex items-center justify-center">
                   <Search className="w-5 h-5 text-white" />
                 </div>
-                <h2 className="text-white font-semibold">Request Violation Check</h2>
+                <h2 className="text-white font-semibold">
+                  Request Violation Check
+                </h2>
               </div>
               <button
                 onClick={() => {
@@ -2521,7 +2797,9 @@ export function AdminDashboard() {
                         }`}
                       >
                         {stall.stall_name}{" "}
-                        <span className="text-xs opacity-75">({stall.section})</span>
+                        <span className="text-xs opacity-75">
+                          ({stall.section})
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -2582,7 +2860,8 @@ export function AdminDashboard() {
               Delete Announcement?
             </h3>
             <p className="text-sm text-gray-500 text-center mb-6">
-              This announcement will be permanently removed and vendors will no longer see it.
+              This announcement will be permanently removed and vendors will no
+              longer see it.
             </p>
             <div className="flex gap-3">
               <button
@@ -2637,7 +2916,9 @@ export function AdminDashboard() {
                 onClick={handleTerminationDecision}
                 className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-colors text-white ${terminationActionConfirm.action === "approved" ? "bg-red-600 hover:bg-red-700" : "bg-gray-600 hover:bg-gray-700"}`}
               >
-                {terminationActionConfirm.action === "approved" ? "Yes, Approve" : "Yes, Reject"}
+                {terminationActionConfirm.action === "approved"
+                  ? "Yes, Approve"
+                  : "Yes, Reject"}
               </button>
             </div>
           </div>
@@ -2645,7 +2926,10 @@ export function AdminDashboard() {
       )}
 
       {contractApp && (
-        <ContractModal contract={buildContract(contractApp)} onClose={() => setContractApp(null)} />
+        <ContractModal
+          contract={buildContract(contractApp)}
+          onClose={() => setContractApp(null)}
+        />
       )}
     </DashboardLayout>
   );
