@@ -1,4 +1,10 @@
-import { File } from "expo-file-system";
+// The new `File` class (from "expo-file-system") enforces its own permission
+// model that only recognises paths it manages itself (e.g. Paths.cache) — it
+// rejects a raw URI handed to it from outside with "missing 'READ' permission",
+// even a real file:// path that DocumentPicker just copied into cache. The
+// legacy module has no such restriction and is Expo's documented way to read
+// whatever a picker (image or document) hands back, content:// URIs included.
+import * as LegacyFileSystem from "expo-file-system/legacy";
 
 // Mirrors src/app/services/fileUpload.js in the web app. Attachments travel to
 // the API as base64 inside the JSON body; the server decodes, re-checks and
@@ -40,6 +46,44 @@ function guessMimeType(name, provided) {
 }
 
 /**
+ * Reads any picked file into base64, whatever kind of uri the picker returned.
+ *
+ * Android hands back a content:// uri from whichever provider the file came
+ * from (photos, downloads, Drive…), and readAsStringAsync only accepts a
+ * narrow slice of those — its input stream rejects anything but
+ * `com.android.externalstorage`, so a photo picked from the gallery fails with
+ * "Unsupported scheme". copyAsync has no such limit: it reads any content://
+ * through the content resolver. So copy the file into our own cache first —
+ * a path this app definitely owns and may read — then read it from there.
+ */
+async function readUriAsBase64(uri, name) {
+  const isContentUri = String(uri).startsWith("content://");
+  if (!isContentUri) {
+    return LegacyFileSystem.readAsStringAsync(uri, {
+      encoding: LegacyFileSystem.EncodingType.Base64,
+    });
+  }
+
+  const cacheDir = LegacyFileSystem.cacheDirectory;
+  if (!cacheDir) throw new Error(`"${name}" could not be read on this device.`);
+
+  // Unique, plain filename: the original may contain characters that don't
+  // survive being pasted into a file path.
+  const extension = String(name).includes(".") ? `.${String(name).split(".").pop()}` : "";
+  const localUri = `${cacheDir}pubmark-upload-${Date.now()}${extension}`;
+
+  await LegacyFileSystem.copyAsync({ from: uri, to: localUri });
+  try {
+    return await LegacyFileSystem.readAsStringAsync(localUri, {
+      encoding: LegacyFileSystem.EncodingType.Base64,
+    });
+  } finally {
+    // Don't leave copies of every attachment sitting in the cache.
+    await LegacyFileSystem.deleteAsync(localUri, { idempotent: true }).catch(() => {});
+  }
+}
+
+/**
  * Validates and reads a picked asset into the shape the API expects.
  * Accepts what expo-image-picker and expo-document-picker return.
  *
@@ -58,12 +102,23 @@ export async function readAssetForUpload(asset) {
   }
 
   let size = Number(asset.size ?? asset.fileSize) || 0;
-  // ImagePicker can return base64 directly; otherwise read it off disk.
+  // ImagePicker can return base64 directly; otherwise read it off disk. This
+  // has to handle whatever a picker hands back, including a content:// URI
+  // from Android's document picker, so it goes through the legacy API rather
+  // than the new File class (see the import comment above).
   let base64 = asset.base64;
   if (!base64) {
-    const file = new File(asset.uri);
-    if (!size) size = Number(file.size) || 0;
-    base64 = await file.base64();
+    if (!size) {
+      // Only a nicety — the real size is derived from the decoded bytes below,
+      // so a uri that can't be stat'd shouldn't fail the attachment.
+      try {
+        const info = await LegacyFileSystem.getInfoAsync(asset.uri);
+        if (info.exists) size = info.size ?? 0;
+      } catch {
+        size = 0;
+      }
+    }
+    base64 = await readUriAsBase64(asset.uri, name);
   }
   if (!base64) throw new Error(`"${name}" could not be read.`);
 

@@ -81,12 +81,14 @@ export default function ReceiptsScreen() {
   };
 
   const pickFile = async () => {
-    // copyToCacheDirectory copies the pick into app cache, giving a readable
-    // file:// uri. Without it Android hands back a content:// uri the file
-    // reader cannot open.
+    // copyToCacheDirectory MUST stay false. With it on, Android copies the pick
+    // into a file:// path under Expo Go's own cache, which the sandboxed app
+    // then can't read ("Location ... isn't readable"). Left off, the picker
+    // returns the original content:// uri, which expo-file-system grants read
+    // access to unconditionally and opens via contentResolver.
     const result = await DocumentPicker.getDocumentAsync({
       type: DOCUMENT_PICKER_TYPES,
-      copyToCacheDirectory: true,
+      copyToCacheDirectory: false,
     });
     if (!result.canceled && result.assets?.[0]) {
       try {

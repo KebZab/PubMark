@@ -6,6 +6,19 @@ export async function getApplications() {
   return result.applications;
 }
 
+/**
+ * Which stalls have an approved application, and which have a pending one
+ * awaiting a decision — no other detail. Unlike getApplications(), this
+ * isn't scoped to the caller: a vendor browsing the map needs to know a
+ * stall is spoken for even when someone *else* applied for it, and a guest
+ * (not signed in) needs it too.
+ * @returns {Promise<{approved: string[], pending: string[]}>}
+ */
+export async function getStallReservations() {
+  const result = await apiFetch(`/applications/occupied-stalls`);
+  return { approved: result.stallIds, pending: result.pendingStallIds };
+}
+
 export async function getApplicationsPage(params) {
   const query = new URLSearchParams();
   if (params.status && params.status !== "all") query.set("status", params.status);

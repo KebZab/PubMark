@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { RefreshControl, ScrollView, Text, View, Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../../context/AuthContext";
 import { useApiData } from "../../hooks/useApiData";
 import { getApplications } from "../../services/api";
@@ -20,6 +21,15 @@ const FILTERS = ["all", "pending", "approved", "rejected"];
 export default function ApplicationsScreen({ navigation }) {
   const { user } = useAuth();
   const { data, loading, error, refetch } = useApiData(getApplications);
+
+  // Kept mounted while you're on another tab, so this stays stale until a
+  // manual pull-to-refresh unless refetched on every return to this tab.
+  useFocusEffect(
+    useCallback(() => {
+      refetch();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []),
+  );
   const [filter, setFilter] = useState("all");
 
   const mine = useMemo(() => {

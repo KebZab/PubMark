@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { RefreshControl, ScrollView, Text, View, Pressable } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../../context/AuthContext";
 import { useApiData } from "../../hooks/useApiData";
 import { getApplications } from "../../services/api";
@@ -9,6 +10,15 @@ import { Card, ErrorState, LoadingState, StatusPill, formatDate } from "../../co
 export default function HomeScreen() {
   const { user, signOut } = useAuth();
   const { data, loading, error, refetch } = useApiData(getApplications);
+
+  // Kept mounted while you're on another tab, so this stays stale until a
+  // manual pull-to-refresh unless refetched on every return to this tab.
+  useFocusEffect(
+    useCallback(() => {
+      refetch();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []),
+  );
 
   // The /applications endpoint returns every application; a vendor should only
   // ever see their own, so filter client-side by the logged-in user's id.

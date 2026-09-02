@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { BarChart3, Users, Store, FileText, AlertTriangle } from "lucide-react";
 import { useApplications } from "../hooks/useApplications";
 import { useStalls } from "../hooks/useStalls";
-import { getAllUsers, getSession } from "../components/authStorage";
+import { getSession } from "../components/authStorage";
+import { listUsers } from "../services/api";
 import { getViolations } from "../components/violationsStore";
 import { DashboardLayout } from "../components/DashboardLayout";
 import { showToast } from "../components/Toast";
@@ -156,7 +157,10 @@ export function Analytics() {
 
   const { applications } = useApplications();
   const { stalls } = useStalls();
-  const users = getAllUsers();
+  // Was reading a browser localStorage cache left over from before user
+  // accounts moved to the API — empty in every real browser, which is why
+  // "Total Users" and "Users by Role" always showed zero. Real data, admin-only.
+  const [users, setUsers] = useState([]);
 
   useEffect(() => {
     void getViolations()
@@ -164,6 +168,12 @@ export function Analytics() {
       .catch((error) => {
         showToast(`Failed to load analytics violations: ${error.message}`, "error");
         setViolations([]);
+      });
+    void listUsers()
+      .then((r) => setUsers(r.users ?? []))
+      .catch((error) => {
+        showToast(`Failed to load analytics users: ${error.message}`, "error");
+        setUsers([]);
       });
   }, []);
 

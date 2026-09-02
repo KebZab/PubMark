@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
+import { useOccupiedStalls } from "../hooks/useOccupiedStalls";
 import { getSession } from "../components/authStorage";
 import { saveViolation } from "../components/violationsStore";
 import { showToast } from "../components/Toast";
@@ -58,8 +59,10 @@ function getActiveApp(stallId, applications) {
   );
 }
 
-// userApp = current user's app, globalOccupied = approved by anyone
-function stallStyle(userApp, globalOccupied, isSelected) {
+// userApp = current user's app, globalOccupied = approved by anyone,
+// globalPending = someone (not necessarily this user) has a pending
+// application and nobody has been approved yet.
+function stallStyle(userApp, globalOccupied, globalPending, isSelected) {
   if (userApp?.status === "approved") {
     return {
       color: isSelected ? "#4338ca" : "#6366f1",
@@ -68,7 +71,7 @@ function stallStyle(userApp, globalOccupied, isSelected) {
       fillOpacity: isSelected ? 0.4 : 0.25,
     };
   }
-  if (userApp?.status === "pending") {
+  if (userApp?.status === "pending" || (globalPending && !globalOccupied)) {
     return {
       color: isSelected ? "#d97706" : "#f59e0b",
       fillColor: isSelected ? "#d97706" : "#f59e0b",
@@ -92,11 +95,12 @@ function stallStyle(userApp, globalOccupied, isSelected) {
   };
 }
 
-function stallTooltipLabel(stall, userApp, globalOccupied) {
+function stallTooltipLabel(stall, userApp, globalOccupied, globalPending) {
   if (userApp?.status === "approved") return `<strong>${stall.stall_name}</strong> · Your stall`;
   if (userApp?.status === "pending")
     return `<strong>${stall.stall_name}</strong> · Your application pending`;
   if (globalOccupied) return `<strong>${stall.stall_name}</strong> · Occupied`;
+  if (globalPending) return `<strong>${stall.stall_name}</strong> · Application pending`;
   return `<strong>${stall.stall_name}</strong> · Available`;
 }
 
@@ -104,7 +108,8 @@ function stallTooltipLabel(stall, userApp, globalOccupied) {
 function DrawnStallsLayer({
   stalls,
   userApplications,
-  allApplications,
+  occupiedStallIds,
+  pendingStallIds,
   selectedId,
   selectedIds,
   multiSelectMode,
@@ -118,16 +123,15 @@ function DrawnStallsLayer({
     stalls.forEach((stall) => {
       const isSelected = multiSelectMode ? selectedIds.has(stall.id) : stall.id === selectedId;
       const userApp = getActiveApp(stall.id, userApplications);
-      const globalOccupied = allApplications.some(
-        (a) => a.stallId === stall.id && a.status === "approved",
-      );
-      const style = stallStyle(userApp, globalOccupied, isSelected);
+      const globalOccupied = occupiedStallIds.has(stall.id);
+      const globalPending = pendingStallIds.has(stall.id);
+      const style = stallStyle(userApp, globalOccupied, globalPending, isSelected);
 
       const layer = L.geoJSON(
         { type: "Feature", properties: {}, geometry: stall.geometry },
         { style: { ...style, opacity: 0.95 } },
       );
-      layer.bindTooltip(stallTooltipLabel(stall, userApp, globalOccupied), {
+      layer.bindTooltip(stallTooltipLabel(stall, userApp, globalOccupied, globalPending), {
         direction: "top",
         opacity: 0.95,
       });
@@ -142,7 +146,8 @@ function DrawnStallsLayer({
   }, [
     stalls,
     userApplications,
-    allApplications,
+    occupiedStallIds,
+    pendingStallIds,
     selectedId,
     selectedIds,
     multiSelectMode,
@@ -171,7 +176,11 @@ function FlyTo({ position }) {
 export function UserMapDashboard() {
   const navigate = useNavigate();
   const { stalls: storedStalls, loading: stallsLoading } = useStalls();
+  // GET /api/applications is scoped to the caller for vendors, so it only
+  // ever contains this vendor's own rows now — useOccupiedStalls fills the
+  // gap for "is this stall taken by someone else", with no personal data.
   const { applications: allApplications } = useApplications();
+  const { occupiedStallIds, pendingStallIds } = useOccupiedStalls();
   const [selected, setSelected] = useState(null);
   const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -204,20 +213,24 @@ export function UserMapDashboard() {
 
   const selectedUserApp = selected ? getActiveApp(selected.id, userApplications) : null;
   const selectedGlobalOccupied = selected
-    ? allApplications.some((a) => a.stallId === selected.id && a.status === "approved")
+    ? occupiedStallIds.has(selected.id)
     : false;
+  const selectedGlobalPending = selected ? pendingStallIds.has(selected.id) : false;
+
+  // A stall reads as "pending" if it's the user's own pending application, or
+  // anyone else's — matching the amber colour on the map, which shows the
+  // same regardless of who applied.
+  const isPendingToUser = (s) =>
+    getActiveApp(s.id, userApplications)?.status === "pending" ||
+    (pendingStallIds.has(s.id) && !occupiedStallIds.has(s.id));
 
   // Stats based on current floor's stalls
   const vacant = floorStalls.filter(
-    (s) =>
-      !allApplications.some((a) => a.stallId === s.id && a.status === "approved") &&
-      !getActiveApp(s.id, userApplications),
+    (s) => !occupiedStallIds.has(s.id) && !isPendingToUser(s),
   ).length;
-  const pendingCount = floorStalls.filter(
-    (s) => getActiveApp(s.id, userApplications)?.status === "pending",
-  ).length;
+  const pendingCount = floorStalls.filter(isPendingToUser).length;
   const occupiedCount = floorStalls.filter((s) =>
-    allApplications.some((a) => a.stallId === s.id && a.status === "approved"),
+    occupiedStallIds.has(s.id),
   ).length;
 
   const filteredStalls = searchQuery
@@ -235,8 +248,13 @@ export function UserMapDashboard() {
 
   const handleSelectStall = (stall) => {
     if (multiSelectMode) {
-      const anyActiveApp = getActiveApp(stall.id, allApplications);
-      if (anyActiveApp) {
+      // allApplications only ever contains this vendor's own rows now, so it
+      // can't tell whether some other stall is approved — occupiedStallIds
+      // covers that. Their own active application still blocks re-adding a
+      // stall they've already applied for.
+      const isOccupiedByOther = occupiedStallIds.has(stall.id);
+      const isMyActiveApp = getActiveApp(stall.id, userApplications);
+      if (isOccupiedByOther || isMyActiveApp) {
         showToast("That stall isn't available and can't be added to your selection.", "error");
         return;
       }
@@ -323,7 +341,8 @@ export function UserMapDashboard() {
           <DrawnStallsLayer
             stalls={filteredStalls}
             userApplications={userApplications}
-            allApplications={allApplications}
+            occupiedStallIds={occupiedStallIds}
+            pendingStallIds={pendingStallIds}
             selectedId={selected?.id ?? null}
             selectedIds={selectedIds}
             multiSelectMode={multiSelectMode}
@@ -460,13 +479,19 @@ export function UserMapDashboard() {
           const isMyApproved = selectedUserApp?.status === "approved";
           const isMyPending = selectedUserApp?.status === "pending";
           const isOtherOccupied = selectedGlobalOccupied && !isMyApproved;
-          const globalApp =
-            allApplications.find((a) => a.stallId === selected.id && a.status === "approved") ??
-            null;
+          // A stall someone else applied for still accepts further
+          // applications until one is approved, but it should read as
+          // "pending" to everyone, not just to whoever applied first.
+          const isOtherPending = !isMyApproved && !isMyPending && !isOtherOccupied && selectedGlobalPending;
+          // allApplications only ever contains this vendor's own rows now, so
+          // this is never populated for a stall someone else applied for —
+          // the body text below no longer depends on it, on purpose: showing
+          // a stranger's business name to another vendor isn't something to
+          // do without being asked.
 
           const headerBg = isMyApproved
             ? "bg-gradient-to-r from-indigo-50 to-purple-50"
-            : isMyPending
+            : isMyPending || isOtherPending
               ? "bg-gradient-to-r from-amber-50 to-yellow-50"
               : isOtherOccupied
                 ? "bg-gradient-to-r from-gray-50 to-slate-50"
@@ -474,7 +499,7 @@ export function UserMapDashboard() {
 
           const iconBg = isMyApproved
             ? "bg-gradient-to-br from-indigo-500 to-purple-600"
-            : isMyPending
+            : isMyPending || isOtherPending
               ? "bg-gradient-to-br from-amber-400 to-orange-500"
               : isOtherOccupied
                 ? "bg-gray-400"
@@ -493,6 +518,11 @@ export function UserMapDashboard() {
           ) : isOtherOccupied ? (
             <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
               Occupied
+            </span>
+          ) : isOtherPending ? (
+            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 flex items-center gap-1">
+              <Clock className="w-3 h-3" />
+              Pending
             </span>
           ) : (
             <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-teal-100 text-[#0d9488]">
@@ -560,17 +590,28 @@ export function UserMapDashboard() {
                       </p>
                     </div>
                   </div>
-                ) : isOtherOccupied && globalApp ? (
+                ) : isOtherOccupied ? (
                   <div className="flex items-center gap-3 py-1">
                     <div className="w-9 h-9 rounded-xl bg-gray-50 border border-gray-200 flex items-center justify-center flex-shrink-0">
                       <User className="w-4 h-4 text-gray-500" />
                     </div>
                     <div>
-                      <p className="text-sm font-semibold text-gray-800">
-                        {globalApp.businessName}
-                      </p>
+                      <p className="text-sm font-semibold text-gray-800">Stall taken</p>
+                      {/* No applicant details — allApplications only ever has this
+                          vendor's own rows now, and another vendor's business
+                          isn't something to show without being asked. */}
+                      <p className="text-xs text-gray-500">Held by another vendor.</p>
+                    </div>
+                  </div>
+                ) : isOtherPending ? (
+                  <div className="flex items-center gap-3 py-1">
+                    <div className="w-9 h-9 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center flex-shrink-0">
+                      <Clock className="w-4 h-4 text-amber-500" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-gray-800">Application pending</p>
                       <p className="text-xs text-gray-500">
-                        {globalApp.applicantName} · {globalApp.businessType}
+                        Another vendor has applied — you can still apply too.
                       </p>
                     </div>
                   </div>
@@ -628,6 +669,11 @@ export function UserMapDashboard() {
                   </>
                 ) : (
                   <>
+                    {isOtherPending ? (
+                      <div className="w-full py-2 mb-2 bg-amber-50 border border-amber-200 text-amber-700 rounded-xl text-xs text-center">
+                        Another vendor has already applied — admin hasn't decided yet.
+                      </div>
+                    ) : null}
                     <button
                       onClick={() => navigate(`/apply/${selected.id}`)}
                       className="w-full py-3 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl font-semibold text-sm shadow-lg shadow-teal-500/30 hover:shadow-teal-500/50 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 mb-2"

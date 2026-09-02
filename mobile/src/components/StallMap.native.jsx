@@ -15,7 +15,15 @@ function styleFor(input, selected) {
     return { color: selected ? "#d97706" : "#f59e0b", fillOpacity: selected ? 0.4 : 0.25 };
   }
   if (input.occupied) {
-    return { color: selected ? "#6b7280" : "#9ca3af", fillOpacity: selected ? 0.4 : 0.25 };
+    // Matches the admin map's occupied color exactly (AdminMapView.jsx's
+    // stallColor()), so a stall reads the same whichever screen shows it.
+    return { color: selected ? "#dc2626" : "#ef4444", fillOpacity: selected ? 0.4 : 0.25 };
+  }
+  // Someone (not necessarily this vendor) has an undecided application on
+  // this stall — reads the same as "your pending", since the map has no
+  // other way to distinguish "pending" from "your pending" at a glance.
+  if (input.pending) {
+    return { color: selected ? "#d97706" : "#f59e0b", fillOpacity: selected ? 0.4 : 0.25 };
   }
   return { color: selected ? "#0d9488" : "#14B8A6", fillOpacity: selected ? 0.35 : 0.2 };
 }
@@ -102,10 +110,12 @@ function buildHtml(payload) {
 
     // Called from the app when the selected stall changes. Restyling in place
     // keeps the user's current zoom and pan, instead of reloading the page.
-    window.__setSelected = function (id) {
+    window.__setSelected = function (ids) {
+      var selectedSet = {};
+      (ids || []).forEach(function (id) { selectedSet[id] = true; });
       Object.keys(layers).forEach(function (key) {
         var entry = layers[key];
-        var isSel = key === id;
+        var isSel = !!selectedSet[key];
         var st = isSel ? entry.sel : entry.base;
         entry.layer.setStyle({
           color: st.color,
@@ -126,7 +136,14 @@ function buildHtml(payload) {
 </html>`;
 }
 
-export default function StallMap({ stalls, selectedId, onSelect, styleInputs = {} }) {
+export default function StallMap({
+  stalls,
+  selectedId,
+  selectedIds,
+  multiSelectMode = false,
+  onSelect,
+  styleInputs = {},
+}) {
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(null);
   const webRef = useRef(null);
@@ -147,7 +164,9 @@ export default function StallMap({ stalls, selectedId, onSelect, styleInputs = {
               : "Pending"
             : input.occupied
               ? "Occupied"
-              : "Available",
+              : input.pending
+                ? "Pending"
+                : "Available",
           latlngs: toLatLngs(s.geometry),
           style: styleFor(input, false),
           selectedStyle: styleFor(input, true),
@@ -160,9 +179,11 @@ export default function StallMap({ stalls, selectedId, onSelect, styleInputs = {
   // Push selection changes into the existing page, preserving zoom/pan.
   useEffect(() => {
     if (!ready) return;
-    const id = selectedId ? JSON.stringify(selectedId) : "null";
-    webRef.current?.injectJavaScript(`window.__setSelected && window.__setSelected(${id}); true;`);
-  }, [selectedId, ready]);
+    const ids = multiSelectMode ? Array.from(selectedIds ?? []) : selectedId ? [selectedId] : [];
+    webRef.current?.injectJavaScript(
+      `window.__setSelected && window.__setSelected(${JSON.stringify(ids)}); true;`,
+    );
+  }, [selectedId, selectedIds, multiSelectMode, ready]);
 
   if (stalls.length === 0) {
     return (

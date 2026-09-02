@@ -75,6 +75,21 @@ export async function getApplications() {
   return apiFetch("/applications");
 }
 
+/**
+ * Which stalls have an approved application, and which have a pending one
+ * with no decision yet — from anyone, no other detail. GET /applications
+ * only ever returns the signed-in vendor's own rows, so it can't say
+ * whether some other stall has activity on it. The map uses this for that,
+ * without exposing who applied — a pending application doesn't reserve a
+ * stall (someone else can still apply too), but it should read as pending
+ * to every vendor, not only to whoever applied first.
+ * @returns {Promise<{approved: string[], pending: string[]}>}
+ */
+export async function getStallReservations() {
+  const result = await apiFetch("/applications/occupied-stalls");
+  return { approved: result.stallIds, pending: result.pendingStallIds };
+}
+
 export async function getAnnouncements() {
   return apiFetch("/announcements");
 }
