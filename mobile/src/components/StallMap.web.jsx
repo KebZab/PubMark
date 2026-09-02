@@ -7,11 +7,22 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 function labelFor(input) {
   if (input.userAppStatus === "approved") return { text: "Yours", dot: "#6366f1" };
   if (input.userAppStatus === "pending") return { text: "Pending", dot: "#f59e0b" };
-  if (input.occupied) return { text: "Occupied", dot: "#9ca3af" };
+  // Matches the admin map's occupied color (AdminMapView.jsx's stallColor()).
+  if (input.occupied) return { text: "Occupied", dot: "#ef4444" };
+  // Someone else has an undecided application — reads the same as "pending"
+  // since there's no separate visual state for "pending, but not yours".
+  if (input.pending) return { text: "Pending", dot: "#f59e0b" };
   return { text: "Available", dot: "#14B8A6" };
 }
 
-export default function StallMap({ stalls, selectedId, onSelect, styleInputs = {} }) {
+export default function StallMap({
+  stalls,
+  selectedId,
+  selectedIds,
+  multiSelectMode = false,
+  onSelect,
+  styleInputs = {},
+}) {
   return (
     <View className="flex-1">
       <View className="border-b border-amber-200 bg-amber-50 px-4 py-2.5">
@@ -23,7 +34,7 @@ export default function StallMap({ stalls, selectedId, onSelect, styleInputs = {
       <ScrollView className="flex-1" contentContainerStyle={{ padding: 16, gap: 10 }}>
         {stalls.map((stall) => {
           const l = labelFor(styleInputs[stall.id] ?? {});
-          const selected = stall.id === selectedId;
+          const selected = multiSelectMode ? (selectedIds?.has(stall.id) ?? false) : stall.id === selectedId;
           return (
             <Pressable
               key={stall.id}

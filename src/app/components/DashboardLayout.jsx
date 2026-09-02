@@ -159,7 +159,7 @@ export function DashboardLayout({ session, children, title, subtitle, actions })
       </div>
 
       {/* Nav items */}
-      <nav className="flex-1 px-3 py-3 space-y-0.5 overflow-y-auto">
+      <nav className="sidebar-scroll flex-1 px-3 py-3 space-y-0.5 overflow-y-auto min-h-0">
         {navItems.map((item) => {
           const Icon = item.icon;
           const active =
@@ -206,7 +206,7 @@ export function DashboardLayout({ session, children, title, subtitle, actions })
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
       {/* Desktop sidebar */}
-      <aside className="hidden lg:flex w-60 bg-gradient-to-b from-[#0d9488] to-[#0f766e] flex-col flex-shrink-0 shadow-xl">
+      <aside className="hidden lg:flex w-60 bg-gradient-to-b from-[#0d9488] to-[#0f766e] flex-col flex-shrink-0 shadow-xl min-h-0">
         <SidebarContent />
       </aside>
 

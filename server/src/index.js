@@ -1332,6 +1332,33 @@ app.get("/api/applications", requireAuth, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+/**
+ * Which stalls have an approved application (`stallIds`) or a pending one
+ * with no approval yet (`pendingStallIds`) — nothing else, no personal data.
+ *
+ * GET /api/applications above is scoped to the caller's own rows for
+ * vendors, so it can no longer tell one vendor whether some *other* stall
+ * has activity on it. `stallIds` is what broke the map after that scoping
+ * was added: a stall approved for vendor A still showed as available to
+ * vendor B. `pendingStallIds` exists so a stall someone has *applied* for —
+ * decision still pending — reads as "pending" to every other vendor too,
+ * not just to the applicant, even though the stall technically still
+ * accepts further applications until one is approved.
+ *
+ * Public on purpose: the guest map (no login) needs this too, and stall ids
+ * alone identify no one.
+ */
+app.get("/api/applications/occupied-stalls", async (_req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      "SELECT DISTINCT stall_id, status FROM applications WHERE status IN ('approved', 'pending')"
+    );
+    const approved = new Set(rows.filter((r) => r.status === "approved").map((r) => r.stall_id));
+    const pending = rows.filter((r) => r.status === "pending" && !approved.has(r.stall_id)).map((r) => r.stall_id);
+    res.json({ stallIds: [...approved], pendingStallIds: pending });
+  } catch (error) { next(error); }
+});
+
 app.post("/api/applications", requireAuth, requireRole("vendor"), async (req, res, next) => {
   try {
     const { stallId, businessName, businessType, contractStart, contractTermMonths, contractEnd, permit, additionalFile, notes, applicantAddress } = req.body;

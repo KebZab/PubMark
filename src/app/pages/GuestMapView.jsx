@@ -3,18 +3,9 @@ import { useNavigate, Link } from "react-router";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import {
-  MapPin,
-  Store,
-  X,
-  LogIn,
-  UserPlus,
-  User,
-  ChevronRight,
-  CheckSquare,
-} from "lucide-react";
+import { MapPin, Store, X, LogIn, UserPlus, User, ChevronRight, CheckSquare, Clock } from "lucide-react";
 import { useStalls } from "../hooks/useStalls";
-import { useApplications } from "../hooks/useApplications";
+import { useOccupiedStalls } from "../hooks/useOccupiedStalls";
 import { FloorSwitcher } from "../components/FloorSwitcher";
 import { showToast } from "../components/Toast";
 
@@ -36,15 +27,10 @@ function getGeometryCentroid(geometry) {
   return null;
 }
 
-function getApprovedApp(stallId, apps) {
-  return (
-    apps.find((a) => a.stallId === stallId && a.status === "approved") ?? null
-  );
-}
-
 function DrawnStallsLayer({
   stalls,
-  applications,
+  occupiedStallIds,
+  pendingStallIds,
   selectedId,
   selectedIds,
   multiSelectMode,
@@ -54,11 +40,10 @@ function DrawnStallsLayer({
   useEffect(() => {
     const layers = [];
     stalls.forEach((stall) => {
-      const occupied = !!getApprovedApp(stall.id, applications);
-      const isSelected = multiSelectMode
-        ? selectedIds.has(stall.id)
-        : stall.id === selectedId;
-      const color = occupied ? "#9ca3af" : isSelected ? "#0d9488" : "#14B8A6";
+      const occupied = occupiedStallIds.has(stall.id);
+      const pending = !occupied && pendingStallIds.has(stall.id);
+      const isSelected = multiSelectMode ? selectedIds.has(stall.id) : stall.id === selectedId;
+      const color = occupied ? "#9ca3af" : pending ? "#f59e0b" : isSelected ? "#0d9488" : "#14B8A6";
       const fillOpacity = isSelected ? 0.4 : 0.22;
       const layer = L.geoJSON(
         { type: "Feature", properties: {}, geometry: stall.geometry },
@@ -72,10 +57,11 @@ function DrawnStallsLayer({
           },
         },
       );
-      layer.bindTooltip(
-        `<strong>${stall.stall_name}</strong> · ${occupied ? "Occupied" : "Available"}`,
-        { direction: "top", opacity: 0.95 },
-      );
+      const label = occupied ? "Occupied" : pending ? "Application pending" : "Available";
+      layer.bindTooltip(`<strong>${stall.stall_name}</strong> · ${label}`, {
+        direction: "top",
+        opacity: 0.95,
+      });
       layer.on("click", () => onSelect(stall));
       layer.addTo(map);
       layers.push(layer);
@@ -83,15 +69,7 @@ function DrawnStallsLayer({
     return () => {
       layers.forEach((l) => map.removeLayer(l));
     };
-  }, [
-    stalls,
-    applications,
-    selectedId,
-    selectedIds,
-    multiSelectMode,
-    map,
-    onSelect,
-  ]);
+  }, [stalls, occupiedStallIds, pendingStallIds, selectedId, selectedIds, multiSelectMode, map, onSelect]);
   return null;
 }
 
@@ -111,7 +89,11 @@ function FlyTo({ position }) {
 export function GuestMapView() {
   const navigate = useNavigate();
   const { stalls, loading } = useStalls();
-  const { applications } = useApplications();
+  // Named distinctly from the `pendingStallIds` state below, which is an
+  // unrelated thing: the stalls picked in multi-select mode, en route to the
+  // application form. This one is which stalls have someone else's
+  // undecided application on them.
+  const { occupiedStallIds, pendingStallIds: pendingApplicationStallIds } = useOccupiedStalls();
   const [selected, setSelected] = useState(null);
   const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -123,11 +105,8 @@ export function GuestMapView() {
 
   function handleSelectStall(stall) {
     if (multiSelectMode) {
-      if (getApprovedApp(stall.id, applications)) {
-        showToast(
-          "That stall is occupied and can't be added to your selection.",
-          "error",
-        );
+      if (occupiedStallIds.has(stall.id)) {
+        showToast("That stall is occupied and can't be added to your selection.", "error");
         return;
       }
       setSelectedIds((prev) => {
@@ -159,14 +138,17 @@ export function GuestMapView() {
     setPendingStallIds(ids);
   }
 
-  const approvedApp = selected
-    ? getApprovedApp(selected.id, applications)
-    : null;
-  const selectedOccupied = !!approvedApp;
+  const selectedOccupied = selected ? occupiedStallIds.has(selected.id) : false;
+  const selectedPending = selected
+    ? !selectedOccupied && pendingApplicationStallIds.has(selected.id)
+    : false;
   const vacantCount = floorStalls.filter(
-    (s) => !getApprovedApp(s.id, applications),
+    (s) => !occupiedStallIds.has(s.id) && !pendingApplicationStallIds.has(s.id),
   ).length;
-  const occupiedCount = floorStalls.length - vacantCount;
+  const occupiedCount = floorStalls.filter((s) => occupiedStallIds.has(s.id)).length;
+  const applicationPendingCount = floorStalls.filter(
+    (s) => !occupiedStallIds.has(s.id) && pendingApplicationStallIds.has(s.id),
+  ).length;
 
   const floorCounts = {
     1: stalls.filter((s) => s.floor === "1").length,
@@ -195,7 +177,8 @@ export function GuestMapView() {
           />
           <DrawnStallsLayer
             stalls={floorStalls}
-            applications={applications}
+            occupiedStallIds={occupiedStallIds}
+            pendingStallIds={pendingApplicationStallIds}
             selectedId={selected?.id ?? null}
             selectedIds={selectedIds}
             multiSelectMode={multiSelectMode}
@@ -268,6 +251,12 @@ export function GuestMapView() {
               {vacantCount} Vacant
             </span>
           </div>
+          {applicationPendingCount > 0 && (
+            <div className="bg-white/96 backdrop-blur-md rounded-xl px-3 py-1.5 shadow-md border border-gray-100/80 flex items-center gap-1.5">
+              <div className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+              <span className="text-xs font-semibold text-gray-700">{applicationPendingCount} Pending</span>
+            </div>
+          )}
           {occupiedCount > 0 && (
             <div className="bg-white/96 backdrop-blur-md rounded-xl px-3 py-1.5 shadow-md border border-gray-100/80 flex items-center gap-1.5">
               <div className="w-2.5 h-2.5 rounded-full bg-gray-400" />
@@ -343,10 +332,10 @@ export function GuestMapView() {
         >
           {/* Header */}
           <div
-            className={`px-5 py-4 flex items-start gap-4 ${selectedOccupied ? "bg-gradient-to-r from-gray-50 to-slate-50" : "bg-gradient-to-r from-teal-50 to-cyan-50"}`}
+            className={`px-5 py-4 flex items-start gap-4 ${selectedOccupied ? "bg-gradient-to-r from-gray-50 to-slate-50" : selectedPending ? "bg-gradient-to-r from-amber-50 to-yellow-50" : "bg-gradient-to-r from-teal-50 to-cyan-50"}`}
           >
             <div
-              className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm ${selectedOccupied ? "bg-gray-400" : "bg-gradient-to-br from-[#14B8A6] to-[#0d9488]"}`}
+              className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm ${selectedOccupied ? "bg-gray-400" : selectedPending ? "bg-gradient-to-br from-amber-400 to-orange-500" : "bg-gradient-to-br from-[#14B8A6] to-[#0d9488]"}`}
             >
               <Store className="w-5 h-5 text-white" />
             </div>
@@ -356,9 +345,10 @@ export function GuestMapView() {
                   {selected.stall_name}
                 </p>
                 <span
-                  className={`text-xs font-semibold px-2 py-0.5 rounded-full ${selectedOccupied ? "bg-gray-100 text-gray-600" : "bg-teal-100 text-teal-700"}`}
+                  className={`text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 ${selectedOccupied ? "bg-gray-100 text-gray-600" : selectedPending ? "bg-amber-100 text-amber-700" : "bg-teal-100 text-teal-700"}`}
                 >
-                  {selectedOccupied ? "Occupied" : "Available"}
+                  {selectedPending ? <Clock className="w-3 h-3" /> : null}
+                  {selectedOccupied ? "Occupied" : selectedPending ? "Pending" : "Available"}
                 </span>
               </div>
               <p className="text-sm text-gray-500 mt-0.5">
@@ -377,17 +367,27 @@ export function GuestMapView() {
 
           {/* Body — owner info or stall details */}
           <div className="px-5 py-3">
-            {selectedOccupied && approvedApp ? (
+            {selectedOccupied ? (
               <div className="flex items-center gap-3 py-1">
                 <div className="w-9 h-9 rounded-xl bg-gray-50 border border-gray-200 flex items-center justify-center flex-shrink-0">
                   <User className="w-4 h-4 text-gray-500" />
                 </div>
                 <div>
-                  <p className="text-sm font-semibold text-gray-800">
-                    {approvedApp.businessName}
-                  </p>
+                  <p className="text-sm font-semibold text-gray-800">Stall taken</p>
+                  {/* No applicant details here — this page has no login, and who
+                      holds a stall isn't public information. */}
+                  <p className="text-xs text-gray-500">Sign in to see occupancy details.</p>
+                </div>
+              </div>
+            ) : selectedPending ? (
+              <div className="flex items-center gap-3 py-1">
+                <div className="w-9 h-9 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center flex-shrink-0">
+                  <Clock className="w-4 h-4 text-amber-500" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-800">Application pending</p>
                   <p className="text-xs text-gray-500">
-                    {approvedApp.applicantName} · {approvedApp.businessType}
+                    Someone has applied — you can still apply too until admin decides.
                   </p>
                 </div>
               </div>
@@ -415,13 +415,20 @@ export function GuestMapView() {
                 This stall is currently occupied
               </div>
             ) : (
-              <button
-                onClick={() => setPendingStallIds([selected.id])}
-                className="w-full py-3 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl font-semibold text-sm shadow-lg shadow-teal-500/30 hover:shadow-teal-500/50 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
-              >
-                Apply for This Stall
-                <ChevronRight className="w-4 h-4" />
-              </button>
+              <>
+                {selectedPending ? (
+                  <div className="w-full py-2 mb-2 bg-amber-50 border border-amber-200 text-amber-700 rounded-xl text-xs text-center">
+                    Another applicant is already waiting on a decision.
+                  </div>
+                ) : null}
+                <button
+                  onClick={() => setPendingStallIds([selected.id])}
+                  className="w-full py-3 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl font-semibold text-sm shadow-lg shadow-teal-500/30 hover:shadow-teal-500/50 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+                >
+                  Apply for This Stall
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </>
             )}
           </div>
         </div>
