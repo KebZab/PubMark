@@ -22,6 +22,9 @@ import {
   AlertTriangle,
   CheckCircle,
   Layers,
+  Upload,
+  Image as ImageIcon,
+  Loader2,
 } from "lucide-react";
 import { FloorSwitcher } from "./FloorSwitcher";
 import { useStalls } from "../hooks/useStalls";
@@ -36,6 +39,12 @@ import {
 } from "../services/stallsApi";
 import { showToast } from "./Toast";
 import { AttachmentLink } from "./AttachmentLink";
+import { ImageViewerModal } from "./ImageViewerModal";
+import { readFileForUpload, describeFileProblem, MAX_ATTACHMENT_BYTES, formatFileSize } from "../services/fileUpload";
+
+// Stall photos only — a PDF wouldn't make sense as a photo of the stall,
+// even though the shared attachment allowlist also accepts one.
+const STALL_IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/heic,image/heif";
 
 // Every active (non-rejected) application on a stall, oldest first. A stall
 // stays open to further applications until one is approved, so more than one
@@ -620,6 +629,30 @@ function StallForm({ title, subtitle, initialValues, defaultFloor, onSave, onCan
   const [floorArea, setFloorArea] = useState(initialValues?.floor_area ?? "");
   const [businessType, setBusinessType] = useState(initialValues?.business_type ?? "General");
   const [notes, setNotes] = useState(initialValues?.notes ?? "");
+  const [images, setImages] = useState(initialValues?.images ?? []);
+  const [saving, setSaving] = useState(false);
+
+  // A new stall must show vendors what it actually looks like — the server
+  // enforces this too, so this is a UX gate, not the only guard.
+  async function handleAddImages(e) {
+    // Snapshot into a plain array before clearing the input — resetting
+    // e.target.value empties the live FileList e.target.files still points
+    // at, so reading it after the reset silently iterates over nothing.
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (files.length === 0) return;
+    const added = [];
+    for (const file of files) {
+      const problem = describeFileProblem(file);
+      if (problem) { showToast(problem, "error"); continue; }
+      try {
+        added.push(await readFileForUpload(file));
+      } catch (error) {
+        showToast(error.message, "error");
+      }
+    }
+    if (added.length) setImages((prev) => [...prev, ...added]);
+  }
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[9999] p-4">
@@ -636,23 +669,35 @@ function StallForm({ title, subtitle, initialValues, defaultFloor, onSave, onCan
           </div>
           <button
             onClick={onCancel}
-            className="w-8 h-8 rounded-lg hover:bg-gray-100 flex items-center justify-center"
+            disabled={saving}
+            className="w-8 h-8 rounded-lg hover:bg-gray-100 flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <X className="w-4 h-4 text-gray-500" />
           </button>
         </div>
         <form
-          onSubmit={(e) => {
+          onSubmit={async (e) => {
             e.preventDefault();
-            if (stallName.trim())
-              onSave({
+            if (saving) return;
+            if (!stallName.trim()) return;
+            if (images.length === 0) {
+              showToast("Attach at least one photo of the stall.", "error");
+              return;
+            }
+            setSaving(true);
+            try {
+              await onSave({
                 stall_name: stallName.trim(),
                 section,
                 floor,
                 floor_area: floorArea,
                 business_type: businessType,
                 notes,
+                images,
               });
+            } finally {
+              setSaving(false);
+            }
           }}
           className="p-6 space-y-4"
         >
@@ -744,6 +789,51 @@ function StallForm({ title, subtitle, initialValues, defaultFloor, onSave, onCan
               className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#14B8A6] focus:bg-white transition-all resize-none"
             />
           </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              Stall Photos <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="file"
+              id="stall-images"
+              multiple
+              accept={STALL_IMAGE_ACCEPT}
+              className="hidden"
+              onChange={handleAddImages}
+            />
+            <button
+              type="button"
+              onClick={() => document.getElementById("stall-images")?.click()}
+              className="w-full flex items-center justify-center gap-2 py-3 border-2 border-dashed border-teal-300 rounded-xl text-[#0d9488] text-sm font-medium hover:bg-teal-50 transition-colors"
+            >
+              <Upload className="w-4 h-4" />
+              {images.length > 0 ? "Add More Photos" : "Upload Photos"}
+            </button>
+            <p className="text-xs text-gray-500 mt-1.5">
+              Required — vendors see this when browsing this stall.{" "}
+              Max {formatFileSize(MAX_ATTACHMENT_BYTES)} per photo.
+            </p>
+            {images.length > 0 && (
+              <div className="mt-2 grid grid-cols-4 gap-2">
+                {images.map((img, i) => (
+                  <div key={img.id ?? i} className="relative aspect-square rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
+                    <img
+                      src={img.url ?? `data:${img.type};base64,${img.base64}`}
+                      alt={img.name}
+                      className="w-full h-full object-cover"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setImages((p) => p.filter((_, j) => j !== i))}
+                      className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/60 flex items-center justify-center hover:bg-black/80"
+                    >
+                      <X className="w-3 h-3 text-white" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           <div className="flex items-center justify-between px-3 py-2 bg-teal-50 rounded-xl border border-teal-100">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 bg-[#14B8A6] rounded-full" />
@@ -762,16 +852,24 @@ function StallForm({ title, subtitle, initialValues, defaultFloor, onSave, onCan
             <button
               type="button"
               onClick={onCancel}
-              className="flex-1 px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors"
+              disabled={saving}
+              className="flex-1 px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Cancel
             </button>
             <button
               type="submit"
-              disabled={!stallName.trim()}
-              className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl text-sm font-medium hover:shadow-md hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={saving || !stallName.trim() || images.length === 0}
+              className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl text-sm font-medium hover:shadow-md hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
-              Save Stall
+              {saving ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                "Save Stall"
+              )}
             </button>
           </div>
         </form>
@@ -814,6 +912,7 @@ export function AdminMapView() {
   const [selectedStallId, setSelectedStallId] = useState(null);
   const [pendingLayer, setPendingLayer] = useState(null);
   const [editingStall, setEditingStall] = useState(null);
+  const [viewer, setViewer] = useState(null);
   const [flyToTarget, setFlyToTarget] = useState(null);
   const [isEditMode, setIsEditMode] = useState(false);
   const [isToolbarVisible, setIsToolbarVisible] = useState(false);
@@ -929,6 +1028,7 @@ export function AdminMapView() {
         floor_area: fields.floor_area,
         notes: fields.notes,
         geometry: geoJson.geometry,
+        images: fields.images,
       });
       if (saved.floor === activeFloor) {
         drawApiRef.current?.addStall(saved);
@@ -1019,6 +1119,7 @@ export function AdminMapView() {
         floor_area: fields.floor_area,
         business_type: fields.business_type,
         notes: fields.notes,
+        images: fields.images,
       });
       await refetch();
       setEditingStall(null);
@@ -1369,6 +1470,35 @@ export function AdminMapView() {
                 </div>
               </div>
 
+              {selectedStall.images?.length > 0 && (
+                <div className="grid grid-cols-3 gap-1.5">
+                  {selectedStall.images.map((img) =>
+                    img.url ? (
+                      <button
+                        key={img.id}
+                        type="button"
+                        onClick={() =>
+                          setViewer({
+                            images: selectedStall.images.filter((i) => i.url),
+                            index: selectedStall.images.filter((i) => i.url).findIndex((i) => i.id === img.id),
+                          })
+                        }
+                        className="aspect-square rounded-lg overflow-hidden border border-gray-200 bg-gray-50 block"
+                      >
+                        <img src={img.url} alt={img.name} className="w-full h-full object-cover" />
+                      </button>
+                    ) : (
+                      <div
+                        key={img.id}
+                        className="aspect-square rounded-lg flex items-center justify-center border border-gray-200 bg-gray-50"
+                      >
+                        <ImageIcon className="w-4 h-4 text-gray-300" />
+                      </div>
+                    ),
+                  )}
+                </div>
+              )}
+
               {/* All applicants, oldest first — this stall still accepts
                   applications until one is approved, so more than one vendor
                   can be waiting at once. The panel already scrolls
@@ -1565,6 +1695,11 @@ export function AdminMapView() {
           onClose={() => setContractModal(null)}
         />
       )}
+      <ImageViewerModal
+        images={viewer?.images ?? []}
+        startIndex={viewer?.index ?? 0}
+        onClose={() => setViewer(null)}
+      />
     </div>
   );
 }

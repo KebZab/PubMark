@@ -8,6 +8,7 @@ import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
 import { saveViolation } from "./violationsStore";
 import { showToast } from "./Toast";
+import { ImageViewerModal } from "./ImageViewerModal";
 import {
   describeFileProblem,
   readFileForUpload,
@@ -26,13 +27,18 @@ const CATEGORIES = [
   "Other",
 ];
 
+// Every active (non-rejected) application on a stall, oldest first.
+function getActiveApps(stallId, applications) {
+  return applications
+    .filter((a) => a.stallId === stallId && a.status !== "rejected")
+    .sort((a, b) => new Date(a.dateApplied).getTime() - new Date(b.dateApplied).getTime());
+}
+
+// The one application that represents the stall's current state: the
+// approved tenant if there is one, otherwise whoever applied first.
 function getActiveApp(stallId, applications) {
-  return (
-    applications
-      .filter((a) => a.stallId === stallId && a.status !== "rejected")
-      .sort((a, b) => new Date(b.dateApplied).getTime() - new Date(a.dateApplied).getTime())[0] ??
-    null
-  );
+  const active = getActiveApps(stallId, applications);
+  return active.find((a) => a.status === "approved") ?? active[0] ?? null;
 }
 
 function StallMarkers({ stalls, applications, currentFloor, selectedStallId, onSelectStall }) {
@@ -103,6 +109,7 @@ export function OfficerMapView({ officerId, officerName }) {
   const { applications } = useApplications();
   const [currentFloor, setCurrentFloor] = useState("1");
   const [selectedStallId, setSelectedStallId] = useState(null);
+  const [viewer, setViewer] = useState(null);
   const [showReportModal, setShowReportModal] = useState(false);
 
   const [form, setForm] = useState({
@@ -165,11 +172,14 @@ export function OfficerMapView({ officerId, officerName }) {
   // `type` stays the real MIME: the server validates against it and maps it to
   // a display kind when reading back. Bad files are reported and skipped.
   async function handleAddEvidence(e) {
-    const files = e.target.files;
+    // Snapshot into a plain array before clearing the input — resetting
+    // e.target.value empties the live FileList e.target.files still points
+    // at, so reading it after the reset silently iterates over nothing.
+    const files = Array.from(e.target.files || []);
     e.target.value = "";
-    if (!files) return;
+    if (files.length === 0) return;
     const added = [];
-    for (const file of Array.from(files)) {
+    for (const file of files) {
       const problem = describeFileProblem(file);
       if (problem) { showToast(problem, "error"); continue; }
       try {
@@ -247,6 +257,26 @@ export function OfficerMapView({ officerId, officerName }) {
           </div>
 
           <div className="px-4 py-3">
+            {selectedStall.images?.length > 0 && (
+              <div className="flex gap-1.5 overflow-x-auto mb-3 -mx-0.5 px-0.5">
+                {selectedStall.images
+                  .filter((img) => img.url)
+                  .map((img, i, gallery) => (
+                    <button
+                      key={img.id}
+                      type="button"
+                      onClick={() => setViewer({ images: gallery, index: i })}
+                      className="flex-shrink-0"
+                    >
+                      <img
+                        src={img.url}
+                        alt={img.name}
+                        className="w-16 h-16 rounded-lg object-cover border border-gray-100"
+                      />
+                    </button>
+                  ))}
+              </div>
+            )}
             {selectedApp ? (
               <div className="flex items-center gap-2.5 mb-3">
                 <User className="w-4 h-4 text-gray-400 flex-shrink-0" />
@@ -401,6 +431,11 @@ export function OfficerMapView({ officerId, officerName }) {
           </div>
         </div>
       )}
+      <ImageViewerModal
+        images={viewer?.images ?? []}
+        startIndex={viewer?.index ?? 0}
+        onClose={() => setViewer(null)}
+      />
     </div>
   );
 }
