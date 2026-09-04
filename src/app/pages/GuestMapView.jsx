@@ -8,6 +8,7 @@ import { useStalls } from "../hooks/useStalls";
 import { useOccupiedStalls } from "../hooks/useOccupiedStalls";
 import { FloorSwitcher } from "../components/FloorSwitcher";
 import { showToast } from "../components/Toast";
+import { ImageViewerModal } from "../components/ImageViewerModal";
 
 const MAP_CSS = `
   .leaflet-container { background: #e5e7eb; }
@@ -95,6 +96,7 @@ export function GuestMapView() {
   // undecided application on them.
   const { occupiedStallIds, pendingStallIds: pendingApplicationStallIds } = useOccupiedStalls();
   const [selected, setSelected] = useState(null);
+  const [viewer, setViewer] = useState(null);
   const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [flyTarget, setFlyTarget] = useState(null);
@@ -367,6 +369,26 @@ export function GuestMapView() {
 
           {/* Body — owner info or stall details */}
           <div className="px-5 py-3">
+            {selected.images?.length > 0 && (
+              <div className="flex gap-1.5 overflow-x-auto mb-3 -mx-0.5 px-0.5">
+                {selected.images
+                  .filter((img) => img.url)
+                  .map((img, i, gallery) => (
+                    <button
+                      key={img.id}
+                      type="button"
+                      onClick={() => setViewer({ images: gallery, index: i })}
+                      className="flex-shrink-0"
+                    >
+                      <img
+                        src={img.url}
+                        alt={img.name}
+                        className="w-16 h-16 rounded-lg object-cover border border-gray-100"
+                      />
+                    </button>
+                  ))}
+              </div>
+            )}
             {selectedOccupied ? (
               <div className="flex items-center gap-3 py-1">
                 <div className="w-9 h-9 rounded-xl bg-gray-50 border border-gray-200 flex items-center justify-center flex-shrink-0">
@@ -480,6 +502,11 @@ export function GuestMapView() {
           </div>
         </div>
       )}
+      <ImageViewerModal
+        images={viewer?.images ?? []}
+        startIndex={viewer?.index ?? 0}
+        onClose={() => setViewer(null)}
+      />
     </div>
   );
 }

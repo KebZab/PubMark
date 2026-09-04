@@ -304,7 +304,10 @@ export function OfficerDashboard() {
   }
 
   async function handleAddEvidence(e) {
-    const files = e.target.files;
+    // Snapshot into a plain array before clearing the input — resetting
+    // e.target.value empties the live FileList e.target.files still points
+    // at, so reading it after the reset silently iterates over nothing.
+    const files = Array.from(e.target.files || []);
     e.target.value = "";
     const added = await readEvidenceFiles(files);
     if (added.length) setNewEvidence((prev) => [...prev, ...added]);
@@ -346,7 +349,10 @@ export function OfficerDashboard() {
   }
 
   async function handleAddResolveEvidence(e) {
-    const files = e.target.files;
+    // Snapshot into a plain array before clearing the input — resetting
+    // e.target.value empties the live FileList e.target.files still points
+    // at, so reading it after the reset silently iterates over nothing.
+    const files = Array.from(e.target.files || []);
     e.target.value = "";
     const added = await readEvidenceFiles(files);
     if (added.length) setResolveEvidence((prev) => [...prev, ...added]);
@@ -1283,7 +1289,10 @@ export function OfficerDashboard() {
                   accept={FILE_ACCEPT_ATTRIBUTE}
                   className="hidden"
                   onChange={async (e) => {
-                    const files = e.target.files;
+                    // Snapshot into a plain array before clearing the input — resetting
+                    // e.target.value empties the live FileList e.target.files still
+                    // points at, so reading it after the reset iterates over nothing.
+                    const files = Array.from(e.target.files || []);
                     e.target.value = "";
                     const added = await readEvidenceFiles(files);
                     if (added.length) setReqViolEvidence((p) => [...p, ...added]);
@@ -1616,7 +1625,10 @@ export function OfficerDashboard() {
                   multiple
                   className="hidden"
                   onChange={async (e) => {
-                    const files = e.target.files;
+                    // Snapshot into a plain array before clearing the input — resetting
+                    // e.target.value empties the live FileList e.target.files still
+                    // points at, so reading it after the reset iterates over nothing.
+                    const files = Array.from(e.target.files || []);
                     e.target.value = "";
                     const added = await readEvidenceFiles(files);
                     if (added.length) setCompleteFiles((p) => [...p, ...added]);

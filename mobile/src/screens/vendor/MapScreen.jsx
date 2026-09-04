@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { Alert, Pressable, Text, View } from "react-native";
+import { Alert, Image, Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
@@ -8,6 +8,7 @@ import { useApiData } from "../../hooks/useApiData";
 import { getApplications, getStallReservations, getStalls } from "../../services/api";
 import { ErrorState, LoadingState } from "../../components/ui";
 import StallMap from "../../components/StallMap";
+import ImageViewerModal from "../../components/ImageViewerModal";
 
 const FLOORS = ["1", "2"];
 
@@ -35,6 +36,7 @@ export default function MapScreen({ navigation }) {
   );
   const [floor, setFloor] = useState("1");
   const [selectedId, setSelectedId] = useState(null);
+  const [viewer, setViewer] = useState(null);
   // Same "Select Multiple" flow as the web vendor map: toggle it on, tap
   // several stalls, then apply to all of them in one go.
   const [multiSelectMode, setMultiSelectMode] = useState(false);
@@ -239,6 +241,22 @@ export default function MapScreen({ navigation }) {
             </Pressable>
           </View>
 
+          {selected.images?.length > 0 ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mt-3 -mx-1">
+              {selected.images
+                .filter((img) => img.url)
+                .map((img, i, gallery) => (
+                  <Pressable key={img.id} onPress={() => setViewer({ images: gallery, index: i })}>
+                    <Image
+                      source={{ uri: img.url }}
+                      className="ml-1 h-20 w-20 rounded-xl bg-gray-100"
+                      resizeMode="cover"
+                    />
+                  </Pressable>
+                ))}
+            </ScrollView>
+          ) : null}
+
           <View className="mt-3 border-t border-gray-100 pt-3">
             <DetailRow label="Business type" value={selected.business_type} />
             {selected.notes ? <DetailRow label="Notes" value={selected.notes} /> : null}
@@ -265,6 +283,12 @@ export default function MapScreen({ navigation }) {
           )}
         </View>
       ) : null}
+
+      <ImageViewerModal
+        images={viewer?.images ?? []}
+        startIndex={viewer?.index ?? 0}
+        onClose={() => setViewer(null)}
+      />
     </SafeAreaView>
   );
 }

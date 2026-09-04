@@ -367,19 +367,54 @@ async function getViolationEvidenceMap(violationIds) {
     `SELECT id, violation_id, storage_path, file_name, mime_type, file_size FROM violation_evidence WHERE violation_id IN (${placeholders}) ORDER BY created_at ASC`,
     violationIds
   );
-  const evidenceMap = new Map();
-  for (const row of rows) {
-    const existing = evidenceMap.get(row.violation_id) || [];
-    existing.push({
+  // Signed URLs are generated in parallel — one per row awaited in sequence
+  // turned a page with dozens of attachments into a multi-second response.
+  const entries = await Promise.all(rows.map(async (row) => ({
+    violationId: row.violation_id,
+    file: {
       id: row.id,
       name: row.file_name,
       type: mapCompletionFileType(row.mime_type),
       size: formatBytes(row.file_size),
       url: await signedUrlFor(row.storage_path),
-    });
-    evidenceMap.set(row.violation_id, existing);
+    },
+  })));
+  const evidenceMap = new Map();
+  for (const { violationId, file } of entries) {
+    const existing = evidenceMap.get(violationId) || [];
+    existing.push(file);
+    evidenceMap.set(violationId, existing);
   }
   return evidenceMap;
+}
+
+async function getStallImagesMap(stallIds) {
+  if (stallIds.length === 0) return new Map();
+  const placeholders = stallIds.map((_, i) => `$${i + 1}`).join(", ");
+  const { rows } = await db.query(
+    `SELECT id, stall_id, storage_path, file_name, mime_type, file_size FROM stall_images WHERE stall_id IN (${placeholders}) ORDER BY created_at ASC`,
+    stallIds
+  );
+  // Signed URLs are generated in parallel, not one at a time — this runs on
+  // GET /api/stalls, the map's main list endpoint, so a sequential await per
+  // photo across every stall turned page loads into a multi-second wait.
+  const entries = await Promise.all(rows.map(async (row) => ({
+    stallId: row.stall_id,
+    image: {
+      id: row.id,
+      name: row.file_name,
+      type: mapCompletionFileType(row.mime_type),
+      size: formatBytes(row.file_size),
+      url: await signedUrlFor(row.storage_path),
+    },
+  })));
+  const imagesMap = new Map();
+  for (const { stallId, image } of entries) {
+    const existing = imagesMap.get(stallId) || [];
+    existing.push(image);
+    imagesMap.set(stallId, existing);
+  }
+  return imagesMap;
 }
 
 function mapViolationRow(row, evidenceMap = new Map()) {
@@ -1055,8 +1090,13 @@ app.get("/api/stalls", async (req, res, next) => {
       values.push(offset); sql += ` OFFSET $${values.length}`;
     }
     const { rows } = await db.query(sql, values);
+    const imagesMap = await getStallImagesMap(rows.map((r) => r.id));
     res.json({
-      stalls: rows.map(r => ({ ...r, geometry: typeof r.geometry === "string" ? JSON.parse(r.geometry) : r.geometry })),
+      stalls: rows.map(r => ({
+        ...r,
+        geometry: typeof r.geometry === "string" ? JSON.parse(r.geometry) : r.geometry,
+        images: imagesMap.get(r.id) || [],
+      })),
       ...(total !== undefined ? { total } : {}),
     });
   } catch (error) { next(error); }
@@ -1108,6 +1148,7 @@ app.get("/api/stalls/management", async (req, res, next) => {
       values.push(offset); sql += ` OFFSET $${values.length}`;
     }
     const { rows } = await db.query(sql, values);
+    const imagesMap = await getStallImagesMap(rows.map((r) => r.id));
     const items = await Promise.all(rows.map(async (r) => ({
       stall: {
         id: r.id, stall_name: r.stall_name, status: r.status, owner_id: null,
@@ -1115,6 +1156,7 @@ app.get("/api/stalls/management", async (req, res, next) => {
         floor_area: r.floor_area, notes: r.notes,
         geometry: typeof r.geometry === "string" ? JSON.parse(r.geometry) : r.geometry,
         created_at: r.created_at,
+        images: imagesMap.get(r.id) || [],
       },
       app: r.app_id ? await mapApplicationRow({
         id: r.app_id, user_id: r.app_user_id, stall_id: r.id,
@@ -1135,9 +1177,22 @@ app.post("/api/stalls", requireAuth, requireRole("admin", "super_admin"), async 
   try {
     const { stall_name, business_type, section, floor, floor_area, notes, geometry } = req.body;
     if (!stall_name || !business_type || !section || !floor || !floor_area) return res.status(400).json({ message: "Missing required fields." });
+    const images = Array.isArray(req.body.images) ? req.body.images : [];
+    // A vacant stall with no photo is what this exists to prevent — the
+    // server enforces it too, since a client-side check alone can be skipped.
+    if (images.length === 0) return res.status(400).json({ message: "At least one stall photo is required." });
+
     const id = crypto.randomUUID();
+    const storedImages = await storeAttachments("stalls", id, images, req.auth.sub);
     await db.query("INSERT INTO stalls (id, stall_name, status, business_type, section, floor, floor_area, notes, geometry) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)", [id, stall_name, "vacant", business_type, section, floor, floor_area || "", notes || "", JSON.stringify(geometry)]);
-    res.status(201).json({ stall: { id, stall_name, status: "vacant", owner_id: null, business_type, section, floor, floor_area, notes, geometry, created_at: new Date().toISOString() } });
+    for (const file of storedImages) {
+      await db.query(
+        "INSERT INTO stall_images (id, stall_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        [crypto.randomUUID(), id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
+      );
+    }
+    const savedImages = (await getStallImagesMap([id])).get(id) || [];
+    res.status(201).json({ stall: { id, stall_name, status: "vacant", owner_id: null, business_type, section, floor, floor_area, notes, geometry, created_at: new Date().toISOString(), images: savedImages } });
   } catch (error) { next(error); }
 });
 
@@ -1165,12 +1220,47 @@ app.patch("/api/stalls/:id", requireAuth, requireRole("admin", "super_admin"), a
     if (floor_area !== undefined) { values.push(floor_area); updates.push(`floor_area = $${values.length}`); }
     if (notes !== undefined) { values.push(notes); updates.push(`notes = $${values.length}`); }
     if (status !== undefined) { values.push(status); updates.push(`status = $${values.length}`); }
-    if (updates.length === 0) return res.status(400).json({ message: "No fields to update." });
-    values.push(req.params.id);
-    await db.query(`UPDATE stalls SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
+    // The full desired photo list, or null when the editor didn't touch photos
+    // at all. Entries carrying an id are photos already stored; anything
+    // already stored but missing from this list was removed in the editor.
+    const images = Array.isArray(req.body.images) ? req.body.images : null;
+    if (updates.length === 0 && images === null) return res.status(400).json({ message: "No fields to update." });
+    // Only enforced when the caller actually sent a photo list (the stall
+    // photo editor always does) — callers that patch unrelated fields, like
+    // SuperAdminDashboard's status/business-type edit, never touch images
+    // and so aren't held to this.
+    if (images !== null && images.length === 0) {
+      return res.status(400).json({ message: "At least one stall photo is required." });
+    }
+
+    if (updates.length > 0) {
+      values.push(req.params.id);
+      await db.query(`UPDATE stalls SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
+    }
+
+    if (images !== null) {
+      const { rows: existingRows } = await db.query("SELECT id, storage_path FROM stall_images WHERE stall_id = $1", [req.params.id]);
+      const keptIds = new Set(images.filter((img) => img?.id).map((img) => img.id));
+      const removed = existingRows.filter((row) => !keptIds.has(row.id));
+      for (const row of removed) {
+        await db.query("DELETE FROM stall_images WHERE id = $1", [row.id]);
+        await removeAttachment(row.storage_path);
+      }
+      const newFiles = images.filter((img) => !img?.id);
+      const storedImages = await storeAttachments("stalls", req.params.id, newFiles, req.auth.sub);
+      for (const file of storedImages) {
+        await db.query(
+          "INSERT INTO stall_images (id, stall_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+          [crypto.randomUUID(), req.params.id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
+        );
+      }
+    }
+
     const { rows } = await db.query("SELECT id, stall_name, status, owner_id, business_type, section, floor, floor_area, notes, geometry, created_at FROM stalls WHERE id = $1", [req.params.id]);
     if (!rows[0]) return res.status(404).json({ message: "Stall not found." });
-    const row = rows[0]; res.json({ stall: { ...row, geometry: typeof row.geometry === "string" ? JSON.parse(row.geometry) : row.geometry } });
+    const row = rows[0];
+    const savedImages = (await getStallImagesMap([req.params.id])).get(req.params.id) || [];
+    res.json({ stall: { ...row, geometry: typeof row.geometry === "string" ? JSON.parse(row.geometry) : row.geometry, images: savedImages } });
   } catch (error) { next(error); }
 });
 
@@ -1201,7 +1291,9 @@ async function collectStallAttachmentPaths(conn, id) {
        JOIN violations v ON v.id = ve.violation_id WHERE v.stall_id = $1
      UNION ALL
      SELECT crf.storage_path FROM check_request_files crf
-       JOIN check_requests cr ON cr.id = crf.check_request_id WHERE cr.stall_id = $1`,
+       JOIN check_requests cr ON cr.id = crf.check_request_id WHERE cr.stall_id = $1
+     UNION ALL
+     SELECT storage_path FROM stall_images WHERE stall_id = $1`,
     [id]
   );
   return rows.map((r) => r.p).filter(Boolean);
@@ -1215,6 +1307,7 @@ async function cascadeDeleteStall(conn, id) {
   await conn.query("DELETE FROM termination_requests WHERE stall_id = $1", [id]);
   await conn.query("DELETE FROM payment_receipts WHERE stall_id = $1", [id]);
   await conn.query("DELETE FROM applications WHERE stall_id = $1", [id]);
+  await conn.query("DELETE FROM stall_images WHERE stall_id = $1", [id]);
   await conn.query("DELETE FROM stalls WHERE id = $1", [id]);
 }
 
