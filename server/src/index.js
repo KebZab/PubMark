@@ -187,6 +187,7 @@ function mapAnnouncementRow(row) {
     title: row.title,
     message: row.message,
     type: row.type,
+    category: row.category || null,
     createdAt: row.created_at,
     author: row.author_name || "Admin",
     authorId: row.author_id,
@@ -707,7 +708,7 @@ app.delete("/api/users/:id", requireAuth, requireRole("admin", "super_admin"), a
 app.get("/api/announcements", requireAuth, async (_req, res, next) => {
   try {
     const { rows } = await db.query(`
-      SELECT a.id, a.title, a.message, a.type, a.author_id, a.created_at, p.name AS author_name
+      SELECT a.id, a.title, a.message, a.type, a.category, a.author_id, a.created_at, p.name AS author_name
       FROM announcements a
       LEFT JOIN profiles p ON p.id = a.author_id
       ORDER BY a.created_at DESC
@@ -721,16 +722,19 @@ app.post("/api/announcements", requireAuth, requireRole("admin", "super_admin"),
     const title = String(req.body.title || "").trim();
     const message = String(req.body.message || "").trim();
     const type = String(req.body.type || "info");
+    // Free text, not an enum — "Other" in the admin picker lets a category
+    // be typed that isn't in the preset list, so nothing forces a mismatch.
+    const category = req.body.category ? String(req.body.category).trim() : null;
     if (!title || !message) return res.status(400).json({ message: "Title and message are required." });
     if (!["info", "warning", "urgent", "success"].includes(type)) return res.status(400).json({ message: "Invalid announcement type." });
 
     const id = crypto.randomUUID();
     await db.query(
-      "INSERT INTO announcements (id, title, message, type, author_id) VALUES ($1, $2, $3, $4, $5)",
-      [id, title, message, type, req.auth.sub]
+      "INSERT INTO announcements (id, title, message, type, category, author_id) VALUES ($1, $2, $3, $4, $5, $6)",
+      [id, title, message, type, category, req.auth.sub]
     );
     const { rows } = await db.query(
-      `SELECT a.id, a.title, a.message, a.type, a.author_id, a.created_at, p.name AS author_name
+      `SELECT a.id, a.title, a.message, a.type, a.category, a.author_id, a.created_at, p.name AS author_name
        FROM announcements a
        LEFT JOIN profiles p ON p.id = a.author_id
        WHERE a.id = $1

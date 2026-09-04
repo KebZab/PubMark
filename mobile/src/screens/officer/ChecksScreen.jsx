@@ -29,6 +29,7 @@ export default function ChecksScreen() {
   const { data, loading, error, refetch } = useApiData(getCheckRequests);
   const [filter, setFilter] = useState("pending");
 
+  const [expandedId, setExpandedId] = useState(null);
   const [active, setActive] = useState(null);
   const [summary, setSummary] = useState("");
   const [notes, setNotes] = useState("");
@@ -148,38 +149,53 @@ export default function ChecksScreen() {
           <View className="gap-3 px-4 pt-4">
             {shown.map((r) => {
               const p = PRIORITY_STYLE[r.priority] ?? PRIORITY_STYLE.normal;
+              const expanded = expandedId === r.id;
               return (
                 <Card key={r.id} className="p-4">
-                  <View className="flex-row items-start justify-between">
+                  <Pressable
+                    onPress={() => setExpandedId((id) => (id === r.id ? null : r.id))}
+                    className="flex-row items-start justify-between"
+                  >
                     <View className="flex-1 pr-3">
                       <Text className="text-sm font-semibold text-gray-900">{r.stallName ?? "Stall"}</Text>
                       <Text className="mt-0.5 text-xs text-gray-500">
                         Requested by {r.requestedByName ?? "admin"}
                       </Text>
                     </View>
-                    <View className={`self-start rounded-full px-2.5 py-1 ${p.bg}`}>
-                      <Text className={`text-[10px] font-semibold capitalize ${p.text}`}>{r.priority}</Text>
+                    <View className="flex-row items-center gap-2">
+                      <View className={`self-start rounded-full px-2.5 py-1 ${p.bg}`}>
+                        <Text className={`text-[10px] font-semibold capitalize ${p.text}`}>{r.priority}</Text>
+                      </View>
+                      <Ionicons
+                        name={expanded ? "chevron-up" : "chevron-down"}
+                        size={16}
+                        color="#9ca3af"
+                      />
                     </View>
-                  </View>
+                  </Pressable>
 
-                  <Text className="mt-3 text-xs leading-5 text-gray-600">{r.reason}</Text>
-                  {r.notes ? (
-                    <Text className="mt-1.5 text-[11px] leading-5 text-gray-400">{r.notes}</Text>
-                  ) : null}
+                  {expanded ? (
+                    <>
+                      <Text className="mt-3 text-xs font-bold leading-5 text-gray-800">{r.reason}</Text>
+                      {r.notes ? (
+                        <Text className="mt-1.5 text-[11px] leading-5 text-gray-600">{r.notes}</Text>
+                      ) : null}
 
-                  <Text className="mt-3 text-[11px] text-gray-400">
-                    {formatDate(r.createdAt)}
-                    {r.completedAt ? ` · completed ${formatDate(r.completedAt)}` : ""}
-                  </Text>
-
-                  {r.status === "completed" && r.completionSummary ? (
-                    <View className="mt-3 rounded-xl bg-emerald-50 px-3 py-2.5">
-                      <Text className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
-                        Findings
+                      <Text className="mt-3 text-[11px] text-gray-400">
+                        {formatDate(r.createdAt)}
+                        {r.completedAt ? ` · completed ${formatDate(r.completedAt)}` : ""}
                       </Text>
-                      <Text className="mt-1 text-xs leading-5 text-emerald-900">{r.completionSummary}</Text>
-                      <Attachments files={r.completionFiles ?? []} />
-                    </View>
+
+                      {r.status === "completed" && r.completionSummary ? (
+                        <View className="mt-3 rounded-xl bg-emerald-50 px-3 py-2.5">
+                          <Text className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                            Findings
+                          </Text>
+                          <Text className="mt-1 text-xs leading-5 text-emerald-900">{r.completionSummary}</Text>
+                          <Attachments files={r.completionFiles ?? []} />
+                        </View>
+                      ) : null}
+                    </>
                   ) : null}
 
                   {r.status === "pending" ? (

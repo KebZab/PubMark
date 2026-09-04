@@ -18,6 +18,7 @@ import OfficerViolationsScreen from "../screens/officer/ViolationsScreen";
 import OfficerChecksScreen from "../screens/officer/ChecksScreen";
 import OfficerMapScreen from "../screens/officer/OfficerMapScreen";
 import OfficerReceiptsScreen from "../screens/officer/ReceiptsScreen";
+import OfficerNoticesScreen from "../screens/officer/NoticesScreen";
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -96,7 +97,7 @@ function VendorNavigator() {
   );
 }
 
-// Officer tabs mirror the web officer dashboard: violations / checks / log / receipts
+// Officer tabs mirror the web officer dashboard: violations / checks / map / receipts / notices
 function OfficerTabs() {
   return (
     <Tab.Navigator screenOptions={officerTabScreenOptions}>
@@ -115,6 +116,11 @@ function OfficerTabs() {
         name="Receipts"
         component={OfficerReceiptsScreen}
         options={{ tabBarIcon: tabIcon("receipt-outline") }}
+      />
+      <Tab.Screen
+        name="Notices"
+        component={OfficerNoticesScreen}
+        options={{ tabBarIcon: tabIcon("megaphone-outline") }}
       />
     </Tab.Navigator>
   );

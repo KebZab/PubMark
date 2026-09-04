@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { ActivityIndicator, Alert, Image, Linking, Platform, Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
+import ImageViewerModal from "./ImageViewerModal";
 
 // Shared bits so every screen looks like the same app — and like the web app.
 
@@ -122,18 +124,28 @@ export function OfficerHeader({ title, subtitle, right }) {
  * plain dimmed chip rather than a thumbnail that cannot load.
  */
 export function Attachments({ files = [], emptyLabel }) {
+  const [viewer, setViewer] = useState(null);
+
   if (!files.length) {
     return emptyLabel ? <Text className="mt-3 text-[11px] italic text-gray-400">{emptyLabel}</Text> : null;
   }
+
+  // Photos open in the same in-app viewer as stall photos (swipe between
+  // them) instead of handing off to an external browser/app.
+  const imageFiles = files.filter(
+    (file) => file.url && String(file.type || "").startsWith("image"),
+  );
+
   return (
     <View className="mt-3 flex-row flex-wrap gap-2">
       {files.map((file, index) => {
         const isImage = String(file.type || "").startsWith("image");
         if (file.url && isImage) {
+          const galleryIndex = imageFiles.indexOf(file);
           return (
             <Pressable
               key={file.id ?? index}
-              onPress={() => Linking.openURL(file.url)}
+              onPress={() => setViewer({ images: imageFiles, index: galleryIndex })}
               className="h-16 w-16 overflow-hidden rounded-lg border border-gray-200"
             >
               <Image source={{ uri: file.url }} className="h-full w-full" resizeMode="cover" />
@@ -161,6 +173,12 @@ export function Attachments({ files = [], emptyLabel }) {
           </Pressable>
         );
       })}
+
+      <ImageViewerModal
+        images={viewer?.images ?? []}
+        startIndex={viewer?.index ?? 0}
+        onClose={() => setViewer(null)}
+      />
     </View>
   );
 }

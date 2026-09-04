@@ -3,9 +3,10 @@ import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, Text, Te
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
 import { useApiData } from "../../hooks/useApiData";
 import { getApplications, getStalls, getViolations, createViolation } from "../../services/api";
-import { readAssetForUpload, formatFileSize } from "../../services/fileUpload";
+import { readAssetForUpload, formatFileSize, DOCUMENT_PICKER_TYPES } from "../../services/fileUpload";
 import { Card, ErrorState, LoadingState, OfficerHeader } from "../../components/ui";
 import StallMap from "../../components/StallMap";
 import ImageViewerModal from "../../components/ImageViewerModal";
@@ -127,6 +128,26 @@ export default function OfficerMapScreen() {
         setEvidence((prev) => [...prev, { ...file, size: formatFileSize(file.size) }]);
       } catch (e) {
         Alert.alert("Cannot attach photo", e.message);
+      }
+    }
+  };
+
+  const pickFile = async () => {
+    // copyToCacheDirectory MUST stay false. With it on, Android copies the pick
+    // into a file:// path under Expo Go's own cache, which the sandboxed app
+    // then can't read ("Location ... isn't readable"). Left off, the picker
+    // returns the original content:// uri, which expo-file-system grants read
+    // access to unconditionally and opens via contentResolver.
+    const result = await DocumentPicker.getDocumentAsync({
+      type: DOCUMENT_PICKER_TYPES,
+      copyToCacheDirectory: false,
+    });
+    if (!result.canceled && result.assets?.[0]) {
+      try {
+        const file = await readAssetForUpload(result.assets[0]);
+        setEvidence((prev) => [...prev, { ...file, size: formatFileSize(file.size) }]);
+      } catch (e) {
+        Alert.alert("Cannot attach file", e.message);
       }
     }
   };
@@ -369,16 +390,24 @@ export default function OfficerMapScreen() {
                 </View>
               ) : null}
 
-              <Pressable
-                onPress={capturePhoto}
-                disabled={submitting}
-                className="flex-row items-center justify-center rounded-xl border border-gray-200 bg-white py-3"
-              >
-                <Ionicons name="camera-outline" size={18} color="#374151" />
-                <Text className="ml-2 text-xs font-semibold text-gray-700">
-                  {evidence.length > 0 ? "Add another photo" : "Take photo"}
-                </Text>
-              </Pressable>
+              <View className="flex-row gap-2">
+                <Pressable
+                  onPress={capturePhoto}
+                  disabled={submitting}
+                  className="flex-1 flex-row items-center justify-center rounded-xl border border-gray-200 bg-white py-3"
+                >
+                  <Ionicons name="camera-outline" size={18} color="#374151" />
+                  <Text className="ml-2 text-xs font-semibold text-gray-700">Take photo</Text>
+                </Pressable>
+                <Pressable
+                  onPress={pickFile}
+                  disabled={submitting}
+                  className="flex-1 flex-row items-center justify-center rounded-xl border border-gray-200 bg-white py-3"
+                >
+                  <Ionicons name="folder-outline" size={18} color="#374151" />
+                  <Text className="ml-2 text-xs font-semibold text-gray-700">Choose file</Text>
+                </Pressable>
+              </View>
             </Card>
 
             {formError ? (

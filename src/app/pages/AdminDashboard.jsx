@@ -110,6 +110,18 @@ const announcementTypeConfig = {
   },
 };
 
+// Common topics for a market-wide announcement. "Other" reveals a free-text
+// field so nothing is forced into the wrong bucket.
+const ANNOUNCEMENT_CATEGORY_OPTIONS = [
+  { value: "Market Operations", label: "Market Operations" },
+  { value: "Fees & Payments", label: "Fees & Payments" },
+  { value: "Maintenance", label: "Maintenance" },
+  { value: "Safety & Compliance", label: "Safety & Compliance" },
+  { value: "Events", label: "Events" },
+  { value: "Policy Updates", label: "Policy Updates" },
+  { value: "other", label: "Other (specify below)" },
+];
+
 function formatDate(isoString) {
   return new Date(isoString).toLocaleDateString("en-US", {
     month: "short",
@@ -163,9 +175,10 @@ export function AdminDashboard() {
   const [remarksInput, setRemarksInput] = useState("");
   const [announcements, setAnnouncements] = useState([]);
   const [showForm, setShowForm] = useState(false);
-  const [newTitle, setNewTitle] = useState("");
   const [newMessage, setNewMessage] = useState("");
   const [newType, setNewType] = useState("info");
+  const [newCategory, setNewCategory] = useState("");
+  const [newCustomCategory, setNewCustomCategory] = useState("");
   const [appStatusFilter, setAppStatusFilter] = useState("all");
   const [violationsList, setViolationsList] = useState([]);
   const [assigningViolation, setAssigningViolation] = useState(null);
@@ -534,17 +547,21 @@ export function AdminDashboard() {
   }, [tab]);
 
   async function handlePostAnnouncement() {
-    if (!newTitle.trim() || !newMessage.trim()) return;
+    const finalCategory = newCategory === "other" ? newCustomCategory.trim() : newCategory;
+    if (!finalCategory || !newMessage.trim()) return;
     try {
       const created = await createAnnouncement({
-        title: newTitle.trim(),
+        // The category picker doubles as the title — one field, not two.
+        title: finalCategory,
         message: newMessage.trim(),
         type: newType,
+        category: finalCategory,
       });
       setAnnouncements((prev) => [created, ...prev]);
-      setNewTitle("");
       setNewMessage("");
       setNewType("info");
+      setNewCategory("");
+      setNewCustomCategory("");
       setShowForm(false);
       showToast("Announcement posted.", "success");
     } catch (error) {
@@ -1023,13 +1040,30 @@ export function AdminDashboard() {
                 </div>
 
                 <div className="grid grid-cols-1 gap-3">
-                  <input
-                    type="text"
-                    value={newTitle}
-                    onChange={(e) => setNewTitle(e.target.value)}
-                    placeholder="Announcement title..."
+                  <select
+                    value={newCategory}
+                    onChange={(e) => setNewCategory(e.target.value)}
                     className="w-full h-10 px-4 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14B8A6] text-sm transition-all"
-                  />
+                  >
+                    <option value="" disabled>
+                      Select a title
+                    </option>
+                    {ANNOUNCEMENT_CATEGORY_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  {newCategory === "other" && (
+                    <input
+                      type="text"
+                      value={newCustomCategory}
+                      onChange={(e) => setNewCustomCategory(e.target.value)}
+                      placeholder="Specify the title"
+                      className="w-full h-10 px-4 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14B8A6] text-sm transition-all"
+                      autoFocus
+                    />
+                  )}
                   <textarea
                     value={newMessage}
                     onChange={(e) => setNewMessage(e.target.value)}
@@ -1046,7 +1080,10 @@ export function AdminDashboard() {
                   </p>
                   <button
                     onClick={handlePostAnnouncement}
-                    disabled={!newTitle.trim() || !newMessage.trim()}
+                    disabled={
+                      (newCategory === "other" ? !newCustomCategory.trim() : !newCategory) ||
+                      !newMessage.trim()
+                    }
                     className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl text-sm font-medium hover:shadow-lg hover:shadow-teal-500/30 hover:scale-105 active:scale-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:hover:shadow-none"
                   >
                     <Megaphone className="w-4 h-4" />
@@ -1653,13 +1690,30 @@ export function AdminDashboard() {
                     <label className="block text-sm font-medium text-gray-700 mb-1.5">
                       Title
                     </label>
-                    <input
-                      type="text"
-                      value={newTitle}
-                      onChange={(e) => setNewTitle(e.target.value)}
-                      placeholder="Announcement title..."
+                    <select
+                      value={newCategory}
+                      onChange={(e) => setNewCategory(e.target.value)}
                       className="w-full h-10 px-4 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14B8A6] text-sm transition-all"
-                    />
+                    >
+                      <option value="" disabled>
+                        Select a title
+                      </option>
+                      {ANNOUNCEMENT_CATEGORY_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                    {newCategory === "other" && (
+                      <input
+                        type="text"
+                        value={newCustomCategory}
+                        onChange={(e) => setNewCustomCategory(e.target.value)}
+                        placeholder="Specify the title"
+                        className="mt-2 w-full h-10 px-4 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14B8A6] text-sm transition-all"
+                        autoFocus
+                      />
+                    )}
                   </div>
 
                   <div>
@@ -1684,7 +1738,10 @@ export function AdminDashboard() {
                     </button>
                     <button
                       onClick={handlePostAnnouncement}
-                      disabled={!newTitle.trim() || !newMessage.trim()}
+                      disabled={
+                        (newCategory === "other" ? !newCustomCategory.trim() : !newCategory) ||
+                        !newMessage.trim()
+                      }
                       className="px-5 py-2 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl text-sm font-medium hover:shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Post Announcement
