@@ -1,0 +1,141 @@
+@startuml PubMark_Use_Case_Diagram
+title PubMark Public Market Stall Management System\nUse Case Diagram
+
+left to right direction
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam actorStyle awesome
+skinparam usecase {
+  BackgroundColor #F8FAFC
+  BorderColor #334155
+  ArrowColor #475569
+}
+
+actor Guest
+actor Vendor
+actor Officer
+actor Admin
+actor "Super Admin" as SuperAdmin
+
+SuperAdmin --|> Admin
+
+rectangle "PubMark System" {
+  package "Access and Public Map" {
+    usecase "Register Account" as UC_Register
+    usecase "Log In" as UC_Login
+    usecase "Log Out" as UC_Logout
+    usecase "Browse Market Map" as UC_BrowseMap
+    usecase "View Stall Details\nand Availability" as UC_ViewStall
+  }
+
+  package "Vendor Services" {
+    usecase "Apply for Vacant Stall" as UC_Apply
+    usecase "Upload Business Permit" as UC_Permit
+    usecase "Track Application\nand Contract Status" as UC_TrackApp
+    usecase "View Announcements" as UC_ViewNotice
+    usecase "Offer Stall Transfer" as UC_OfferTransfer
+    usecase "Accept or Decline\nTransfer" as UC_RespondTransfer
+    usecase "Request Contract or\nAccount Termination" as UC_RequestTermination
+    usecase "Submit Payment Receipt" as UC_SubmitReceipt
+    usecase "View Own Violations" as UC_OwnViolations
+  }
+
+  package "Officer Operations" {
+    usecase "View Assigned\nInspection Requests" as UC_ViewChecks
+    usecase "Complete Inspection" as UC_CompleteCheck
+    usecase "Attach Findings\nand Evidence" as UC_CheckEvidence
+    usecase "Report Violation" as UC_ReportViolation
+    usecase "Update Violation Status" as UC_UpdateViolation
+    usecase "View Flagged Stalls\non Map" as UC_FlaggedMap
+    usecase "Record Vendor Payment" as UC_RecordPayment
+  }
+
+  package "Administration" {
+    usecase "Review Applications" as UC_ReviewApp
+    usecase "Approve or Reject\nApplication" as UC_DecideApp
+    usecase "Set Permit Deadline" as UC_Deadline
+    usecase "Manage Stalls" as UC_ManageStalls
+    usecase "Manage Stall Geometry" as UC_Geometry
+    usecase "Create and Assign\nInspection Request" as UC_AssignCheck
+    usecase "Monitor Inspections\nand Violations" as UC_Monitor
+    usecase "Resolve or Dismiss\nViolation" as UC_ResolveViolation
+    usecase "Review Termination\nRequest" as UC_ReviewTermination
+    usecase "Publish Announcements" as UC_PublishNotice
+    usecase "Monitor Transfers" as UC_MonitorTransfers
+    usecase "Verify or Reject\nPayment Receipt" as UC_VerifyReceipt
+    usecase "View Analytics" as UC_Analytics
+    usecase "Manage Archive" as UC_Archive
+  }
+
+  package "Super Administration" {
+    usecase "Manage User Accounts\nand Roles" as UC_Users
+    usecase "Edit Market Perimeter" as UC_Perimeter
+  }
+}
+
+Guest --> UC_Register
+Guest --> UC_Login
+Guest --> UC_BrowseMap
+Guest --> UC_ViewStall
+
+Vendor --> UC_Login
+Vendor --> UC_Logout
+Vendor --> UC_BrowseMap
+Vendor --> UC_ViewStall
+Vendor --> UC_Apply
+Vendor --> UC_Permit
+Vendor --> UC_TrackApp
+Vendor --> UC_ViewNotice
+Vendor --> UC_OfferTransfer
+Vendor --> UC_RespondTransfer
+Vendor --> UC_RequestTermination
+Vendor --> UC_SubmitReceipt
+Vendor --> UC_OwnViolations
+
+Officer --> UC_Login
+Officer --> UC_Logout
+Officer --> UC_ViewChecks
+Officer --> UC_CompleteCheck
+Officer --> UC_ReportViolation
+Officer --> UC_UpdateViolation
+Officer --> UC_FlaggedMap
+Officer --> UC_RecordPayment
+
+Admin --> UC_Login
+Admin --> UC_Logout
+Admin --> UC_ReviewApp
+Admin --> UC_ManageStalls
+Admin --> UC_AssignCheck
+Admin --> UC_Monitor
+Admin --> UC_ReviewTermination
+Admin --> UC_PublishNotice
+Admin --> UC_MonitorTransfers
+Admin --> UC_VerifyReceipt
+Admin --> UC_Analytics
+Admin --> UC_Archive
+
+SuperAdmin --> UC_Users
+SuperAdmin --> UC_Perimeter
+
+UC_BrowseMap .> UC_ViewStall : <<include>>
+UC_Apply .> UC_ViewStall : <<include>>
+UC_Permit .> UC_TrackApp : <<extend>>
+UC_CompleteCheck .> UC_ViewChecks : <<include>>
+UC_CompleteCheck .> UC_CheckEvidence : <<include>>
+UC_ReportViolation .> UC_CheckEvidence : <<include>>
+UC_ReviewApp .> UC_DecideApp : <<include>>
+UC_Deadline .> UC_DecideApp : <<extend>>
+UC_ManageStalls .> UC_Geometry : <<include>>
+UC_Monitor .> UC_ResolveViolation : <<extend>>
+
+note bottom of UC_Login
+  Web uses a session cookie.
+  Mobile uses a bearer token.
+end note
+
+note bottom of UC_Perimeter
+  Super Admin inherits all
+  Admin use cases.
+end note
+
+@enduml
