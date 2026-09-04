@@ -1,0 +1,38 @@
+PORT=4000
+CLIENT_ORIGIN=http://localhost:5173,http://localhost:5174
+
+DATABASE_URL=postgresql://postgres.mkdkcrjtndqguambmduh:pubmark123456!@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres
+
+JWT_SECRET=use-a-new-long-random-secret
+
+# Old MySQL config - kept for reference/fallback, no longer used
+# MYSQL_HOST=127.0.0.1
+# MYSQL_PORT=3306
+# MYSQL_DATABASE=pubmark
+# MYSQL_USER=root
+# MYSQL_PASSWORD=Publicmarket123
+
+# Supabase Storage (server-side only — the service role key must NEVER reach
+# the browser). Both are in the Supabase dashboard under Settings -> API.
+SUPABASE_URL=https://mkdkcrjtndqguambmduh.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1rZGtjcmp0bmRxZ3VhbWJtZHVoIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4Njk2Mjc1MiwiZXhwIjoyMTAyNTM4NzUyfQ.cmxW_q95Q7q0QXrgYl-sMvPrTnInywE9A5aVN0y56eo
+
+
+
+
+{
+  "mcpServers": {
+    "supabase": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@supabase/mcp-server-supabase@latest",
+        "--project-ref=mkdkcrjtndqguambmduh"
+      ],
+      "env": {
+        "SUPABASE_ACCESS_TOKEN": "sbp_56b05b900c74f08d5bf95bf62da682fda05063a5"
+      }
+    }
+  }
+}
+
