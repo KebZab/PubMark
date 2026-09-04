@@ -29,6 +29,7 @@ import {
   Paperclip,
   FileText,
   Receipt as ReceiptIcon,
+  Send,
 } from "lucide-react";
 import { AdminMapView } from "../components/AdminMapView";
 import { getSession } from "../components/authStorage";
@@ -46,7 +47,7 @@ import {
 } from "../services/api";
 import { TablePagination } from "../components/ui/TablePagination";
 import { migrateLegacyRequests } from "../services/legacyRequestMigration";
-import { getViolations, assignOfficer } from "../components/violationsStore";
+import { getViolations, assignOfficer, updateViolationStatus } from "../components/violationsStore";
 import {
   getViolationRequests,
   createViolationRequest,
@@ -139,6 +140,14 @@ export function SuperAdminDashboard() {
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [requestReason, setRequestReason] = useState("");
   const [selectedStallForRequest, setSelectedStallForRequest] = useState(null);
+  // True when the modal was opened from a specific violation ("Send Req"),
+  // which already fixes the stall — the picker only makes sense for the
+  // general "New Request" flow, where the admin has to choose one.
+  const [requestStallLocked, setRequestStallLocked] = useState(false);
+  const [requestViolationCategory, setRequestViolationCategory] = useState("");
+  // The violation this request follows up on, so completing it can resolve
+  // that violation automatically.
+  const [requestViolationId, setRequestViolationId] = useState(null);
   const [assigningRequest, setAssigningRequest] = useState(null);
   const [editingStall, setEditingStall] = useState(null);
   const [editStallData, setEditStallData] = useState({ status: "", business_type: "" });
@@ -489,6 +498,23 @@ export function SuperAdminDashboard() {
     }
   }
 
+  // Expanding a violation's details is also how it gets marked seen — but
+  // only the first time: once status leaves "open" this guard stops it from
+  // re-firing on every subsequent expand/collapse of the same row.
+  async function handleExpandViolation(v) {
+    const willExpand = expandedViolation !== v.id;
+    setExpandedViolation(willExpand ? v.id : null);
+    if (!willExpand || v.status !== "open") return;
+    try {
+      const updated = await updateViolationStatus(v.id, "reviewed");
+      setViolationsList((prev) =>
+        prev.map((item) => (item.id === v.id ? updated : item)),
+      );
+    } catch (error) {
+      showToast(`Failed to mark violation as reviewed: ${error.message}`, "error");
+    }
+  }
+
   async function handleDelete(id) {
     try {
       await deleteUserApi(id);
@@ -586,11 +612,16 @@ export function SuperAdminDashboard() {
         requestedBy: session.userId,
         requestedByName: session.name,
         reason: requestReason,
+        category: requestViolationCategory || null,
+        violationId: requestViolationId,
       });
       await loadRequestData();
       setShowRequestModal(false);
       setSelectedStallForRequest(null);
       setRequestReason("");
+      setRequestStallLocked(false);
+      setRequestViolationCategory("");
+      setRequestViolationId(null);
       showToast("Check request created successfully.", "success");
     } catch (error) {
       showToast(`Failed to create request: ${error.message}`, "error");
@@ -1700,6 +1731,7 @@ export function SuperAdminDashboard() {
                 >
                   <option value="all">All Status</option>
                   <option value="open">Open</option>
+                  <option value="reviewed">Reviewing</option>
                   <option value="resolved">Resolved</option>
                   <option value="dismissed">Dismissed</option>
                 </select>
@@ -1731,6 +1763,7 @@ export function SuperAdminDashboard() {
                       const isExpanded = expandedViolation === v.id;
                       const statusCfg = {
                         open: { label: "Open", cls: "bg-red-100 text-red-700" },
+                        reviewed: { label: "Reviewing", cls: "bg-amber-100 text-amber-700" },
                         resolved: { label: "Resolved", cls: "bg-green-100 text-green-700" },
                         dismissed: { label: "Dismissed", cls: "bg-gray-100 text-gray-600" },
                       }[v.status];
@@ -1741,10 +1774,10 @@ export function SuperAdminDashboard() {
                         >
                           <div
                             className="flex items-start gap-4 px-5 py-4 cursor-pointer hover:bg-gray-50 transition-colors"
-                            onClick={() => setExpandedViolation(isExpanded ? null : v.id)}
+                            onClick={() => handleExpandViolation(v)}
                           >
                             <div
-                              className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${v.status === "open" ? "bg-red-500" : v.status === "resolved" ? "bg-green-500" : "bg-gray-400"}`}
+                              className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${v.status === "open" ? "bg-red-500" : v.status === "reviewed" ? "bg-amber-500" : v.status === "resolved" ? "bg-green-500" : "bg-gray-400"}`}
                             />
                             <div className="flex-1 min-w-0">
                               <div className="flex items-start justify-between gap-3">
@@ -1788,7 +1821,8 @@ export function SuperAdminDashboard() {
                             </span>
                           </div>
                           {isExpanded && (
-                            <div className="border-t border-gray-100 bg-gray-50 px-5 py-4 grid grid-cols-1 md:grid-cols-2 gap-5">
+                            <div className="border-t border-gray-100 bg-gray-50">
+                            <div className="px-5 py-4 grid grid-cols-1 md:grid-cols-2 gap-5">
                               <div className="space-y-3">
                                 <div>
                                   <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
@@ -1835,6 +1869,24 @@ export function SuperAdminDashboard() {
                                   </div>
                                 )}
                               </div>
+                            </div>
+                            {v.status === "reviewed" && (
+                              <div className="px-5 pb-4 flex justify-end">
+                                <button
+                                  onClick={() => {
+                                    setSelectedStallForRequest(v.stallId);
+                                    setRequestViolationCategory(v.category);
+                                    setRequestViolationId(v.id);
+                                    setRequestStallLocked(true);
+                                    setShowRequestModal(true);
+                                  }}
+                                  className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold rounded-lg transition-colors"
+                                >
+                                  <Send className="w-3.5 h-3.5" />
+                                  Send Req
+                                </button>
+                              </div>
+                            )}
                             </div>
                           )}
                         </div>
@@ -2214,7 +2266,12 @@ export function SuperAdminDashboard() {
                 </p>
               </div>
               <button
-                onClick={() => setShowRequestModal(true)}
+                onClick={() => {
+                  setRequestStallLocked(false);
+                  setRequestViolationCategory("");
+                  setRequestViolationId(null);
+                  setShowRequestModal(true);
+                }}
                 className="flex items-center gap-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold px-3 py-2 rounded-lg transition-colors"
               >
                 <CheckCircle className="w-3.5 h-3.5" />
@@ -2477,6 +2534,9 @@ export function SuperAdminDashboard() {
                   setShowRequestModal(false);
                   setSelectedStallForRequest(null);
                   setRequestReason("");
+                  setRequestStallLocked(false);
+                  setRequestViolationCategory("");
+                  setRequestViolationId(null);
                 }}
                 className="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center"
               >
@@ -2484,46 +2544,65 @@ export function SuperAdminDashboard() {
               </button>
             </div>
             <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1.5">
-                  Select Stall
-                </label>
-                <div className="border border-gray-200 rounded-xl max-h-48 overflow-y-auto">
-                  {stalls.map((s) => (
-                    <button
-                      key={s.id}
-                      onClick={() => setSelectedStallForRequest(s.id)}
-                      className={`w-full px-4 py-2.5 text-left text-sm hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-0 ${
-                        selectedStallForRequest === s.id ? "bg-purple-50" : ""
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium text-gray-900">{s.name}</span>
-                        <span
-                          className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
-                            s.status === "vacant"
-                              ? "bg-green-100 text-green-700"
-                              : s.status === "occupied"
-                                ? "bg-blue-100 text-blue-700"
-                                : "bg-gray-100 text-gray-700"
-                          }`}
-                        >
-                          {s.status}
-                        </span>
-                      </div>
-                    </button>
-                  ))}
+              {requestStallLocked ? (
+                <>
+                  <div className="px-3 py-2.5 bg-purple-50 border border-purple-100 rounded-xl">
+                    <p className="text-xs text-gray-500">Stall</p>
+                    <p className="text-sm font-medium text-gray-900">
+                      {stalls.find((s) => s.id === selectedStallForRequest)?.stall_name}
+                    </p>
+                  </div>
+                  {requestViolationCategory && (
+                    <div className="px-3 py-2.5 bg-purple-50 border border-purple-100 rounded-xl">
+                      <p className="text-xs text-gray-500">Category</p>
+                      <p className="text-sm font-medium text-gray-900">
+                        {requestViolationCategory}
+                      </p>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                    Select Stall
+                  </label>
+                  <div className="border border-gray-200 rounded-xl max-h-48 overflow-y-auto">
+                    {stalls.map((s) => (
+                      <button
+                        key={s.id}
+                        onClick={() => setSelectedStallForRequest(s.id)}
+                        className={`w-full px-4 py-2.5 text-left text-sm hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-0 ${
+                          selectedStallForRequest === s.id ? "bg-purple-50" : ""
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium text-gray-900">{s.stall_name}</span>
+                          <span
+                            className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
+                              s.status === "vacant"
+                                ? "bg-green-100 text-green-700"
+                                : s.status === "occupied"
+                                  ? "bg-blue-100 text-blue-700"
+                                  : "bg-gray-100 text-gray-700"
+                            }`}
+                          >
+                            {s.status}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1.5">
-                  Reason for Check
+                  Message
                 </label>
                 <textarea
                   value={requestReason}
                   onChange={(e) => setRequestReason(e.target.value)}
-                  placeholder="Describe why this stall needs to be checked..."
+                  placeholder="Input Message here"
                   rows={4}
                   className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none"
                 />
@@ -2535,6 +2614,9 @@ export function SuperAdminDashboard() {
                   setShowRequestModal(false);
                   setSelectedStallForRequest(null);
                   setRequestReason("");
+                  setRequestStallLocked(false);
+                  setRequestViolationCategory("");
+                  setRequestViolationId(null);
                 }}
                 className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
               >

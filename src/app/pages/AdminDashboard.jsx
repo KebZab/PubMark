@@ -26,6 +26,7 @@ import {
   ChevronDown,
   ArrowUpDown,
   Receipt as ReceiptIcon,
+  Send,
 } from "lucide-react";
 import { AdminMapView } from "../components/AdminMapView";
 import { StallManagementPanel } from "../components/StallManagementPanel";
@@ -46,7 +47,7 @@ import { useStalls } from "../hooks/useStalls";
 import { getSession, getAllUsers } from "../components/authStorage";
 import { listUsers } from "../services/api";
 import { migrateLegacyRequests } from "../services/legacyRequestMigration";
-import { getViolations, assignOfficer } from "../components/violationsStore";
+import { getViolations, assignOfficer, updateViolationStatus } from "../components/violationsStore";
 import {
   getViolationRequests,
   createViolationRequest,
@@ -201,6 +202,14 @@ export function AdminDashboard() {
   const [permitDeadlineInput, setPermitDeadlineInput] = useState("");
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [selectedStallForRequest, setSelectedStallForRequest] = useState(null);
+  // True when the modal was opened from a specific violation ("Send Req"),
+  // which already fixes the stall — the picker only makes sense for the
+  // general "New Request" flow, where the admin has to choose one.
+  const [requestStallLocked, setRequestStallLocked] = useState(false);
+  const [requestViolationCategory, setRequestViolationCategory] = useState("");
+  // The violation this request follows up on, so completing it can resolve
+  // that violation automatically.
+  const [requestViolationId, setRequestViolationId] = useState(null);
   const [requestReason, setRequestReason] = useState("");
   const [assigningRequest, setAssigningRequest] = useState(null);
   const [requestOfficers, setRequestOfficers] = useState([]);
@@ -569,6 +578,23 @@ export function AdminDashboard() {
     }
   }
 
+  // Expanding a violation's details is also how it gets marked seen — but
+  // only the first time: once status leaves "open" this guard stops it from
+  // re-firing on every subsequent expand/collapse of the same row.
+  async function handleExpandViolation(v) {
+    const willExpand = expandedViolation !== v.id;
+    setExpandedViolation(willExpand ? v.id : null);
+    if (!willExpand || v.status !== "open") return;
+    try {
+      const updated = await updateViolationStatus(v.id, "reviewed");
+      setViolationsList((prev) =>
+        prev.map((item) => (item.id === v.id ? updated : item)),
+      );
+    } catch (error) {
+      showToast(`Failed to mark violation as reviewed: ${error.message}`, "error");
+    }
+  }
+
   async function handleDelete(id) {
     try {
       await deleteAnnouncement(id);
@@ -614,12 +640,17 @@ export function AdminDashboard() {
         requestedBy: session.userId,
         requestedByName: session.name,
         reason: requestReason.trim(),
+        category: requestViolationCategory || null,
+        violationId: requestViolationId,
       });
 
       showToast("Violation check request created.", "success");
       setShowRequestModal(false);
       setSelectedStallForRequest(null);
       setRequestReason("");
+      setRequestStallLocked(false);
+      setRequestViolationId(null);
+      setRequestViolationCategory("");
       await loadRequestData();
     } catch (error) {
       showToast(`Failed to create request: ${error.message}`, "error");
@@ -1923,7 +1954,8 @@ export function AdminDashboard() {
                   className="px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#14B8A6]"
                 >
                   <option value="all">All Status</option>
-                  <option value="open">Open</option>
+                  <option value="open">Pending Action</option>
+                  <option value="reviewed">Reviewing</option>
                   <option value="resolved">Resolved</option>
                   <option value="dismissed">Dismissed</option>
                 </select>
@@ -1965,7 +1997,8 @@ export function AdminDashboard() {
                     {filtered.map((v) => {
                       const isExpanded = expandedViolation === v.id;
                       const statusCfg = {
-                        open: { label: "Open", cls: "bg-red-100 text-red-700" },
+                        open: { label: "Pending Action", cls: "bg-red-100 text-red-700" },
+                        reviewed: { label: "Reviewing", cls: "bg-amber-100 text-amber-700" },
                         resolved: {
                           label: "Resolved",
                           cls: "bg-green-100 text-green-700",
@@ -1982,12 +2015,10 @@ export function AdminDashboard() {
                         >
                           <div
                             className="flex items-start gap-4 px-5 py-4 cursor-pointer hover:bg-gray-50 transition-colors"
-                            onClick={() =>
-                              setExpandedViolation(isExpanded ? null : v.id)
-                            }
+                            onClick={() => handleExpandViolation(v)}
                           >
                             <div
-                              className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${v.status === "open" ? "bg-red-500" : v.status === "resolved" ? "bg-green-500" : "bg-gray-400"}`}
+                              className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${v.status === "open" ? "bg-red-500" : v.status === "reviewed" ? "bg-amber-500" : v.status === "resolved" ? "bg-green-500" : "bg-gray-400"}`}
                               style={{ marginTop: 6 }}
                             />
                             <div className="flex-1 min-w-0">
@@ -2033,7 +2064,8 @@ export function AdminDashboard() {
                           </div>
 
                           {isExpanded && (
-                            <div className="border-t border-gray-100 bg-gray-50 px-5 py-4 grid grid-cols-1 md:grid-cols-2 gap-5">
+                            <div className="border-t border-gray-100 bg-gray-50">
+                            <div className="px-5 py-4 grid grid-cols-1 md:grid-cols-2 gap-5">
                               <div className="space-y-3">
                                 <div>
                                   <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
@@ -2082,6 +2114,24 @@ export function AdminDashboard() {
                                   </div>
                                 )}
                               </div>
+                            </div>
+                            {v.status === "reviewed" && (
+                              <div className="px-5 pb-4 flex justify-end">
+                                <button
+                                  onClick={() => {
+                                    setSelectedStallForRequest({ id: v.stallId, stall_name: v.stallName });
+                                    setRequestViolationCategory(v.category);
+                                    setRequestViolationId(v.id);
+                                    setRequestStallLocked(true);
+                                    setShowRequestModal(true);
+                                  }}
+                                  className="flex items-center gap-1.5 px-3 py-2 bg-[#14B8A6] hover:bg-[#0d9488] text-white text-xs font-semibold rounded-lg transition-colors"
+                                >
+                                  <Send className="w-3.5 h-3.5" />
+                                  Send Req
+                                </button>
+                              </div>
+                            )}
                             </div>
                           )}
                         </div>
@@ -2503,7 +2553,12 @@ export function AdminDashboard() {
                 </p>
               </div>
               <button
-                onClick={() => setShowRequestModal(true)}
+                onClick={() => {
+                  setRequestStallLocked(false);
+                  setRequestViolationCategory("");
+                  setRequestViolationId(null);
+                  setShowRequestModal(true);
+                }}
                 className="flex items-center gap-1.5 bg-[#14B8A6] hover:bg-[#0d9488] text-white text-xs font-semibold px-3 py-2 rounded-lg transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -2828,6 +2883,9 @@ export function AdminDashboard() {
                   setShowRequestModal(false);
                   setSelectedStallForRequest(null);
                   setRequestReason("");
+                  setRequestStallLocked(false);
+                  setRequestViolationCategory("");
+                  setRequestViolationId(null);
                 }}
                 className="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center"
               >
@@ -2836,46 +2894,65 @@ export function AdminDashboard() {
             </div>
 
             <div className="p-6 space-y-4 overflow-y-auto flex-1">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Select Stall from Map
-                </label>
-                <div className="h-64 border border-gray-300 rounded-xl overflow-hidden relative bg-gray-100">
-                  {/* Simple stall selector list */}
-                  <div className="h-full overflow-y-auto p-3 space-y-2">
-                    {storedStalls.map((stall) => (
-                      <button
-                        key={stall.id}
-                        onClick={() => setSelectedStallForRequest(stall)}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          selectedStallForRequest?.id === stall.id
-                            ? "bg-[#14B8A6] text-white"
-                            : "bg-white hover:bg-gray-50"
-                        }`}
-                      >
-                        {stall.stall_name}{" "}
-                        <span className="text-xs opacity-75">
-                          ({stall.section})
-                        </span>
-                      </button>
-                    ))}
+              {requestStallLocked ? (
+                <>
+                  <div className="px-3 py-2.5 bg-teal-50 border border-teal-100 rounded-xl">
+                    <p className="text-xs text-gray-500">Stall</p>
+                    <p className="text-sm font-medium text-gray-900">
+                      {selectedStallForRequest?.stall_name}
+                    </p>
                   </div>
+                  {requestViolationCategory && (
+                    <div className="px-3 py-2.5 bg-teal-50 border border-teal-100 rounded-xl">
+                      <p className="text-xs text-gray-500">Category</p>
+                      <p className="text-sm font-medium text-gray-900">
+                        {requestViolationCategory}
+                      </p>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                    Select Stall from Map
+                  </label>
+                  <div className="h-64 border border-gray-300 rounded-xl overflow-hidden relative bg-gray-100">
+                    {/* Simple stall selector list */}
+                    <div className="h-full overflow-y-auto p-3 space-y-2">
+                      {storedStalls.map((stall) => (
+                        <button
+                          key={stall.id}
+                          onClick={() => setSelectedStallForRequest(stall)}
+                          className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                            selectedStallForRequest?.id === stall.id
+                              ? "bg-[#14B8A6] text-white"
+                              : "bg-white hover:bg-gray-50"
+                          }`}
+                        >
+                          {stall.stall_name}{" "}
+                          <span className="text-xs opacity-75">
+                            ({stall.section})
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {selectedStallForRequest && (
+                    <p className="text-xs text-[#14B8A6] font-medium mt-1">
+                      Selected: {selectedStallForRequest.stall_name}
+                    </p>
+                  )}
                 </div>
-                {selectedStallForRequest && (
-                  <p className="text-xs text-[#14B8A6] font-medium mt-1">
-                    Selected: {selectedStallForRequest.stall_name}
-                  </p>
-                )}
-              </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Reason for Check
+                  Message
                 </label>
                 <textarea
                   value={requestReason}
                   onChange={(e) => setRequestReason(e.target.value)}
-                  placeholder="Describe why this stall should be checked..."
+                  placeholder="Input Message here"
                   rows={4}
                   className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#14B8A6] resize-none"
                 />
@@ -2887,6 +2964,9 @@ export function AdminDashboard() {
                     setShowRequestModal(false);
                     setSelectedStallForRequest(null);
                     setRequestReason("");
+                    setRequestStallLocked(false);
+                    setRequestViolationCategory("");
+                    setRequestViolationId(null);
                   }}
                   className="flex-1 px-4 py-2.5 border border-gray-200 text-gray-600 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors"
                 >

@@ -16,7 +16,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import { readAssetForUpload, formatFileSize, DOCUMENT_PICKER_TYPES } from "../../services/fileUpload";
 import { useApiData } from "../../hooks/useApiData";
-import { createViolation, getApplications, getStalls, getViolations, updateViolation } from "../../services/api";
+import { createViolation, getApplications, getStalls, getViolations } from "../../services/api";
 import { Attachments, Card, EmptyState, ErrorState, LoadingState, OfficerHeader, formatDate } from "../../components/ui";
 
 // Same eight categories the web officer dashboard offers.
@@ -32,7 +32,8 @@ const CATEGORIES = [
 ];
 
 const STATUS_STYLE = {
-  open: { bg: "bg-red-100", text: "text-red-700", label: "Open" },
+  open: { bg: "bg-red-100", text: "text-red-700", label: "Pending Action" },
+  reviewed: { bg: "bg-amber-100", text: "text-amber-700", label: "Reviewing" },
   resolved: { bg: "bg-green-100", text: "text-green-700", label: "Resolved" },
   dismissed: { bg: "bg-gray-100", text: "text-gray-600", label: "Dismissed" },
 };
@@ -52,7 +53,6 @@ export default function ViolationsScreen() {
   const stallsQuery = useApiData(getStalls);
   const applicationsQuery = useApiData(getApplications);
   const [filter, setFilter] = useState("all");
-  const [busyId, setBusyId] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
 
   const [reportOpen, setReportOpen] = useState(false);
@@ -184,30 +184,6 @@ export default function ViolationsScreen() {
     }
   };
 
-  const resolve = (v, status) => {
-    Alert.alert(
-      status === "resolved" ? "Mark resolved?" : "Dismiss violation?",
-      `${v.category} at ${v.stallName ?? "this stall"}.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: status === "resolved" ? "Resolve" : "Dismiss",
-          onPress: async () => {
-            setBusyId(v.id);
-            try {
-              await updateViolation(v.id, { status });
-              await refetch();
-            } catch (e) {
-              Alert.alert("Failed", e instanceof Error ? e.message : "Try again.");
-            } finally {
-              setBusyId(null);
-            }
-          },
-        },
-      ],
-    );
-  };
-
   return (
     <SafeAreaView className="flex-1 bg-gray-50" edges={["top"]}>
       <OfficerHeader
@@ -226,8 +202,10 @@ export default function ViolationsScreen() {
 
       <View className="border-b border-gray-200 bg-white px-5 pb-3">
         <View className="flex-row gap-2">
-          {["all", "open", "resolved", "dismissed"].map((f) => {
+          {["all", "open", "reviewed", "resolved", "dismissed"].map((f) => {
             const active = filter === f;
+            const label =
+              f === "open" ? "Pending Action" : f === "reviewed" ? "Reviewing" : f === "all" ? "All" : f;
             return (
               <Pressable
                 key={f}
@@ -237,7 +215,7 @@ export default function ViolationsScreen() {
                 <Text
                   className={`text-xs font-semibold capitalize ${active ? "text-white" : "text-gray-600"}`}
                 >
-                  {f}
+                  {label}
                 </Text>
               </Pressable>
             );
@@ -300,28 +278,6 @@ export default function ViolationsScreen() {
                     </>
                   ) : null}
 
-                  {v.status === "open" ? (
-                    <View className="mt-3 flex-row gap-2 border-t border-gray-100 pt-3">
-                      <Pressable
-                        onPress={() => resolve(v, "dismissed")}
-                        disabled={busyId === v.id}
-                        className="flex-1 items-center rounded-xl bg-gray-100 py-2.5"
-                      >
-                        <Text className="text-xs font-semibold text-gray-700">Dismiss</Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => resolve(v, "resolved")}
-                        disabled={busyId === v.id}
-                        className="flex-1 items-center rounded-xl bg-emerald-500 py-2.5"
-                      >
-                        {busyId === v.id ? (
-                          <ActivityIndicator size="small" color="#ffffff" />
-                        ) : (
-                          <Text className="text-xs font-semibold text-white">Resolve</Text>
-                        )}
-                      </Pressable>
-                    </View>
-                  ) : null}
                 </Card>
               );
             })}

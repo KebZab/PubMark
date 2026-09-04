@@ -60,6 +60,7 @@ const CATEGORIES = [
 
 const STATUS_CONFIG = {
   open: { label: "Open", color: "bg-red-100 text-red-700", icon: Clock },
+  reviewed: { label: "Reviewing", color: "bg-amber-100 text-amber-700", icon: Eye },
   resolved: { label: "Resolved", color: "bg-green-100 text-green-700", icon: CheckCircle },
   dismissed: { label: "Dismissed", color: "bg-gray-100 text-gray-600", icon: XCircle },
 };

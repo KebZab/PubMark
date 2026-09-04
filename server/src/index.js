@@ -269,6 +269,10 @@ function mapCheckRequestRow(row, filesMap = new Map()) {
     assignedToName: row.assigned_to_name,
     priority: row.priority,
     reason: row.reason,
+    // Set only when this request was generated from a violation report's
+    // "Send Req" — lets the UI show it as a followup instead of a generic
+    // priority-based check request.
+    category: row.category || null,
     notes: row.notes || "",
     status: row.status,
     createdAt: row.created_at,
@@ -287,6 +291,7 @@ function mapViolationRequestRow(row) {
     requestedBy: row.requested_by,
     requestedByName: row.requested_by_name,
     reason: row.reason,
+    category: row.category || null,
     status: row.status,
     assignedOfficerId: row.assigned_officer_id,
     assignedOfficerName: row.assigned_officer_name,
@@ -298,7 +303,7 @@ function mapViolationRequestRow(row) {
 async function listCheckRequestsInternal() {
   const { rows } = await db.query(`
     SELECT
-      cr.id, cr.stall_id, cr.requested_by, cr.assigned_to, cr.priority, cr.reason, cr.notes,
+      cr.id, cr.stall_id, cr.requested_by, cr.assigned_to, cr.priority, cr.reason, cr.category, cr.notes,
       cr.status, cr.created_at, cr.completed_at, cr.completion_notes, cr.completion_summary,
       s.stall_name,
       rp.name AS requested_by_name,
@@ -316,7 +321,7 @@ async function listCheckRequestsInternal() {
 async function listViolationRequestsInternal() {
   const { rows } = await db.query(`
     SELECT
-      vr.id, vr.stall_id, vr.requested_by, vr.reason, vr.status, vr.assigned_officer_id,
+      vr.id, vr.stall_id, vr.requested_by, vr.reason, vr.category, vr.status, vr.assigned_officer_id,
       vr.created_at, vr.completed_at,
       s.stall_name,
       rp.name AS requested_by_name,
@@ -333,7 +338,7 @@ async function listViolationRequestsInternal() {
 async function syncViolationRequestsToCheckRequests() {
   const { rows } = await db.query(`
     SELECT
-      vr.id, vr.stall_id, vr.requested_by, vr.assigned_officer_id, vr.reason, vr.status,
+      vr.id, vr.stall_id, vr.requested_by, vr.assigned_officer_id, vr.reason, vr.category, vr.status,
       vr.created_at, vr.completed_at
     FROM violation_requests vr
     LEFT JOIN check_requests cr ON cr.id = vr.id
@@ -342,7 +347,7 @@ async function syncViolationRequestsToCheckRequests() {
 
   for (const row of rows) {
     await db.query(
-      "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+      "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, category, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
       [
         row.id,
         row.stall_id,
@@ -350,6 +355,7 @@ async function syncViolationRequestsToCheckRequests() {
         row.assigned_officer_id,
         "normal",
         row.reason,
+        row.category,
         "Generated from violation request.",
         row.status === "completed" ? "completed" : "pending",
         row.created_at,
@@ -815,6 +821,23 @@ app.patch("/api/check-requests/:id", requireAuth, requireRole("admin", "super_ad
       await db.query(`UPDATE check_requests SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
     }
 
+    // A check request generated from a violation's "Send Req" shares its id
+    // with the violation_requests row that spawned it. Completing it here
+    // means the followup was done, so resolve the violation it was about
+    // instead of leaving it stuck on "Reviewing" forever.
+    if (req.body.status === "completed") {
+      const { rows: linked } = await db.query(
+        "SELECT violation_id FROM violation_requests WHERE id = $1",
+        [req.params.id]
+      );
+      if (linked[0]?.violation_id) {
+        await db.query(
+          "UPDATE violations SET status = 'resolved', resolved_at = $1 WHERE id = $2 AND status <> 'resolved'",
+          [new Date(), linked[0].violation_id]
+        );
+      }
+    }
+
     if (Array.isArray(req.body.completionFiles)) {
       // A client editing an inspection sends back the files it already had
       // (identified by id, with no contents) plus any new ones. Keep the
@@ -872,6 +895,14 @@ app.post("/api/violation-requests", requireAuth, requireRole("admin", "super_adm
   try {
     const stallId = String(req.body.stallId || "").trim();
     const reason = String(req.body.reason || "").trim();
+    // Set only when this request was sent from a violation report's
+    // "Send Req" — lets the check-request UI show it as a followup on that
+    // violation's category instead of a generic priority-based request.
+    const category = req.body.category ? String(req.body.category).trim() : null;
+    // Links this request back to the violation it followed up on, so
+    // completing the resulting check request can resolve that violation
+    // automatically instead of leaving it stuck on "Reviewing".
+    const violationId = req.body.violationId ? String(req.body.violationId).trim() : null;
     const requestedBy = req.body.requestedBy ? String(req.body.requestedBy).trim() : req.auth.sub;
     const assignedOfficerId = req.body.assignedOfficerId ? String(req.body.assignedOfficerId).trim() : null;
     const status = String(req.body.status || (assignedOfficerId ? "assigned" : "pending"));
@@ -882,11 +913,11 @@ app.post("/api/violation-requests", requireAuth, requireRole("admin", "super_adm
 
     const id = crypto.randomUUID();
     await db.query(
-      "INSERT INTO violation_requests (id, stall_id, requested_by, reason, status, assigned_officer_id, created_at, completed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-      [id, stallId, requestedBy, reason, status, assignedOfficerId, createdAt, completedAt]
+      "INSERT INTO violation_requests (id, stall_id, requested_by, reason, category, violation_id, status, assigned_officer_id, created_at, completed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+      [id, stallId, requestedBy, reason, category, violationId, status, assignedOfficerId, createdAt, completedAt]
     );
     await db.query(
-      "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+      "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, category, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
       [
         id,
         stallId,
@@ -894,6 +925,7 @@ app.post("/api/violation-requests", requireAuth, requireRole("admin", "super_adm
         assignedOfficerId,
         "normal",
         reason,
+        category,
         "Generated from violation request.",
         status === "completed" ? "completed" : "pending",
         createdAt,
@@ -1007,9 +1039,13 @@ app.patch("/api/violations/:id", requireAuth, requireRole("admin", "super_admin"
     if (req.body.category !== undefined) { values.push(String(req.body.category || "").trim()); updates.push(`category = $${values.length}`); }
     if (req.body.description !== undefined) { values.push(String(req.body.description || "").trim()); updates.push(`description = $${values.length}`); }
     if (req.body.status !== undefined) {
-      values.push(String(req.body.status));
+      const status = String(req.body.status);
+      if (!["open", "reviewed", "resolved", "dismissed"].includes(status)) {
+        return res.status(400).json({ message: "Invalid status." });
+      }
+      values.push(status);
       updates.push(`status = $${values.length}`);
-      values.push(req.body.status === "open" ? null : new Date());
+      values.push(["open", "reviewed"].includes(status) ? null : new Date());
       updates.push(`resolved_at = $${values.length}`);
     }
     if (req.body.remarks !== undefined) { values.push(String(req.body.remarks || "").trim()); updates.push(`remarks = $${values.length}`); }
