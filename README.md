@@ -13,6 +13,10 @@
 
   Recent updates in the current workspace:
 
+  - Restored treasurer-issued receipt submission across vendor web/mobile and officer web/mobile, with dedicated Admin and Super Admin review pages.
+  - Added contract-expiration banners, a seven-day renewal grace period, vendor renewal requests, Admin/Super Admin decisions, automatic termination after the final deadline, and audited Super Admin deadline extensions.
+  - New Supabase environments must apply `server/migrations/2026-09-06-contract-renewals.sql` before using the renewal API.
+
   - Login and registration are now connected to the temporary MySQL backend in `server/`.
   - Registration now includes a required Terms and Agreement section using the tenant rules content in `src/app/content/tenantTerms.ts`.
   - Signup validation was improved so blocked account creation shows clearer errors and scrolls to the first missing field.

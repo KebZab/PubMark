@@ -102,7 +102,10 @@ the data directly with an anon key.
 |---|---|
 | `profiles` | Every account — email, password hash, name, role |
 | `stalls` | Stalls with map geometry, section, floor, status |
-| `applications` | Vendor applications, contract terms, permits |
+| `applications` | Vendor applications, contract terms, permits, renewal deadline overrides, termination timestamps |
+| `payment_receipts` | Treasurer-issued receipt files and administrator verification decisions |
+| `contract_renewal_requests` | Vendor renewal requests and administrator decisions |
+| `renewal_deadline_extensions` | Audited Super Admin renewal-deadline extensions |
 | `transfers` | Stall handovers between vendors |
 | `termination_requests` | Requests to end a contract or account |
 | `violations` + `violation_evidence` | Officer-reported violations and attachments |
