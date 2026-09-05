@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   Package,
   Activity,
+  Clock,
   Eye,
   EyeOff,
   RefreshCw,
@@ -57,6 +58,8 @@ import {
 } from "../components/terminationRequestsStore";
 import { getReceipts, reviewReceipt } from "../services/receiptsApi";
 import { DashboardLayout } from "../components/DashboardLayout";
+import { PaymentReceiptsPanel } from "../components/PaymentReceiptsPanel";
+import { ContractRenewalsPanel } from "../components/ContractRenewalsPanel";
 import { SuperAdminMapEditor } from "../components/SuperAdminMapEditor";
 import { showToast } from "../components/Toast";
 import { buildPermitDeadlineRemarks, parsePermitDeadlineMeta } from "../components/permitDeadline";
@@ -105,6 +108,8 @@ export function SuperAdminDashboard() {
     if (path.includes("/map")) return "map";
     if (path.includes("/stalls")) return "stalls";
     if (path.includes("/applications")) return "applications";
+    if (path.includes("/receipts")) return "receipts";
+    if (path.includes("/renewals")) return "renewals";
     if (path.includes("/violations")) return "violations";
     if (path.includes("/check-requests")) return "check-requests";
     if (path.includes("/settings")) return "overview"; // Could add settings tab later
@@ -409,6 +414,10 @@ export function SuperAdminDashboard() {
           );
         }
       })();
+    } else if (tab === "receipts") {
+      void getReceipts().then(setReceiptsList).catch((error) => {
+        showToast(`Failed to load receipts: ${error.message}`, "error");
+      });
     } else if (tab === "check-requests") {
       void loadRequestData();
     } else if (tab === "users") {
@@ -590,6 +599,12 @@ export function SuperAdminDashboard() {
     }
   }
 
+  useEffect(() => {
+    void getReceipts().then(setReceiptsList).catch(() => {
+      // The dedicated page reports load failures; elsewhere the badge may stay empty.
+    });
+  }, []);
+
   async function handleCreateRequest() {
     if (!selectedStallForRequest || !requestReason.trim()) {
       showToast("Please select a stall and provide a reason.", "error");
@@ -669,6 +684,8 @@ export function SuperAdminDashboard() {
       map: "/super-admin/map",
       stalls: "/super-admin/stalls",
       applications: "/super-admin/applications",
+      receipts: "/super-admin/receipts",
+      renewals: "/super-admin/renewals",
       violations: "/super-admin/violations",
       "check-requests": "/super-admin/check-requests",
     };
@@ -694,6 +711,13 @@ export function SuperAdminDashboard() {
       badge: stats.pendingApps > 0 ? stats.pendingApps : undefined,
     },
     {
+      id: "receipts",
+      label: "Payment Receipts",
+      icon: ReceiptIcon,
+      badge: receiptsList.filter((receipt) => receipt.status === "pending").length || undefined,
+    },
+    { id: "renewals", label: "Contract Renewals", icon: Clock },
+    {
       id: "violations",
       label: "Reports & Requests",
       icon: AlertTriangle,
@@ -712,6 +736,9 @@ export function SuperAdminDashboard() {
       session={session}
       title="Super Admin"
       subtitle="System administration and user management"
+      navBadges={{
+        "/super-admin/receipts": receiptsList.filter((receipt) => receipt.status === "pending").length,
+      }}
       actions={
         (
           <button
@@ -760,6 +787,19 @@ export function SuperAdminDashboard() {
       </div>
 
       <div className="p-6 space-y-6">
+        {tab === "receipts" && (
+          <PaymentReceiptsPanel
+            receipts={receiptsList}
+            search={reportSearch}
+            onSearchChange={setReportSearch}
+            statusFilter={reportStatusFilter}
+            onStatusFilterChange={setReportStatusFilter}
+            onReview={handleReviewReceipt}
+            accent="purple"
+          />
+        )}
+        {tab === "renewals" && <ContractRenewalsPanel superAdmin />}
+
         {/* Overview */}
         {tab === "overview" && (
           <>
@@ -1684,21 +1724,6 @@ export function SuperAdminDashboard() {
                 {terminationsList.filter((t) => t.status === "pending").length > 0 && (
                   <span className="ml-1 inline-flex items-center justify-center w-4 h-4 bg-red-500 text-white rounded-full text-[9px] font-bold">
                     {terminationsList.filter((t) => t.status === "pending").length}
-                  </span>
-                )}
-              </button>
-              <button
-                onClick={() => {
-                  setReportSubTab("receipts");
-                  setReportSearch("");
-                  setReportStatusFilter("all");
-                }}
-                className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all relative ${reportSubTab === "receipts" ? "bg-white text-purple-700 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
-              >
-                Payment Receipts
-                {receiptsList.filter((r) => r.status === "pending").length > 0 && (
-                  <span className="ml-1 inline-flex items-center justify-center w-4 h-4 bg-red-500 text-white rounded-full text-[9px] font-bold">
-                    {receiptsList.filter((r) => r.status === "pending").length}
                   </span>
                 )}
               </button>

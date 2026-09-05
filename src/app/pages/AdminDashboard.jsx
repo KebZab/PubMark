@@ -59,6 +59,8 @@ import {
 } from "../components/terminationRequestsStore";
 import { getReceipts, reviewReceipt } from "../services/receiptsApi";
 import { DashboardLayout } from "../components/DashboardLayout";
+import { PaymentReceiptsPanel } from "../components/PaymentReceiptsPanel";
+import { ContractRenewalsPanel } from "../components/ContractRenewalsPanel";
 import { showToast } from "../components/Toast";
 import { AttachmentLink } from "../components/AttachmentLink";
 import {
@@ -153,6 +155,8 @@ export function AdminDashboard() {
     if (path.includes("/applications")) return "applications";
     if (path.includes("/vendors")) return "stall-management";
     if (path.includes("/announcements")) return "announcements";
+    if (path.includes("/receipts")) return "receipts";
+    if (path.includes("/renewals")) return "renewals";
     if (path.includes("/violations")) return "violations";
     if (path.includes("/check-requests")) return "check-requests";
     return "dashboard";
@@ -538,6 +542,12 @@ export function AdminDashboard() {
   }
 
   useEffect(() => {
+    void getReceipts().then(setReceiptsList).catch(() => {
+      // The dedicated page reports load failures; elsewhere the badge may stay empty.
+    });
+  }, []);
+
+  useEffect(() => {
     if (tab === "announcements" || tab === "dashboard") {
       void loadAnnouncements();
     }
@@ -547,6 +557,11 @@ export function AdminDashboard() {
     if (tab === "violations") {
       void loadReportsData();
       setUsers(getAllUsers());
+    }
+    if (tab === "receipts") {
+      void getReceipts().then(setReceiptsList).catch((error) => {
+        showToast(`Failed to load receipts: ${error.message}`, "error");
+      });
     }
     if (tab === "check-requests") {
       void loadRequestData();
@@ -728,6 +743,8 @@ export function AdminDashboard() {
       applications: "/admin/applications",
       "stall-management": "/admin/vendors",
       announcements: "/admin/announcements",
+      receipts: "/admin/receipts",
+      renewals: "/admin/renewals",
       violations: "/admin/violations",
       "check-requests": "/admin/check-requests",
     };
@@ -753,6 +770,13 @@ export function AdminDashboard() {
     { id: "stall-management", label: "Stall Management", icon: Store },
     { id: "announcements", label: "Announcements", icon: Megaphone },
     {
+      id: "receipts",
+      label: "Payment Receipts",
+      icon: ReceiptIcon,
+      badge: receiptsList.filter((receipt) => receipt.status === "pending").length,
+    },
+    { id: "renewals", label: "Contract Renewals", icon: Clock },
+    {
       id: "violations",
       label: "Reports & Requests",
       icon: AlertTriangle,
@@ -771,6 +795,9 @@ export function AdminDashboard() {
       session={session}
       title="Admin Dashboard"
       subtitle="Manage applications, stalls, and announcements"
+      navBadges={{
+        "/admin/receipts": receiptsList.filter((receipt) => receipt.status === "pending").length,
+      }}
       actions={
         tab === "announcements" ? (
           <button
@@ -812,6 +839,18 @@ export function AdminDashboard() {
       </div>
 
       <div className={`p-6 space-y-5 ${tab === "stalls" ? "!p-0" : ""}`}>
+        {tab === "receipts" && (
+          <PaymentReceiptsPanel
+            receipts={receiptsList}
+            search={reportSearch}
+            onSearchChange={setReportSearch}
+            statusFilter={reportStatusFilter}
+            onStatusFilterChange={setReportStatusFilter}
+            onReview={handleReviewReceipt}
+          />
+        )}
+        {tab === "renewals" && <ContractRenewalsPanel />}
+
         {/* Dashboard */}
         {tab === "dashboard" && (
           <>
@@ -1898,22 +1937,6 @@ export function AdminDashboard() {
                       terminationsList.filter((t) => t.status === "pending")
                         .length
                     }
-                  </span>
-                )}
-              </button>
-              <button
-                onClick={() => {
-                  setReportSubTab("receipts");
-                  setReportSearch("");
-                  setReportStatusFilter("all");
-                }}
-                className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all relative ${reportSubTab === "receipts" ? "bg-white text-[#14B8A6] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
-              >
-                Payment Receipts
-                {receiptsList.filter((r) => r.status === "pending").length >
-                  0 && (
-                  <span className="ml-1 inline-flex items-center justify-center w-4 h-4 bg-red-500 text-white rounded-full text-[9px] font-bold">
-                    {receiptsList.filter((r) => r.status === "pending").length}
                   </span>
                 )}
               </button>

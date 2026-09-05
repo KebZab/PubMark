@@ -300,7 +300,11 @@ function mapViolationRequestRow(row) {
   };
 }
 
-async function listCheckRequestsInternal() {
+async function listCheckRequestsInternal(officerId = null) {
+  const params = [];
+  const where = officerId
+    ? (params.push(officerId), "WHERE cr.assigned_to = $1 OR cr.assigned_to IS NULL")
+    : "";
   const { rows } = await db.query(`
     SELECT
       cr.id, cr.stall_id, cr.requested_by, cr.assigned_to, cr.priority, cr.reason, cr.category, cr.notes,
@@ -312,8 +316,9 @@ async function listCheckRequestsInternal() {
     LEFT JOIN stalls s ON s.id = cr.stall_id
     LEFT JOIN profiles rp ON rp.id = cr.requested_by
     LEFT JOIN profiles ap ON ap.id = cr.assigned_to
+    ${where}
     ORDER BY cr.created_at DESC
-  `);
+  `, params);
   const filesMap = await getCheckRequestFilesMap(rows.map((row) => row.id));
   return rows.map((row) => mapCheckRequestRow(row, filesMap));
 }
@@ -541,7 +546,23 @@ async function mapApplicationRow(r) {
     permitDeadlineAt: permitMeta.permitDeadlineAt,
     permitDeadlineUpdatedAt: permitMeta.permitDeadlineUpdatedAt,
     permitTerminatedAt: permitMeta.permitTerminatedAt,
+    renewalDeadlineAt: r.renewal_deadline_at,
+    contractTerminatedAt: r.contract_terminated_at,
   };
+}
+
+async function autoTerminateExpiredContracts() {
+  await db.query(`
+    UPDATE applications
+    SET status = 'rejected', contract_terminated_at = NOW()
+    WHERE status = 'approved'
+      AND contract_terminated_at IS NULL
+      AND COALESCE(renewal_deadline_at, contract_end + INTERVAL '7 days') < NOW()
+      AND NOT EXISTS (
+        SELECT 1 FROM contract_renewal_requests rr
+        WHERE rr.application_id = applications.id AND rr.status = 'pending'
+      )
+  `);
 }
 
 async function autoTerminateExpiredPermitDeadlines() {
@@ -759,10 +780,11 @@ app.delete("/api/announcements/:id", requireAuth, requireRole("admin", "super_ad
   } catch (error) { next(error); }
 });
 
-app.get("/api/check-requests", requireAuth, requireRole("admin", "super_admin", "officer"), async (_req, res, next) => {
+app.get("/api/check-requests", requireAuth, requireRole("admin", "super_admin", "officer"), async (req, res, next) => {
   try {
     await syncViolationRequestsToCheckRequests();
-    res.json({ requests: await listCheckRequestsInternal() });
+    const officerId = req.auth.role === "officer" ? req.auth.sub : null;
+    res.json({ requests: await listCheckRequestsInternal(officerId) });
   } catch (error) { next(error); }
 });
 
@@ -802,6 +824,17 @@ app.post("/api/check-requests", requireAuth, requireRole("admin", "super_admin")
 
 app.patch("/api/check-requests/:id", requireAuth, requireRole("admin", "super_admin", "officer"), async (req, res, next) => {
   try {
+    if (req.auth.role === "officer") {
+      const { rows } = await db.query(
+        "SELECT assigned_to FROM check_requests WHERE id = $1",
+        [req.params.id]
+      );
+      if (!rows[0]) return res.status(404).json({ message: "Check request not found." });
+      if (rows[0].assigned_to && rows[0].assigned_to !== req.auth.sub) {
+        return res.status(403).json({ message: "This check request is assigned to another officer." });
+      }
+    }
+
     const updates = [];
     const values = [];
     if (req.body.assignedTo !== undefined) { values.push(req.body.assignedTo ? String(req.body.assignedTo).trim() : null); updates.push(`assigned_to = $${values.length}`); }
@@ -826,14 +859,21 @@ app.patch("/api/check-requests/:id", requireAuth, requireRole("admin", "super_ad
     // means the followup was done, so resolve the violation it was about
     // instead of leaving it stuck on "Reviewing" forever.
     if (req.body.status === "completed") {
+      const completedAt = new Date();
       const { rows: linked } = await db.query(
         "SELECT violation_id FROM violation_requests WHERE id = $1",
         [req.params.id]
       );
+      if (linked[0]) {
+        await db.query(
+          "UPDATE violation_requests SET status = 'completed', completed_at = $1 WHERE id = $2",
+          [completedAt, req.params.id]
+        );
+      }
       if (linked[0]?.violation_id) {
         await db.query(
           "UPDATE violations SET status = 'resolved', resolved_at = $1 WHERE id = $2 AND status <> 'resolved'",
-          [new Date(), linked[0].violation_id]
+          [completedAt, linked[0].violation_id]
         );
       }
     }
@@ -1420,6 +1460,7 @@ app.post("/api/stalls/import", requireAuth, requireRole("admin", "super_admin"),
 app.get("/api/applications", requireAuth, async (req, res, next) => {
   try {
     await autoTerminateExpiredPermitDeadlines();
+    await autoTerminateExpiredContracts();
 
     const status = String(req.query.status || "").trim();
     const search = String(req.query.search || "").trim();
@@ -1452,7 +1493,7 @@ app.get("/api/applications", requireAuth, async (req, res, next) => {
     let sql = `
       SELECT
         a.id, a.user_id, a.stall_id, a.business_name, a.business_type,
-        a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path,
+        a.contract_start, a.contract_term_months, a.contract_end, a.renewal_deadline_at, a.contract_terminated_at, a.permit_path, a.additional_file_path,
         a.notes, a.status, a.admin_remarks, a.date_applied,
         s.stall_name, s.section, s.floor_area,
         p.name as applicant_name, p.email as applicant_email,
@@ -1524,7 +1565,7 @@ app.post("/api/applications", requireAuth, requireRole("vendor"), async (req, re
       [id, req.auth.sub, stallId, businessName, businessType, contractStart, parseInt(contractTermMonths), contractEnd, storedPermit?.storagePath || null, storedAdditional?.storagePath || null, notes || "", (applicantAddress || "").trim() || null]
     );
     const { rows } = await db.query(
-      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
+      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.renewal_deadline_at, a.contract_terminated_at, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
       [id]
     );
     const app = await mapApplicationRow(rows[0]);
@@ -1542,7 +1583,7 @@ app.patch("/api/applications/:id", requireAuth, requireRole("admin", "super_admi
     values.push(req.params.id);
     await db.query(`UPDATE applications SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
     const { rows } = await db.query(
-      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
+      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.renewal_deadline_at, a.contract_terminated_at, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
       [req.params.id]
     );
     if (!rows[0]) return res.status(404).json({ message: "Application not found." });
@@ -1551,13 +1592,17 @@ app.patch("/api/applications/:id", requireAuth, requireRole("admin", "super_admi
   } catch (error) { next(error); }
 });
 
-app.patch("/api/applications/:id/permit", requireAuth, async (req, res, next) => {
+app.patch("/api/applications/:id/permit", requireAuth, requireRole("admin", "super_admin", "vendor"), async (req, res, next) => {
   try {
     const permit = req.body.permit;
     if (!permit?.name) return res.status(400).json({ message: "A permit file is required." });
 
+    // Apply an expired deadline before accepting a direct upload from an old
+    // detail screen, so refreshing the application list cannot be bypassed.
+    await autoTerminateExpiredPermitDeadlines();
+
     const { rows: existingRows } = await db.query(
-      "SELECT id, user_id, admin_remarks, permit_path FROM applications WHERE id = $1",
+      "SELECT id, user_id, status, admin_remarks, permit_path FROM applications WHERE id = $1",
       [req.params.id]
     );
     const existing = existingRows[0];
@@ -1566,8 +1611,17 @@ app.patch("/api/applications/:id/permit", requireAuth, async (req, res, next) =>
       return res.status(403).json({ message: "Access denied." });
     }
 
-    const [stored] = await storeAttachments("permits", req.params.id, [permit], req.auth.sub);
     const meta = parsePermitMeta(existing.admin_remarks || "");
+    const visibleRemarks = meta.visibleRemarks.toLowerCase();
+    if (
+      meta.permitTerminatedAt ||
+      visibleRemarks.includes("contract terminated") ||
+      visibleRemarks.includes("application terminated because the business permit was not submitted")
+    ) {
+      return res.status(409).json({ message: "This application is no longer active, so its permit cannot be changed." });
+    }
+
+    const [stored] = await storeAttachments("permits", req.params.id, [permit], req.auth.sub);
     await db.query(
       "UPDATE applications SET permit_path = $1, admin_remarks = $2 WHERE id = $3",
       [stored.storagePath, buildPermitMetaRemarks(meta.visibleRemarks, {}), req.params.id]
@@ -1578,7 +1632,7 @@ app.patch("/api/applications/:id/permit", requireAuth, async (req, res, next) =>
     }
 
     const { rows } = await db.query(
-      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
+      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.renewal_deadline_at, a.contract_terminated_at, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
       [req.params.id]
     );
     if (!rows[0]) return res.status(404).json({ message: "Application not found." });
@@ -1600,6 +1654,95 @@ app.delete("/api/applications/:id", requireAuth, requireRole("admin", "super_adm
       await removeAttachment(rows[0].additional_file_path);
     }
     res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+const RENEWAL_SELECT = `
+  SELECT rr.*, a.stall_id, a.contract_end, a.renewal_deadline_at,
+    s.stall_name, p.name AS vendor_name, reviewer.name AS reviewed_by_name
+  FROM contract_renewal_requests rr
+  JOIN applications a ON a.id = rr.application_id
+  LEFT JOIN stalls s ON s.id = a.stall_id
+  LEFT JOIN profiles p ON p.id = rr.vendor_id
+  LEFT JOIN profiles reviewer ON reviewer.id = rr.reviewed_by
+`;
+
+function mapRenewalRow(row) {
+  return {
+    id: row.id, applicationId: row.application_id, vendorId: row.vendor_id,
+    vendorName: row.vendor_name || "Unknown", stallId: row.stall_id,
+    stallName: row.stall_name || "Unknown", requestedMonths: row.requested_months,
+    contractEnd: row.contract_end, renewalDeadlineAt: row.renewal_deadline_at,
+    status: row.status, remarks: row.remarks || "", reviewedBy: row.reviewed_by,
+    reviewedByName: row.reviewed_by_name || null, reviewedAt: row.reviewed_at,
+    createdAt: row.created_at,
+  };
+}
+
+app.get("/api/contract-renewals", requireAuth, requireRole("vendor", "admin", "super_admin"), async (req, res, next) => {
+  try {
+    await autoTerminateExpiredContracts();
+    const values = [];
+    const where = req.auth.role === "vendor" ? (values.push(req.auth.sub), " WHERE rr.vendor_id = $1") : "";
+    const { rows } = await db.query(`${RENEWAL_SELECT}${where} ORDER BY rr.created_at DESC`, values);
+    res.json({ renewals: rows.map(mapRenewalRow) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/contract-renewals", requireAuth, requireRole("vendor"), async (req, res, next) => {
+  try {
+    const applicationId = String(req.body.applicationId || "").trim();
+    const requestedMonths = Number(req.body.requestedMonths);
+    if (![6, 12, 24, 36].includes(requestedMonths)) return res.status(400).json({ message: "Choose a 6, 12, 24, or 36 month renewal." });
+    const { rows: apps } = await db.query(
+      "SELECT * FROM applications WHERE id = $1 AND user_id = $2", [applicationId, req.auth.sub]
+    );
+    const application = apps[0];
+    if (!application || application.status !== "approved" || application.contract_terminated_at) return res.status(409).json({ message: "This contract is not eligible for renewal." });
+    const deadline = application.renewal_deadline_at || new Date(new Date(application.contract_end).getTime() + 7 * 86400000);
+    if (new Date(deadline).getTime() < Date.now()) return res.status(409).json({ message: "The renewal deadline has passed. Contact the Super Admin." });
+    const { rows: pending } = await db.query("SELECT id FROM contract_renewal_requests WHERE application_id = $1 AND status = 'pending'", [applicationId]);
+    if (pending[0]) return res.status(409).json({ message: "A renewal request is already pending." });
+    const id = crypto.randomUUID();
+    await db.query("INSERT INTO contract_renewal_requests (id, application_id, vendor_id, requested_months) VALUES ($1,$2,$3,$4)", [id, applicationId, req.auth.sub, requestedMonths]);
+    const { rows } = await db.query(`${RENEWAL_SELECT} WHERE rr.id = $1`, [id]);
+    res.status(201).json({ renewal: mapRenewalRow(rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.patch("/api/contract-renewals/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
+  const conn = await db.connect();
+  try {
+    const status = String(req.body.status || "");
+    const remarks = String(req.body.remarks || "").trim();
+    if (!["approved", "rejected"].includes(status)) return res.status(400).json({ message: "Status must be approved or rejected." });
+    await conn.query("BEGIN");
+    const { rows } = await conn.query("SELECT * FROM contract_renewal_requests WHERE id = $1 FOR UPDATE", [req.params.id]);
+    const renewal = rows[0];
+    if (!renewal || renewal.status !== "pending") { await conn.query("ROLLBACK"); return res.status(409).json({ message: "This renewal is no longer pending." }); }
+    if (status === "approved") {
+      await conn.query("UPDATE applications SET contract_end = (GREATEST(contract_end, CURRENT_DATE) + make_interval(months => $1))::date, contract_term_months = $1, renewal_deadline_at = NULL, contract_terminated_at = NULL, status = 'approved' WHERE id = $2", [renewal.requested_months, renewal.application_id]);
+    }
+    await conn.query("UPDATE contract_renewal_requests SET status=$1, remarks=$2, reviewed_by=$3, reviewed_at=NOW() WHERE id=$4", [status, remarks || null, req.auth.sub, req.params.id]);
+    await conn.query("COMMIT");
+    const result = await db.query(`${RENEWAL_SELECT} WHERE rr.id = $1`, [req.params.id]);
+    res.json({ renewal: mapRenewalRow(result.rows[0]) });
+  } catch (error) { await conn.query("ROLLBACK"); next(error); } finally { conn.release(); }
+});
+
+app.patch("/api/applications/:id/renewal-deadline", requireAuth, requireRole("super_admin"), async (req, res, next) => {
+  try {
+    const newDeadline = new Date(req.body.deadlineAt);
+    const reason = String(req.body.reason || "").trim();
+    if (Number.isNaN(newDeadline.getTime()) || newDeadline.getTime() <= Date.now()) return res.status(400).json({ message: "Choose a future renewal deadline." });
+    if (!reason) return res.status(400).json({ message: "An extension reason is required." });
+    const { rows } = await db.query("SELECT contract_end, renewal_deadline_at, contract_terminated_at FROM applications WHERE id=$1", [req.params.id]);
+    const appRow = rows[0];
+    if (!appRow || appRow.contract_terminated_at) return res.status(409).json({ message: "A terminated contract deadline cannot be extended." });
+    const previous = appRow.renewal_deadline_at || new Date(new Date(appRow.contract_end).getTime() + 7 * 86400000);
+    await db.query("UPDATE applications SET renewal_deadline_at=$1 WHERE id=$2", [newDeadline, req.params.id]);
+    await db.query("INSERT INTO renewal_deadline_extensions (id,application_id,previous_deadline_at,new_deadline_at,reason,extended_by) VALUES ($1,$2,$3,$4,$5,$6)", [crypto.randomUUID(), req.params.id, previous, newDeadline, reason, req.auth.sub]);
+    res.json({ renewalDeadlineAt: newDeadline.toISOString() });
   } catch (error) { next(error); }
 });
 

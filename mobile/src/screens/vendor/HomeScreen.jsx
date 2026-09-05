@@ -2,12 +2,14 @@ import { useCallback, useMemo } from "react";
 import { RefreshControl, ScrollView, Text, View, Pressable } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
+import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../context/AuthContext";
 import { useApiData } from "../../hooks/useApiData";
 import { getApplications } from "../../services/api";
 import { Card, ErrorState, LoadingState, StatusPill, formatDate } from "../../components/ui";
+import { getApplicationDisplayStatus } from "../../utils/permitDeadline";
 
-export default function HomeScreen() {
+export default function HomeScreen({ navigation }) {
   const { user, signOut } = useAuth();
   const { data, loading, error, refetch } = useApiData(getApplications);
 
@@ -46,6 +48,9 @@ export default function HomeScreen() {
   );
 
   const firstName = user?.name?.split(" ")[0] ?? "";
+  const permitUploads = mine.filter(
+    (app) => getApplicationDisplayStatus(app) === "approved" && !app.permitFileName,
+  );
 
   return (
     <SafeAreaView className="flex-1 bg-gray-50" edges={["top"]}>
@@ -82,6 +87,28 @@ export default function HomeScreen() {
               ))}
             </View>
 
+            {permitUploads.length > 0 ? (
+              <Pressable
+                onPress={() => navigation.navigate("Applications")}
+                className="mx-4 mt-4 flex-row items-center rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3"
+              >
+                <View className="h-8 w-8 items-center justify-center rounded-xl bg-amber-100">
+                  <Ionicons name="cloud-upload-outline" size={17} color="#d97706" />
+                </View>
+                <View className="ml-3 flex-1">
+                  <Text className="text-xs font-semibold text-amber-900">
+                    Action required — upload permit
+                  </Text>
+                  <Text className="mt-0.5 text-[10px] text-amber-700">
+                    {permitUploads.length === 1
+                      ? "Your approved stall needs a business permit on file."
+                      : `${permitUploads.length} approved stalls need a business permit on file.`}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color="#f59e0b" />
+              </Pressable>
+            ) : null}
+
             <View className="mt-6 px-4">
               <Text className="mb-3 text-sm font-semibold text-gray-800">Recent Applications</Text>
 
@@ -95,7 +122,11 @@ export default function HomeScreen() {
               ) : (
                 <View className="gap-3">
                   {recent.map((app) => (
-                    <Card key={app.id} className="p-4">
+                    <Pressable
+                      key={app.id}
+                      onPress={() => navigation.navigate("ApplicationDetail", { application: app })}
+                    >
+                    <Card className="p-4">
                       <View className="flex-row items-start justify-between">
                         <View className="flex-1 pr-3">
                           <Text className="text-sm font-semibold text-gray-900" numberOfLines={1}>
@@ -105,12 +136,13 @@ export default function HomeScreen() {
                             {app.businessName} · {app.businessType}
                           </Text>
                         </View>
-                        <StatusPill status={app.status} />
+                        <StatusPill status={getApplicationDisplayStatus(app)} />
                       </View>
                       <Text className="mt-3 text-[11px] text-gray-400">
                         Applied {formatDate(app.dateApplied)}
                       </Text>
                     </Card>
+                    </Pressable>
                   ))}
                 </View>
               )}

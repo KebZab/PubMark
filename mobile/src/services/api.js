@@ -185,3 +185,14 @@ export async function createReceipt(input) {
     body: JSON.stringify(input),
   });
 }
+
+export async function getContractRenewals() {
+  return apiFetch("/contract-renewals");
+}
+
+export async function requestContractRenewal(applicationId, requestedMonths) {
+  return apiFetch("/contract-renewals", {
+    method: "POST",
+    body: JSON.stringify({ applicationId, requestedMonths: Number(requestedMonths) }),
+  });
+}

@@ -166,6 +166,15 @@ export const router = createBrowserRouter([
     ),
   },
   {
+    path: "/admin/receipts",
+    element: (
+      <ProtectedRoute role="admin">
+        <AdminDashboard />
+      </ProtectedRoute>
+    ),
+  },
+  { path: "/admin/renewals", element: <ProtectedRoute role="admin"><AdminDashboard /></ProtectedRoute> },
+  {
     path: "/admin/check-requests",
     element: (
       <ProtectedRoute role="admin">
@@ -215,6 +224,15 @@ export const router = createBrowserRouter([
       </ProtectedRoute>
     ),
   },
+  {
+    path: "/super-admin/receipts",
+    element: (
+      <ProtectedRoute role="super_admin">
+        <SuperAdminDashboard />
+      </ProtectedRoute>
+    ),
+  },
+  { path: "/super-admin/renewals", element: <ProtectedRoute role="super_admin"><SuperAdminDashboard /></ProtectedRoute> },
   {
     path: "/super-admin/check-requests",
     element: (

@@ -31,6 +31,7 @@
  * @property {string} adminRemarks
  * @property {string} dateApplied
  * @property {string|null} permitDeadlineAt
+ * @property {string|null} permitDeadlineUpdatedAt
  * @property {string|null} permitTerminatedAt
  */
 
@@ -132,6 +133,7 @@
  * @property {string|null} assignedToName
  * @property {CheckPriority} priority
  * @property {string} reason
+ * @property {string|null} category Set when this is a violation follow-up.
  * @property {string} notes
  * @property {CheckStatus} status
  * @property {string} createdAt

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import { readAssetForUpload, formatFileSize, DOCUMENT_PICKER_TYPES } from "../../services/fileUpload";
@@ -24,6 +25,12 @@ const PRIORITY_STYLE = {
   high: { bg: "bg-orange-100", text: "text-orange-700" },
   normal: { bg: "bg-blue-100", text: "text-blue-700" },
   low: { bg: "bg-gray-100", text: "text-gray-600" },
+};
+
+const STATUS_STYLE = {
+  pending: { bg: "bg-amber-100", text: "text-amber-700", label: "Pending" },
+  completed: { bg: "bg-emerald-100", text: "text-emerald-700", label: "Completed" },
+  cancelled: { bg: "bg-gray-100", text: "text-gray-600", label: "Cancelled" },
 };
 
 // Same eight categories the Violations tab offers, so reporting from a check
@@ -42,6 +49,13 @@ const CATEGORIES = [
 export default function ChecksScreen() {
   const { data, loading, error, refetch } = useApiData(getCheckRequests);
   const [filter, setFilter] = useState("pending");
+
+  useFocusEffect(
+    useCallback(() => {
+      refetch();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []),
+  );
 
   const [expandedId, setExpandedId] = useState(null);
   const [active, setActive] = useState(null);
@@ -247,6 +261,7 @@ export default function ChecksScreen() {
           <View className="gap-3 px-4 pt-4">
             {shown.map((r) => {
               const p = PRIORITY_STYLE[r.priority] ?? PRIORITY_STYLE.normal;
+              const status = STATUS_STYLE[r.status] ?? STATUS_STYLE.pending;
               const expanded = expandedId === r.id;
               // Older followups (sent before categories existed) carry no
               // category, but still have this generated notes text — treat
@@ -264,28 +279,35 @@ export default function ChecksScreen() {
                         Requested by {r.requestedByName ?? "admin"}
                       </Text>
                     </View>
-                    <View className="flex-row items-center gap-2">
+                    <View className="items-end gap-1.5">
                       <View
-                        className={`self-start rounded-full px-2.5 py-1 ${isFollowup ? "bg-blue-100" : p.bg}`}
+                        className={`self-start rounded-full px-2.5 py-1 ${status.bg}`}
                       >
-                        <Text
-                          className={`text-[10px] font-semibold capitalize ${isFollowup ? "text-blue-700" : p.text}`}
-                        >
-                          {isFollowup ? "Followup" : r.priority}
+                        <Text className={`text-[10px] font-semibold ${status.text}`}>
+                          {status.label}
                         </Text>
                       </View>
-                      <Ionicons
-                        name={expanded ? "chevron-up" : "chevron-down"}
-                        size={16}
-                        color="#9ca3af"
-                      />
+                      <View className="flex-row items-center gap-1.5">
+                        <View className={`rounded-full px-2.5 py-1 ${isFollowup ? "bg-blue-100" : p.bg}`}>
+                          <Text
+                            className={`text-[10px] font-semibold capitalize ${isFollowup ? "text-blue-700" : p.text}`}
+                          >
+                            {isFollowup ? "Follow-up" : `${r.priority} priority`}
+                          </Text>
+                        </View>
+                        <Ionicons
+                          name={expanded ? "chevron-up" : "chevron-down"}
+                          size={16}
+                          color="#9ca3af"
+                        />
+                      </View>
                     </View>
                   </Pressable>
 
                   {expanded ? (
                     <>
                       <Text className="mt-3 text-xs font-bold leading-5 text-gray-800">
-                        {r.category ? `Followup: ${r.category}` : isFollowup ? r.notes : r.reason}
+                        {r.category ? `Follow-up: ${r.category}` : isFollowup ? "Violation follow-up" : r.reason}
                       </Text>
                       {isFollowup ? (
                         <Text className="mt-1.5 text-[11px] leading-5 text-gray-600">{r.reason}</Text>
@@ -304,6 +326,11 @@ export default function ChecksScreen() {
                             Findings
                           </Text>
                           <Text className="mt-1 text-xs leading-5 text-emerald-900">{r.completionSummary}</Text>
+                          {r.completionNotes ? (
+                            <Text className="mt-1 text-[11px] leading-5 text-emerald-800">
+                              {r.completionNotes}
+                            </Text>
+                          ) : null}
                           <Attachments files={r.completionFiles ?? []} />
                         </View>
                       ) : null}
@@ -323,9 +350,9 @@ export default function ChecksScreen() {
                       )}
                       <Pressable
                         onPress={() => openComplete(r)}
-                        className="flex-1 items-center rounded-xl bg-amber-500 py-2.5"
+                        className="flex-1 items-center rounded-xl bg-emerald-600 py-2.5"
                       >
-                        <Text className="text-xs font-semibold text-white">Submit Report</Text>
+                        <Text className="text-xs font-semibold text-white">Submit Report &amp; Complete</Text>
                       </Pressable>
                     </View>
                   ) : null}

@@ -32,9 +32,11 @@ import {
   formatPermitDeadline,
   getApplicationDisplayStatus,
   getContractEndStatus,
+  getRenewalDeadline,
   parsePermitDeadlineMeta,
 } from "../components/permitDeadline";
 import { getReceipts, submitReceipt } from "../services/receiptsApi";
+import { getContractRenewals, requestContractRenewal } from "../services/contractRenewalsApi";
 
 const STATUS_CONFIG = {
   pending: {
@@ -116,6 +118,8 @@ export function ApplicationDetails() {
   const [receiptDate, setReceiptDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [receiptNotes, setReceiptNotes] = useState("");
   const [submittingReceipt, setSubmittingReceipt] = useState(false);
+  const [renewal, setRenewal] = useState(null);
+  const [requestingRenewal, setRequestingRenewal] = useState(false);
 
   useEffect(() => {
     if (!app) return;
@@ -125,6 +129,21 @@ export function ApplicationDetails() {
         /* history is a nice-to-have, ignore failures here */
       });
   }, [app?.stallId]);
+
+  useEffect(() => {
+    if (!app) return;
+    getContractRenewals().then((items) => setRenewal(items.find((item) => item.applicationId === app.id) || null)).catch(() => {});
+  }, [app?.id]);
+
+  async function handleRequestRenewal() {
+    setRequestingRenewal(true);
+    try {
+      const saved = await requestContractRenewal(app.id, app.contractTermMonths);
+      setRenewal(saved);
+      showToast("Renewal request submitted.", "success");
+    } catch (error) { showToast(error.message, "error"); }
+    finally { setRequestingRenewal(false); }
+  }
 
   async function handleSubmitReceipt() {
     if (!app || !receiptFile) return;
@@ -357,9 +376,18 @@ export function ApplicationDetails() {
                     className={`text-xs mt-1 leading-snug ${isUrgent ? "text-red-700" : "text-amber-700"}`}
                   >
                     {contractStatus.urgency === "expired"
-                      ? `Your contract ended ${new Date(app.contractEnd).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}. Contact the admin to renew.`
+                      ? `Your contract ended ${new Date(app.contractEnd).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}. Request renewal by ${getRenewalDeadline(app).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}.`
                       : `Your contract ends in ${contractStatus.daysRemaining} day${contractStatus.daysRemaining === 1 ? "" : "s"}, on ${new Date(app.contractEnd).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}.`}
                   </p>
+                  {renewal?.status === "pending" ? (
+                    <p className="mt-3 text-xs font-semibold text-blue-700">Renewal pending admin review.</p>
+                  ) : renewal?.status === "rejected" ? (
+                    <p className="mt-3 text-xs font-semibold text-red-700">Renewal rejected{renewal.remarks ? `: ${renewal.remarks}` : "."}</p>
+                  ) : (
+                    <button onClick={handleRequestRenewal} disabled={requestingRenewal} className="mt-3 rounded-lg bg-[#0d9488] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">
+                      {requestingRenewal ? "Submitting…" : `Request ${app.contractTermMonths}-month renewal`}
+                    </button>
+                  )}
                 </div>
               );
             })()}
@@ -632,7 +660,7 @@ export function ApplicationDetails() {
                   <div className="flex-1 text-left">
                     <p className="text-sm font-semibold text-gray-700">Submit Payment Receipt</p>
                     <p className="text-xs text-gray-400 mt-0.5">
-                      Upload proof that you paid the treasurer
+                      Upload the payment receipt issued by the treasurer
                     </p>
                   </div>
                   <ChevronRight className="w-4 h-4 flex-shrink-0 text-gray-300" />
