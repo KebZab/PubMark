@@ -1000,7 +1000,17 @@ app.get("/api/violations", requireAuth, requireRole("admin", "super_admin", "off
 app.post("/api/violations", requireAuth, requireRole("admin", "super_admin", "officer", "vendor"), async (req, res, next) => {
   try {
     const stallId = String(req.body.stallId || "").trim();
-    const vendorId = req.body.vendorId ? String(req.body.vendorId).trim() : null;
+    // The client (mobile in particular) never actually sends this — resolve
+    // it from whoever currently holds the stall, so the report shows a real
+    // vendor name instead of always falling back to "Unknown".
+    let vendorId = req.body.vendorId ? String(req.body.vendorId).trim() : null;
+    if (!vendorId && stallId) {
+      const { rows: occupantRows } = await db.query(
+        "SELECT user_id FROM applications WHERE stall_id = $1 AND status = 'approved' ORDER BY date_applied DESC LIMIT 1",
+        [stallId]
+      );
+      vendorId = occupantRows[0]?.user_id ?? null;
+    }
     const officerId = req.body.officerId ? String(req.body.officerId).trim() : (req.auth.role === "officer" ? req.auth.sub : "44444444-4444-4444-8444-444444444444");
     const category = String(req.body.category || "").trim();
     const description = String(req.body.description || "").trim();
