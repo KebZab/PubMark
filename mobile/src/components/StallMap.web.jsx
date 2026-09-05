@@ -8,7 +8,7 @@ function labelFor(input) {
   if (input.userAppStatus === "approved") return { text: "Yours", dot: "#6366f1" };
   if (input.userAppStatus === "pending") return { text: "Pending", dot: "#f59e0b" };
   // Matches the admin map's occupied color (AdminMapView.jsx's stallColor()).
-  if (input.occupied) return { text: "Occupied", dot: "#ef4444" };
+  if (input.occupied) return { text: "Occupied", dot: input.occupiedColor ?? "#ef4444" };
   // Someone else has an undecided application — reads the same as "pending"
   // since there's no separate visual state for "pending, but not yours".
   if (input.pending) return { text: "Pending", dot: "#f59e0b" };

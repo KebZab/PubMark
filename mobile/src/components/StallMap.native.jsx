@@ -17,7 +17,7 @@ function styleFor(input, selected) {
   if (input.occupied) {
     // Matches the admin map's occupied color exactly (AdminMapView.jsx's
     // stallColor()), so a stall reads the same whichever screen shows it.
-    return { color: selected ? "#dc2626" : "#ef4444", fillOpacity: selected ? 0.4 : 0.25 };
+    return { color: input.occupiedColor ?? (selected ? "#dc2626" : "#ef4444"), fillOpacity: selected ? 0.4 : 0.25 };
   }
   // Someone (not necessarily this vendor) has an undecided application on
   // this stall — reads the same as "your pending", since the map has no
@@ -95,7 +95,9 @@ function buildHtml(payload) {
         fillOpacity: s.style.fillOpacity
       }).addTo(map);
 
-      poly.bindTooltip(s.name + (s.statusLabel ? ' - ' + s.statusLabel : ''), { direction: 'top' });
+      var tooltip = document.createElement('span');
+      tooltip.textContent = s.name + (s.statusLabel ? ' - ' + s.statusLabel : '');
+      poly.bindTooltip(tooltip, { direction: 'top' });
       poly.on('click', function () { send({ type: 'select', id: s.id }); });
 
       layers[s.id] = { layer: poly, base: s.style, sel: s.selectedStyle };
@@ -143,6 +145,7 @@ export default function StallMap({
   multiSelectMode = false,
   onSelect,
   styleInputs = {},
+  showEmptyMap = false,
 }) {
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(null);
@@ -173,7 +176,7 @@ export default function StallMap({
         };
       }),
     };
-    return buildHtml(JSON.stringify(payload));
+    return buildHtml(JSON.stringify(payload).replace(/</g, "\\u003c"));
   }, [stalls, styleInputs]);
 
   // Push selection changes into the existing page, preserving zoom/pan.
@@ -185,7 +188,7 @@ export default function StallMap({
     );
   }, [selectedId, selectedIds, multiSelectMode, ready]);
 
-  if (stalls.length === 0) {
+  if (stalls.length === 0 && !showEmptyMap) {
     return (
       <View style={styles.fallback}>
         <Text style={styles.fallbackTitle}>No stalls to show</Text>

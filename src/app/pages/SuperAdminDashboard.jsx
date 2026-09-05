@@ -132,6 +132,8 @@ export function SuperAdminDashboard() {
   const [showPw, setShowPw] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [formErrors, setFormErrors] = useState({});
+  const [savingUser, setSavingUser] = useState(false);
+  const [userSaveError, setUserSaveError] = useState("");
   const [violationsList, setViolationsList] = useState([]);
   const [assigningViolation, setAssigningViolation] = useState(null);
   const [checkRequests, setCheckRequests] = useState([]);
@@ -432,6 +434,7 @@ export function SuperAdminDashboard() {
     setEditUser(null);
     setForm(EMPTY_FORM);
     setFormErrors({});
+    setUserSaveError("");
     setShowPw(false);
     setShowForm(true);
   }
@@ -448,6 +451,7 @@ export function SuperAdminDashboard() {
       department: u.department ?? "",
     });
     setFormErrors({});
+    setUserSaveError("");
     setShowPw(false);
     setShowForm(true);
   }
@@ -456,18 +460,22 @@ export function SuperAdminDashboard() {
     const errs = {};
     if (!form.name.trim()) errs.name = "Name is required.";
     if (!form.email.trim()) errs.email = "Email is required.";
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) errs.email = "Enter a valid email address.";
     if (!editUser && !form.password) errs.password = "Password is required for new users.";
     if (form.password && form.password.length < 6) errs.password = "At least 6 characters.";
     return errs;
   }
 
   async function handleSave() {
+    if (savingUser) return;
+    setUserSaveError("");
     const errs = validateForm();
     if (Object.keys(errs).length > 0) {
       setFormErrors(errs);
       return;
     }
 
+    setSavingUser(true);
     try {
       if (editUser) {
         await updateUserApi(editUser.id, {
@@ -481,8 +489,8 @@ export function SuperAdminDashboard() {
         showToast(`User "${form.name}" updated.`, "success");
       } else {
         await createUser({
-          name: form.name,
-          email: form.email,
+          name: form.name.trim(),
+          email: form.email.trim().toLowerCase(),
           password: form.password,
           role: form.role,
           phone: form.phone,
@@ -494,7 +502,10 @@ export function SuperAdminDashboard() {
       setShowForm(false);
       await Promise.all([loadUsersTable(), loadUsers()]);
     } catch (error) {
+      setUserSaveError(error.message || "Unable to save the account. Please try again.");
       showToast(`Failed to save user: ${error.message}`, "error");
+    } finally {
+      setSavingUser(false);
     }
   }
 
@@ -721,15 +732,16 @@ export function SuperAdminDashboard() {
       title="Super Admin"
       subtitle="System administration and user management"
       actions={
-        tab === "users" ? (
+        (
           <button
+            type="button"
             onClick={openCreate}
             className="flex items-center gap-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold px-3 py-2 rounded-lg transition-colors"
           >
             <UserPlus className="w-3.5 h-3.5" />
-            Add User
+            Create User Account
           </button>
-        ) : undefined
+        )
       }
     >
       {/* Tab bar */}
@@ -2640,16 +2652,20 @@ export function SuperAdminDashboard() {
           <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden">
             <div className="bg-gradient-to-r from-purple-600 to-purple-500 px-6 py-4 flex items-center justify-between">
               <h2 className="text-white font-semibold">
-                {editUser ? "Edit User" : "Add New User"}
+                {editUser ? "Edit User" : "Create User Account"}
               </h2>
               <button
                 onClick={() => setShowForm(false)}
+                disabled={savingUser}
+                aria-label="Close user form"
                 className="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center"
               >
                 <X className="w-4 h-4 text-white" />
               </button>
             </div>
-            <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+            <fieldset disabled={savingUser} className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+              {!editUser && <p className="text-xs leading-5 text-gray-500">Create an account with a role and password. The user can sign in with this email and password.</p>}
+              {userSaveError && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{userSaveError}</p>}
               {[
                 { field: "name", label: "Full Name", placeholder: "Juan dela Cruz", type: "text" },
                 {
@@ -2673,8 +2689,9 @@ export function SuperAdminDashboard() {
                 },
               ].map(({ field, label, placeholder, type }) => (
                 <div key={field}>
-                  <label className="block text-xs font-medium text-gray-700 mb-1.5">{label}</label>
+                  <label htmlFor={`user-${field}`} className="block text-xs font-medium text-gray-700 mb-1.5">{label}</label>
                   <input
+                    id={`user-${field}`}
                     type={type}
                     value={form[field]}
                     onChange={(e) => setForm((prev) => ({ ...prev, [field]: e.target.value }))}
@@ -2733,20 +2750,23 @@ export function SuperAdminDashboard() {
                   <p className="text-red-500 text-xs mt-1">{formErrors.password}</p>
                 )}
               </div>
-            </div>
+            </fieldset>
             <div className="px-6 py-4 border-t border-gray-100 flex gap-3">
               <button
                 onClick={() => setShowForm(false)}
+                disabled={savingUser}
                 className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSave}
-                className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2"
+                disabled={savingUser}
+                aria-busy={savingUser}
+                className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2"
               >
                 <Check className="w-4 h-4" />
-                {editUser ? "Save Changes" : "Create User"}
+                {savingUser ? "Saving…" : editUser ? "Save Changes" : "Create User"}
               </button>
             </div>
           </div>

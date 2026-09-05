@@ -1,4 +1,6 @@
+import { useEffect, useRef } from "react";
 import { ActivityIndicator, View } from "react-native";
+import GuestMapScreen from "../screens/GuestMapScreen";
 import { Ionicons } from "@expo/vector-icons";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
@@ -79,10 +81,22 @@ function VendorTabs() {
 
 // The tabs sit inside a stack so screens like the application form can be
 // pushed over them with a back button, instead of becoming another tab.
-function VendorNavigator() {
+function VendorEntry({ navigation, pendingApplication }) {
+  useEffect(() => {
+    const stalls = pendingApplication.current;
+    if (!stalls?.length) return;
+    pendingApplication.current = null;
+    navigation.navigate("ApplyForStall", { stalls });
+  }, [navigation, pendingApplication]);
+  return <VendorTabs />;
+}
+
+function VendorNavigator({ pendingApplication }) {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="Tabs" component={VendorTabs} />
+      <Stack.Screen name="Tabs">
+        {(props) => <VendorEntry {...props} pendingApplication={pendingApplication} />}
+      </Stack.Screen>
       <Stack.Screen
         name="ApplicationDetail"
         component={ApplicationDetailScreen}
@@ -129,17 +143,24 @@ function OfficerTabs() {
 // Signed-out flow. A stack rather than a bare screen so vendors can reach
 // registration and come back. On success the session appears and RootNavigator
 // swaps this whole stack out for the role's tabs.
-function AuthNavigator() {
+function AuthNavigator({ pendingApplication }) {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Login" component={LoginScreen} />
       <Stack.Screen name="Register" component={RegisterScreen} />
+      <Stack.Screen name="GuestMap">
+        {(props) => <GuestMapScreen {...props} pendingApplication={pendingApplication} />}
+      </Stack.Screen>
     </Stack.Navigator>
   );
 }
 
 export default function RootNavigator() {
   const { user, loading } = useAuth();
+  const pendingApplication = useRef(null);
+  useEffect(() => {
+    if (user && user.role !== "vendor") pendingApplication.current = null;
+  }, [user]);
 
   // Restoring a saved session — avoid flashing the login screen at someone
   // who is already signed in.
@@ -153,7 +174,7 @@ export default function RootNavigator() {
 
   return (
     <NavigationContainer>
-      {!user ? <AuthNavigator /> : user.role === "officer" ? <OfficerTabs /> : <VendorNavigator />}
+      {!user ? <AuthNavigator pendingApplication={pendingApplication} /> : user.role === "officer" ? <OfficerTabs /> : <VendorNavigator pendingApplication={pendingApplication} />}
     </NavigationContainer>
   );
 }
