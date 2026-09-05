@@ -69,8 +69,7 @@ function calculatePolygonArea(geometry) {
   for (let i = 0; i < coords.length - 1; i++) {
     const p1 = L.latLng(coords[i][1], coords[i][0]);
     const p2 = L.latLng(coords[i + 1][1], coords[i + 1][0]);
-    const dx = p2.lng - p1.lng;
-    const dy = p2.lat - p1.lat;
+
     area += p1.lng * p2.lat - p2.lng * p1.lat;
   }
   return (Math.abs(area) * 40075000 * 40075000) / (360 * 360) / 2; // sq meters
@@ -591,21 +590,6 @@ function FlyTo({ target }) {
     map.flyTo(target, Math.max(map.getZoom(), 20), { duration: 0.8 });
   }, [target, map]);
   return null;
-}
-
-// ── InfoRow ──────────────────────────────────────────────────────────────────
-function InfoRow({ icon: Icon, label, value }) {
-  return (
-    <div className="flex items-start gap-3 py-2.5 border-b border-gray-100 last:border-0">
-      <div className="w-7 h-7 bg-gray-50 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
-        <Icon className="w-3.5 h-3.5 text-gray-500" />
-      </div>
-      <div>
-        <p className="text-xs font-medium text-gray-400 uppercase tracking-wide">{label}</p>
-        <p className="text-sm font-medium text-gray-800 mt-0.5">{value}</p>
-      </div>
-    </div>
-  );
 }
 
 // ── Stall form ────────────────────────────────────────────────────────────────

@@ -10,3 +10,10 @@ server/.env.*
 
 # Database dumps — contain real user emails, phone numbers, password hashes
 dumps/
+
+# Installed dependencies and generated build output stay local.
+node_modules/
+dist/
+web-build/
+dist-web/
+.expo/

@@ -9,7 +9,6 @@ import {
   Upload,
   MapPin,
   Bell,
-  Home,
   Megaphone,
   AlertTriangle,
   Info,
@@ -27,7 +26,6 @@ import {
   X,
   Mail,
   Layers,
-  ArrowUpDown,
   ShieldOff,
   FileX,
 } from "lucide-react";
@@ -38,9 +36,9 @@ import { getAnnouncements } from "../services/announcementsApi";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
 import { getSession, clearSession } from "../components/authStorage";
-import { findUserByEmail } from "../services/api";
+
 import { showToast } from "../components/Toast";
-import { FloorSwitcher } from "../components/FloorSwitcher";
+
 import {
   getTransfersByToEmail,
   getTransfersByFromUserId,
@@ -262,7 +260,7 @@ export function UserDashboard() {
   const [activeTab, setActiveTab] = useState("home");
   const [announcements, setAnnouncements] = useState([]);
   const { applications } = useApplications();
-  const { stalls } = useStalls();
+  useStalls();
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef(null);
   const [appSortField, setAppSortField] = useState("date");

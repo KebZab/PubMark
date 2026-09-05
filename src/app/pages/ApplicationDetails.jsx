@@ -22,8 +22,6 @@ import {
 } from "lucide-react";
 import { useApplications } from "../hooks/useApplications";
 import { deleteApplication, updateApplicationPermit } from "../services/applicationsApi";
-import { findUserByEmail } from "../services/api";
-import { getStalls } from "../services/stallsApi";
 import { formatFileSize } from "../components/applicationsStorage";
 import { getSession } from "../components/authStorage";
 import { getTransfersByFromUserId, createTransferRequest } from "../services/transfersApi";

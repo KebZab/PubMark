@@ -4,7 +4,6 @@ import {
   LayoutDashboard,
   MapPin,
   FileText,
-  Users,
   User,
   Check,
   X,
@@ -47,7 +46,7 @@ import { useStalls } from "../hooks/useStalls";
 import { getSession, getAllUsers } from "../components/authStorage";
 import { listUsers } from "../services/api";
 import { migrateLegacyRequests } from "../services/legacyRequestMigration";
-import { getViolations, assignOfficer, updateViolationStatus } from "../components/violationsStore";
+import { getViolations, updateViolationStatus } from "../components/violationsStore";
 import {
   getViolationRequests,
   createViolationRequest,
@@ -182,7 +181,7 @@ export function AdminDashboard() {
   const [newCustomCategory, setNewCustomCategory] = useState("");
   const [appStatusFilter, setAppStatusFilter] = useState("all");
   const [violationsList, setViolationsList] = useState([]);
-  const [assigningViolation, setAssigningViolation] = useState(null);
+
   const [expandedViolation, setExpandedViolation] = useState(null);
   const [users, setUsers] = useState([]);
   const [appSortField, setAppSortField] = useState("date");
@@ -604,21 +603,6 @@ export function AdminDashboard() {
       showToast("Announcement deleted.", "success");
     } catch (error) {
       showToast(`Failed to delete announcement: ${error.message}`, "error");
-    }
-  }
-
-  async function handleAssignOfficer(violationId, officerId) {
-    const officer = users.find((u) => u.id === officerId);
-    if (!officer) return;
-    try {
-      await assignOfficer(violationId, officerId, officer.name);
-      const refreshed = await getViolations();
-      setViolationsList(refreshed);
-      setAllViolations(refreshed);
-      setAssigningViolation(null);
-      showToast(`Officer "${officer.name}" assigned to violation.`, "success");
-    } catch (error) {
-      showToast(`Failed to assign violation: ${error.message}`, "error");
     }
   }
 

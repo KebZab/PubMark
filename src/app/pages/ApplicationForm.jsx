@@ -55,10 +55,6 @@ function SectionHeader({ icon: Icon, label }) {
   );
 }
 
-function Divider() {
-  return <div className="h-px bg-gradient-to-r from-transparent via-gray-200 to-transparent" />;
-}
-
 export function ApplicationForm() {
   const navigate = useNavigate();
   const location = useLocation();

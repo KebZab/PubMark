@@ -4,9 +4,6 @@ import {
   RotateCcw,
   Trash2,
   Search,
-  Filter,
-  X,
-  Check,
   FileText,
   Users,
   Store,
@@ -49,8 +46,6 @@ export function ArchiveManagement() {
   const [restoreConfirm, setRestoreConfirm] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
-  const [loading, setLoading] = useState(true);
-
   // Archive records come from the API now, so this loads asynchronously.
   useEffect(() => {
     let cancelled = false;
@@ -60,9 +55,6 @@ export function ArchiveManagement() {
       })
       .catch((e) => {
         if (!cancelled) showToast(`Failed to load archive: ${e.message}`, "error");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;

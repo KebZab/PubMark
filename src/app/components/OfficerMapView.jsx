@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { X, AlertTriangle, Camera, Upload, Paperclip, Store, User } from "lucide-react";
+import { X, AlertTriangle, Upload, Paperclip, Store, User } from "lucide-react";
 import { FloorSwitcher } from "./FloorSwitcher";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";

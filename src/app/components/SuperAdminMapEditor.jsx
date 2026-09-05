@@ -317,7 +317,7 @@ function PerimeterDrawControl({ existing, onCreated, isSaving }) {
 
 export function SuperAdminMapEditor({ session }) {
   const { perimeters, refetch } = usePerimeters();
-  const [isSaving, setIsSaving] = useState(false);
+  const isSaving = false;
   const [deletingId, setDeletingId] = useState(null);
 
   const handleCreated = useCallback(async () => {

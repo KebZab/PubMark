@@ -2,7 +2,6 @@ import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router";
 import {
   Users,
-  ShieldCheck,
   Store,
   BarChart3,
   UserPlus,
@@ -13,8 +12,6 @@ import {
   X,
   AlertTriangle,
   Package,
-  UserCog,
-  TrendingUp,
   Activity,
   Eye,
   EyeOff,
@@ -26,7 +23,6 @@ import {
   ChevronsUpDown,
   MapPin,
   User,
-  Paperclip,
   FileText,
   Receipt as ReceiptIcon,
   Send,
@@ -47,7 +43,7 @@ import {
 } from "../services/api";
 import { TablePagination } from "../components/ui/TablePagination";
 import { migrateLegacyRequests } from "../services/legacyRequestMigration";
-import { getViolations, assignOfficer, updateViolationStatus } from "../components/violationsStore";
+import { getViolations, updateViolationStatus } from "../components/violationsStore";
 import {
   getViolationRequests,
   createViolationRequest,
@@ -135,7 +131,7 @@ export function SuperAdminDashboard() {
   const [savingUser, setSavingUser] = useState(false);
   const [userSaveError, setUserSaveError] = useState("");
   const [violationsList, setViolationsList] = useState([]);
-  const [assigningViolation, setAssigningViolation] = useState(null);
+
   const [checkRequests, setCheckRequests] = useState([]);
   const [mapRequests, setMapRequests] = useState([]);
   const [expandedMapReq, setExpandedMapReq] = useState(null);
@@ -591,21 +587,6 @@ export function SuperAdminDashboard() {
       showToast(`Receipt ${status}.`, "success");
     } catch (error) {
       showToast(`Failed to update receipt: ${error.message}`, "error");
-    }
-  }
-
-  async function handleAssignOfficer(violationId, officerId) {
-    const officer = users.find((u) => u.id === officerId);
-    if (!officer) return;
-    try {
-      await assignOfficer(violationId, officerId, officer.name);
-      const refreshed = await getViolations();
-      setViolationsList(refreshed);
-      setAllViolations(refreshed);
-      setAssigningViolation(null);
-      showToast(`Officer "${officer.name}" assigned to violation.`, "success");
-    } catch (error) {
-      showToast(`Failed to assign violation: ${error.message}`, "error");
     }
   }
 

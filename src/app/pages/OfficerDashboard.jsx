@@ -4,14 +4,10 @@ import {
   CheckCircle,
   XCircle,
   Clock,
-  Plus,
   Search,
-  Filter,
   Eye,
   Paperclip,
   X,
-  Check,
-  FileText,
   Map,
   ClipboardList,
   LayoutDashboard,
@@ -22,7 +18,6 @@ import {
   Settings,
   LogOut,
   Bell,
-  Megaphone,
   Receipt as ReceiptIcon,
 } from "lucide-react";
 import {
@@ -145,8 +140,7 @@ export function OfficerDashboard() {
     location.pathname === "/officer/receipts" ? "receipts" : "dashboard",
   );
   const [violations, setViolations] = useState([]);
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
+
   const [selectedViolation, setSelectedViolation] = useState(null);
   const [showNewForm, setShowNewForm] = useState(false);
   const [resolveModal, setResolveModal] = useState(null);
@@ -268,16 +262,6 @@ export function OfficerDashboard() {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
-
-  const filtered = violations.filter((v) => {
-    const matchStatus = statusFilter === "all" || v.status === statusFilter;
-    const matchSearch =
-      !search ||
-      v.stallName.toLowerCase().includes(search.toLowerCase()) ||
-      v.vendorName.toLowerCase().includes(search.toLowerCase()) ||
-      v.category.toLowerCase().includes(search.toLowerCase());
-    return matchStatus && matchSearch;
-  });
 
   const stats = {
     total: violations.length,

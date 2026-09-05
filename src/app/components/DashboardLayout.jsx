@@ -15,7 +15,6 @@ import {
   Store,
   ShieldCheck,
   ClipboardList,
-  Package,
   AlertTriangle,
   ChevronRight,
   Megaphone,

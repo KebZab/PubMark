@@ -20,7 +20,6 @@ export default function ApplicationDetailScreen({ route, navigation }) {
 
   // A stall can only be handed on once it's actually yours.
   const canTransfer = app.status === "approved";
-  const permitMissing = !app.permitFileName;
 
   const attachPermit = async (file) => {
     setBusy(true);
