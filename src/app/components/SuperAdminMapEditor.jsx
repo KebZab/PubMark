@@ -4,7 +4,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "leaflet-draw/dist/leaflet.draw.css";
 import "leaflet-draw";
-import { MapPin, Trash2, CheckCircle, AlertTriangle, PenLine, X } from "lucide-react";
+import { MapPin, Trash2, CheckCircle, AlertTriangle, PenLine, X, Loader2 } from "lucide-react";
 import { createPerimeter, deletePerimeter } from "../services/perimeterApi";
 import { usePerimeters } from "../hooks/usePerimeters";
 import { showToast } from "./Toast";
@@ -316,7 +316,7 @@ function PerimeterDrawControl({ existing, onCreated, isSaving }) {
 }
 
 export function SuperAdminMapEditor({ session }) {
-  const { perimeters, refetch } = usePerimeters();
+  const { perimeters, refetch, loading: perimetersLoading } = usePerimeters();
   const isSaving = false;
   const [deletingId, setDeletingId] = useState(null);
 
@@ -384,6 +384,14 @@ export function SuperAdminMapEditor({ session }) {
       <div className="flex-1 flex">
         {/* Map */}
         <div className="flex-1 relative">
+          {perimetersLoading && (
+            <div className="absolute inset-0 z-[1100] flex items-center justify-center bg-white/70 backdrop-blur-[1px]">
+              <div className="flex flex-col items-center gap-3">
+                <Loader2 className="w-7 h-7 text-purple-600 animate-spin" />
+                <p className="text-sm font-medium text-gray-600">Loading zones…</p>
+              </div>
+            </div>
+          )}
           <MapContainer
             center={[10.6054, 123.0413]}
             zoom={18}

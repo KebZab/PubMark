@@ -3,7 +3,7 @@ import { useNavigate, Link } from "react-router";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { MapPin, Store, X, LogIn, UserPlus, User, ChevronRight, CheckSquare, Clock } from "lucide-react";
+import { MapPin, Store, X, LogIn, UserPlus, User, ChevronRight, CheckSquare, Clock, Loader2 } from "lucide-react";
 import { useStalls } from "../hooks/useStalls";
 import { useOccupiedStalls } from "../hooks/useOccupiedStalls";
 import { FloorSwitcher } from "../components/FloorSwitcher";
@@ -269,6 +269,19 @@ export function GuestMapView() {
           )}
         </div>
       </div>
+
+      {/* Loading state */}
+      {loading && (
+        <div
+          className="absolute inset-0 z-[500] flex items-center justify-center bg-white/60 backdrop-blur-[1px]"
+          style={{ top: "80px" }}
+        >
+          <div className="flex flex-col items-center gap-3">
+            <Loader2 className="w-7 h-7 text-teal-600 animate-spin" />
+            <p className="text-sm font-medium text-gray-600">Loading stalls…</p>
+          </div>
+        </div>
+      )}
 
       {/* Empty state */}
       {!loading && stalls.length === 0 && (

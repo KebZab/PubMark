@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import { login as apiLogin, registerVendor, getCurrentProfile } from "../services/api";
+import { Alert } from "react-native";
+import { login as apiLogin, registerVendor, getCurrentProfile, setAccountTerminatedHandler } from "../services/api";
 import { clearSession, getProfile, saveSession } from "../services/tokenStore";
 
 const AuthContext = createContext(undefined);
@@ -7,6 +8,17 @@ const AuthContext = createContext(undefined);
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  // Fires from apiFetch the moment ANY request notices the account was
+  // terminated — not just at login — so a vendor who's still signed in when
+  // an admin approves their termination gets kicked back to the login screen
+  // on their very next action, instead of staying in until the token expires.
+  useEffect(() => {
+    setAccountTerminatedHandler(() => {
+      setUser(null);
+      Alert.alert("Account terminated", "This account has been terminated.");
+    });
+  }, []);
 
   // On launch, restore a saved session. We re-check with the server rather
   // than trusting the stored copy blindly — the token may have expired (8h).

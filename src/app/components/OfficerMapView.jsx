@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { X, AlertTriangle, Upload, Paperclip, Store, User } from "lucide-react";
+import { X, AlertTriangle, Upload, Paperclip, Store, User, Loader2 } from "lucide-react";
 import { FloorSwitcher } from "./FloorSwitcher";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
@@ -105,7 +105,7 @@ function StallMarkers({ stalls, applications, currentFloor, selectedStallId, onS
 }
 
 export function OfficerMapView({ officerId, officerName }) {
-  const { stalls } = useStalls();
+  const { stalls, loading: stallsLoading } = useStalls();
   const { applications } = useApplications();
   const [currentFloor, setCurrentFloor] = useState("1");
   const [selectedStallId, setSelectedStallId] = useState(null);
@@ -198,6 +198,15 @@ export function OfficerMapView({ officerId, officerName }) {
         .leaflet-pane { z-index: 400; }
         .leaflet-top, .leaflet-bottom { z-index: 1000; }
       `}</style>
+
+      {stallsLoading && (
+        <div className="absolute inset-0 z-[1100] flex items-center justify-center rounded-2xl bg-white/70 backdrop-blur-[1px]">
+          <div className="flex flex-col items-center gap-3">
+            <Loader2 className="w-7 h-7 text-amber-600 animate-spin" />
+            <p className="text-sm font-medium text-gray-600">Loading stalls…</p>
+          </div>
+        </div>
+      )}
 
       <MapContainer
         center={[10.6054, 123.0413]}

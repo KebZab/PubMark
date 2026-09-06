@@ -1,4 +1,4 @@
-import { getToken } from "./tokenStore";
+import { getToken, clearSession } from "./tokenStore";
 import { resolveApiBaseUrl } from "./apiBaseUrl";
 
 // Mirrors src/app/services/api.ts in the web app, with one difference:
@@ -12,6 +12,17 @@ export class ApiConfigurationError extends Error {
       "Could not work out the API address. In development this is normally automatic; for a production build, set EXPO_PUBLIC_API_BASE_URL in mobile/.env.",
     );
   }
+}
+
+// Set once by AuthContext on mount. The server flags EVERY authenticated
+// request with `code: "account_terminated"` once an admin approves closing
+// an account, not just login — this is what lets apiFetch notice mid-session
+// (from whatever screen happens to be active) and force a clean logout,
+// instead of the app just sitting there throwing errors until the token's
+// normal 8h expiry.
+let onAccountTerminated = null;
+export function setAccountTerminatedHandler(handler) {
+  onAccountTerminated = handler;
 }
 
 export async function apiFetch(path, init = {}) {
@@ -40,6 +51,10 @@ export async function apiFetch(path, init = {}) {
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
+    if (error.code === "account_terminated") {
+      await clearSession();
+      onAccountTerminated?.();
+    }
     throw new Error(error.message || "Unable to complete the request.");
   }
   return response.json();

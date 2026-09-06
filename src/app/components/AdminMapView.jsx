@@ -889,9 +889,10 @@ function PerimeterLayer({ geometry }) {
 
 // ── Main Component ───────────────────────────────────────────────────────────
 export function AdminMapView() {
-  const { perimeters } = usePerimeters();
-  const { stalls: storedStalls, refetch } = useStalls();
+  const { perimeters, loading: perimetersLoading } = usePerimeters();
+  const { stalls: storedStalls, refetch, loading: stallsLoading } = useStalls();
   const { applications } = useApplications();
+  const mapDataLoading = stallsLoading || perimetersLoading;
   const [contractModal, setContractModal] = useState(null);
   const [selectedStallId, setSelectedStallId] = useState(null);
   const [pendingLayer, setPendingLayer] = useState(null);
@@ -1178,6 +1179,14 @@ export function AdminMapView() {
 
       {/* ── Map (full area) ──────────────────────────── */}
       <div className="flex-1 relative">
+        {mapDataLoading && (
+          <div className="absolute inset-0 z-[1100] flex items-center justify-center bg-white/70 backdrop-blur-[1px]">
+            <div className="flex flex-col items-center gap-3">
+              <Loader2 className="w-7 h-7 text-teal-600 animate-spin" />
+              <p className="text-sm font-medium text-gray-600">Loading stalls…</p>
+            </div>
+          </div>
+        )}
         <MapContainer
           center={[10.6054, 123.0413]}
           zoom={18}

@@ -1,7 +1,12 @@
 import { apiFetch } from "../services/api";
 
-export async function getViolations() {
-  const response = await apiFetch("/violations");
+/**
+ * @param {{includeArchived?: boolean}} [options] By default, archived
+ * violations (resolved/dismissed ones an admin has archived) are excluded —
+ * pass `includeArchived: true` for a true historical count (e.g. Analytics).
+ */
+export async function getViolations({ includeArchived = false } = {}) {
+  const response = await apiFetch(`/violations${includeArchived ? "?includeArchived=true" : ""}`);
   return response.violations;
 }
 

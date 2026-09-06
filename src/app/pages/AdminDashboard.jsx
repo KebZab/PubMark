@@ -26,6 +26,8 @@ import {
   ArrowUpDown,
   Receipt as ReceiptIcon,
   Send,
+  Archive,
+  Loader2,
 } from "lucide-react";
 import { AdminMapView } from "../components/AdminMapView";
 import { StallManagementPanel } from "../components/StallManagementPanel";
@@ -58,6 +60,7 @@ import {
   updateTerminationStatus,
 } from "../components/terminationRequestsStore";
 import { getReceipts, reviewReceipt } from "../services/receiptsApi";
+import { archiveRecord } from "../services/archiveApi";
 import { DashboardLayout } from "../components/DashboardLayout";
 import { PaymentReceiptsPanel } from "../components/PaymentReceiptsPanel";
 import { ContractRenewalsPanel } from "../components/ContractRenewalsPanel";
@@ -232,7 +235,12 @@ export function AdminDashboard() {
     }
   }, [navigate]);
 
-  const { stalls: storedStalls } = useStalls();
+  const { stalls: storedStalls, loading: stallsLoading } = useStalls();
+  const [tableApplicationsLoading, setTableApplicationsLoading] = useState(true);
+  const [reportsLoading, setReportsLoading] = useState(true);
+  const [receiptsTabLoading, setReceiptsTabLoading] = useState(true);
+  const [requestDataLoading, setRequestDataLoading] = useState(true);
+  const [announcementsLoading, setAnnouncementsLoading] = useState(true);
   const approvedStallIds = new Set(
     applications.filter((a) => a.status === "approved").map((a) => a.stallId),
   );
@@ -371,6 +379,7 @@ export function AdminDashboard() {
   }
 
   async function loadApplicationsTable() {
+    setTableApplicationsLoading(true);
     try {
       const result = await getApplicationsPage({
         status: appStatusFilter,
@@ -383,6 +392,8 @@ export function AdminDashboard() {
       setApplicationsTotal(result.total);
     } catch (error) {
       showToast(`Failed to load applications: ${error.message}`, "error");
+    } finally {
+      setTableApplicationsLoading(false);
     }
   }
 
@@ -395,14 +406,18 @@ export function AdminDashboard() {
   }, [tab, applicationsPageNum, appStatusFilter, appSortField, appSortAsc]);
 
   async function loadAnnouncements() {
+    setAnnouncementsLoading(true);
     try {
       setAnnouncements(await getAnnouncements());
     } catch (error) {
       showToast(`Failed to load announcements: ${error.message}`, "error");
+    } finally {
+      setAnnouncementsLoading(false);
     }
   }
 
   async function loadRequestData() {
+    setRequestDataLoading(true);
     const [
       violationRequestsResult,
       officerRequestsResult,
@@ -456,9 +471,11 @@ export function AdminDashboard() {
         "error",
       );
     }
+    setRequestDataLoading(false);
   }
 
   async function loadReportsData() {
+    setReportsLoading(true);
     const [
       violationsResult,
       checkRequestsResult,
@@ -527,6 +544,7 @@ export function AdminDashboard() {
         "error",
       );
     }
+    setReportsLoading(false);
   }
 
   async function handleReviewReceipt(id, status) {
@@ -559,9 +577,13 @@ export function AdminDashboard() {
       setUsers(getAllUsers());
     }
     if (tab === "receipts") {
-      void getReceipts().then(setReceiptsList).catch((error) => {
-        showToast(`Failed to load receipts: ${error.message}`, "error");
-      });
+      setReceiptsTabLoading(true);
+      void getReceipts()
+        .then(setReceiptsList)
+        .catch((error) => {
+          showToast(`Failed to load receipts: ${error.message}`, "error");
+        })
+        .finally(() => setReceiptsTabLoading(false));
     }
     if (tab === "check-requests") {
       void loadRequestData();
@@ -606,6 +628,83 @@ export function AdminDashboard() {
       );
     } catch (error) {
       showToast(`Failed to mark violation as reviewed: ${error.message}`, "error");
+    }
+  }
+
+  // Archiving never deletes the row — it just flags it so it drops out of
+  // this list (the server enforces it's a decided/closed record first) while
+  // staying fully intact and catalogued on the Archive page. Tracked by id
+  // (not a single boolean) so archiving one row only spins that row's own
+  // button, not every Archive button on the page.
+  const [archivingIds, setArchivingIds] = useState(new Set());
+
+  function markArchiving(id, isArchiving) {
+    setArchivingIds((prev) => {
+      const next = new Set(prev);
+      if (isArchiving) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  async function handleArchiveApplication(app) {
+    markArchiving(app.id, true);
+    try {
+      await archiveRecord({
+        type: "application",
+        title: `${app.businessName} — ${app.stallName}`,
+        description: `Application by ${app.applicantName} for ${app.stallName}. Status: ${app.status}.`,
+        originalId: app.id,
+        originalData: app,
+        reason: app.adminRemarks || "",
+        canRestore: false,
+      });
+      showToast("Application archived.", "success");
+      await loadApplicationsTable();
+    } catch (error) {
+      showToast(`Failed to archive application: ${error.message}`, "error");
+    } finally {
+      markArchiving(app.id, false);
+    }
+  }
+
+  async function handleArchiveViolation(v) {
+    markArchiving(v.id, true);
+    try {
+      await archiveRecord({
+        type: "violation",
+        title: `${v.category} — ${v.stallName}`,
+        description: `Violation against ${v.vendorName} at ${v.stallName}. Status: ${v.status}.`,
+        originalId: v.id,
+        originalData: v,
+        reason: v.remarks || "",
+        canRestore: false,
+      });
+      showToast("Violation archived.", "success");
+      setViolationsList((prev) => prev.filter((item) => item.id !== v.id));
+    } catch (error) {
+      showToast(`Failed to archive violation: ${error.message}`, "error");
+      markArchiving(v.id, false);
+    }
+  }
+
+  async function handleArchiveCheckRequest(r) {
+    markArchiving(r.id, true);
+    try {
+      await archiveRecord({
+        type: "check_request",
+        title: `Inspection — ${r.stallName}`,
+        description: `Inspection at ${r.stallName}, requested by ${r.requestedByName}, completed by ${r.assignedToName ?? "—"}.`,
+        originalId: r.id,
+        originalData: r,
+        reason: r.completionSummary || "",
+        canRestore: false,
+      });
+      showToast("Inspection report archived.", "success");
+      setMapRequests((prev) => prev.filter((item) => item.id !== r.id));
+    } catch (error) {
+      showToast(`Failed to archive inspection report: ${error.message}`, "error");
+      markArchiving(r.id, false);
     }
   }
 
@@ -840,19 +939,32 @@ export function AdminDashboard() {
 
       <div className={`p-6 space-y-5 ${tab === "stalls" ? "!p-0" : ""}`}>
         {tab === "receipts" && (
-          <PaymentReceiptsPanel
-            receipts={receiptsList}
-            search={reportSearch}
-            onSearchChange={setReportSearch}
-            statusFilter={reportStatusFilter}
-            onStatusFilterChange={setReportStatusFilter}
-            onReview={handleReviewReceipt}
-          />
+          receiptsTabLoading ? (
+            <div className="bg-white rounded-2xl border border-gray-200 py-20 flex flex-col items-center gap-3">
+              <div className="w-8 h-8 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+              <p className="text-sm text-gray-400">Loading receipts…</p>
+            </div>
+          ) : (
+            <PaymentReceiptsPanel
+              receipts={receiptsList}
+              search={reportSearch}
+              onSearchChange={setReportSearch}
+              statusFilter={reportStatusFilter}
+              onStatusFilterChange={setReportStatusFilter}
+              onReview={handleReviewReceipt}
+            />
+          )
         )}
         {tab === "renewals" && <ContractRenewalsPanel />}
 
         {/* Dashboard */}
         {tab === "dashboard" && (
+          applicationsLoading || stallsLoading ? (
+            <div className="bg-white rounded-2xl border border-gray-200 py-20 flex flex-col items-center gap-3">
+              <div className="w-8 h-8 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+              <p className="text-sm text-gray-400">Loading dashboard…</p>
+            </div>
+          ) : (
           <>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow">
@@ -1207,6 +1319,7 @@ export function AdminDashboard() {
               )}
             </div>
           </>
+          )
         )}
 
         {/* Stalls */}
@@ -1279,7 +1392,12 @@ export function AdminDashboard() {
                 </span>
               </div>
 
-              {!applicationsLoading && tableApplications.length === 0 ? (
+              {tableApplicationsLoading ? (
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center py-20">
+                  <div className="w-8 h-8 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin mb-3" />
+                  <p className="text-sm text-gray-400">Loading applications…</p>
+                </div>
+              ) : tableApplications.length === 0 ? (
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center py-20 text-center">
                   <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                     <FileText className="w-8 h-8 text-gray-400" />
@@ -1409,6 +1527,24 @@ export function AdminDashboard() {
                                     className="flex items-center gap-1 px-2.5 py-1.5 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-lg text-xs font-medium"
                                   >
                                     <Printer className="w-3 h-3" /> Contract
+                                  </button>
+                                )}
+                                {app.status === "rejected" && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleArchiveApplication(app);
+                                    }}
+                                    disabled={archivingIds.has(app.id)}
+                                    className="flex items-center gap-1 px-2.5 py-1.5 bg-gray-100 text-gray-600 rounded-lg text-xs font-medium hover:bg-gray-200 transition-colors disabled:opacity-60"
+                                    title="Archive"
+                                  >
+                                    {archivingIds.has(app.id) ? (
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    ) : (
+                                      <Archive className="w-3.5 h-3.5" />
+                                    )}
+                                    {archivingIds.has(app.id) ? "Archiving…" : "Archive"}
                                   </button>
                                 )}
                               </div>
@@ -1806,7 +1942,12 @@ export function AdminDashboard() {
             )}
 
             {/* Announcements List */}
-            {announcements.length === 0 ? (
+            {announcementsLoading ? (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-16 flex flex-col items-center gap-3">
+                <div className="w-8 h-8 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+                <p className="text-sm text-gray-400">Loading announcements…</p>
+              </div>
+            ) : announcements.length === 0 ? (
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-16 text-center">
                 <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                   <Megaphone className="w-8 h-8 text-gray-400" />
@@ -1992,7 +2133,12 @@ export function AdminDashboard() {
                       .includes(reportSearch.toLowerCase());
                   return matchStatus && matchSearch;
                 });
-                return filtered.length === 0 ? (
+                return reportsLoading ? (
+                  <div className="bg-white rounded-2xl border border-gray-200 p-10 flex flex-col items-center gap-3">
+                    <div className="w-7 h-7 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+                    <p className="text-sm text-gray-400">Loading violation reports…</p>
+                  </div>
+                ) : filtered.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center">
                     <AlertTriangle className="w-10 h-10 text-gray-200 mx-auto mb-3" />
                     <p className="text-sm text-gray-400">
@@ -2064,6 +2210,26 @@ export function AdminDashboard() {
                               <p className="text-xs text-gray-600 mt-1.5 truncate">
                                 {v.description}
                               </p>
+                              {(v.status === "resolved" || v.status === "dismissed") && (
+                                <div className="mt-2 flex justify-end">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleArchiveViolation(v);
+                                    }}
+                                    disabled={archivingIds.has(v.id)}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-semibold rounded-lg transition-colors disabled:opacity-60"
+                                    title="Archive"
+                                  >
+                                    {archivingIds.has(v.id) ? (
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    ) : (
+                                      <Archive className="w-3.5 h-3.5" />
+                                    )}
+                                    {archivingIds.has(v.id) ? "Archiving…" : "Archive"}
+                                  </button>
+                                </div>
+                              )}
                             </div>
                             <span className="text-gray-400 text-xs flex-shrink-0">
                               {isExpanded ? "▲" : "▼"}
@@ -2123,7 +2289,7 @@ export function AdminDashboard() {
                               </div>
                             </div>
                             {v.status === "reviewed" && (
-                              <div className="px-5 pb-4 flex justify-end">
+                              <div className="px-5 pb-4 flex justify-end gap-2">
                                 <button
                                   onClick={() => {
                                     setSelectedStallForRequest({ id: v.stallId, stall_name: v.stallName });
@@ -2165,7 +2331,12 @@ export function AdminDashboard() {
                     r.reason.toLowerCase().includes(reportSearch.toLowerCase());
                   return hasReport && matchSearch;
                 });
-                return completedReqs.length === 0 ? (
+                return reportsLoading ? (
+                  <div className="bg-white rounded-2xl border border-gray-200 p-10 flex flex-col items-center gap-3">
+                    <div className="w-7 h-7 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+                    <p className="text-sm text-gray-400">Loading inspection reports…</p>
+                  </div>
+                ) : completedReqs.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center">
                     <FileText className="w-10 h-10 text-gray-200 mx-auto mb-3" />
                     <p className="text-sm text-gray-400">
@@ -2239,6 +2410,24 @@ export function AdminDashboard() {
                                 <span className="font-medium">Reason:</span>{" "}
                                 {r.reason}
                               </p>
+                              <div className="mt-2 flex justify-end">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleArchiveCheckRequest(r);
+                                  }}
+                                  disabled={archivingIds.has(r.id)}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-semibold rounded-lg transition-colors disabled:opacity-60"
+                                  title="Archive"
+                                >
+                                  {archivingIds.has(r.id) ? (
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  ) : (
+                                    <Archive className="w-3.5 h-3.5" />
+                                  )}
+                                  {archivingIds.has(r.id) ? "Archiving…" : "Archive"}
+                                </button>
+                              </div>
                             </div>
                             <span className="text-gray-400 text-xs flex-shrink-0">
                               {isExpanded ? "▲" : "▼"}
@@ -2310,7 +2499,12 @@ export function AdminDashboard() {
             {/* ── Termination Requests ── */}
             {reportSubTab === "terminations" && (
               <div className="space-y-3">
-                {terminationsList.length === 0 ? (
+                {reportsLoading ? (
+                  <div className="bg-white rounded-2xl border border-gray-200 p-10 flex flex-col items-center gap-3">
+                    <div className="w-7 h-7 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+                    <p className="text-sm text-gray-400">Loading termination requests…</p>
+                  </div>
+                ) : terminationsList.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center">
                     <AlertTriangle className="w-10 h-10 text-gray-200 mx-auto mb-3" />
                     <p className="text-sm text-gray-400">
@@ -2383,6 +2577,19 @@ export function AdminDashboard() {
                                 {t.reason}
                               </p>
                             )}
+                            {t.type === "account" && t.activeStalls?.length > 0 && (
+                              <p className="text-xs text-amber-700 mt-2 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 leading-relaxed">
+                                <span className="font-medium">
+                                  Still holds {t.activeStalls.length > 1 ? `${t.activeStalls.length} stalls` : "a stall"}:
+                                </span>{" "}
+                                {t.activeStalls.map((s, i) => (
+                                  <span key={s.stallId}>
+                                    {i > 0 && ", "}
+                                    {s.stallName} (due {formatDate(s.contractEnd)})
+                                  </span>
+                                ))}
+                              </p>
+                            )}
                             {isPending && (
                               <div className="flex gap-2 mt-3">
                                 <button
@@ -2438,7 +2645,12 @@ export function AdminDashboard() {
                       .toLowerCase()
                       .includes(reportSearch.toLowerCase()),
                 );
-                return filtered.length === 0 ? (
+                return reportsLoading ? (
+                  <div className="bg-white rounded-2xl border border-gray-200 p-10 flex flex-col items-center gap-3">
+                    <div className="w-7 h-7 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+                    <p className="text-sm text-gray-400">Loading receipts…</p>
+                  </div>
+                ) : filtered.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center">
                     <ReceiptIcon className="w-10 h-10 text-gray-200 mx-auto mb-3" />
                     <p className="text-sm text-gray-400">
@@ -2573,7 +2785,12 @@ export function AdminDashboard() {
               </button>
             </div>
 
-            {checkRequests.length === 0 && mapRequests.length === 0 ? (
+            {requestDataLoading ? (
+              <div className="bg-white rounded-2xl border border-gray-200 p-8 flex flex-col items-center gap-3">
+                <div className="w-7 h-7 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+                <p className="text-sm text-gray-400">Loading requests…</p>
+              </div>
+            ) : checkRequests.length === 0 && mapRequests.length === 0 ? (
               <div className="bg-white rounded-2xl border border-gray-200 p-8 text-center">
                 <Search className="w-10 h-10 text-gray-300 mx-auto mb-3" />
                 <p className="text-sm text-gray-500">No requests sent yet</p>

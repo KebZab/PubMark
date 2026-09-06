@@ -7,6 +7,7 @@ import { listUsers } from "../services/api";
 import { getViolations } from "../components/violationsStore";
 import { DashboardLayout } from "../components/DashboardLayout";
 import { showToast } from "../components/Toast";
+import { TablePagination } from "../components/ui/TablePagination";
 
 const TEAL = "#14B8A6";
 const GREEN = "#10b981";
@@ -154,28 +155,41 @@ export function Analytics() {
   const session = getSession();
   const [period, setPeriod] = useState("6m");
   const [violations, setViolations] = useState([]);
+  const [summaryPage, setSummaryPage] = useState(1);
+  const SUMMARY_PAGE_SIZE = 10;
 
-  const { applications } = useApplications();
-  const { stalls } = useStalls();
+  const { applications, loading: applicationsLoading } = useApplications();
+  const { stalls, loading: stallsLoading } = useStalls();
   // Was reading a browser localStorage cache left over from before user
   // accounts moved to the API — empty in every real browser, which is why
   // "Total Users" and "Users by Role" always showed zero. Real data, admin-only.
   const [users, setUsers] = useState([]);
+  const [usersLoading, setUsersLoading] = useState(true);
+  const [violationsLoading, setViolationsLoading] = useState(true);
 
   useEffect(() => {
-    void getViolations()
+    // Analytics is a historical view, so archived (resolved/dismissed and
+    // since archived) violations are included too — a true "Total
+    // Violations" count, not just what's still on the working list.
+    setViolationsLoading(true);
+    void getViolations({ includeArchived: true })
       .then(setViolations)
       .catch((error) => {
         showToast(`Failed to load analytics violations: ${error.message}`, "error");
         setViolations([]);
-      });
+      })
+      .finally(() => setViolationsLoading(false));
+    setUsersLoading(true);
     void listUsers()
       .then((r) => setUsers(r.users ?? []))
       .catch((error) => {
         showToast(`Failed to load analytics users: ${error.message}`, "error");
         setUsers([]);
-      });
+      })
+      .finally(() => setUsersLoading(false));
   }, []);
+
+  const analyticsLoading = applicationsLoading || stallsLoading || usersLoading || violationsLoading;
 
   const monthCount = period === "6m" ? 6 : 12;
 
@@ -214,18 +228,46 @@ export function Analytics() {
     [applications],
   );
 
+  // `stalls.status` is never actually updated when an application is
+  // approved/rejected/terminated — real occupancy is determined the same
+  // way the rest of the app already does it, by whether a stall has an
+  // approved application. `status: "unavailable"` is the one thing that IS
+  // a real, admin-set flag (manual maintenance/closure), so that still wins.
+  const occupiedStallIds = useMemo(
+    () => new Set(applications.filter((a) => a.status === "approved").map((a) => a.stallId)),
+    [applications],
+  );
+
   const stallStatusData = useMemo(
     () =>
       [
-        { name: "Occupied", value: stalls.filter((s) => s.status === "occupied").length },
-        { name: "Vacant", value: stalls.filter((s) => s.status === "vacant").length },
+        {
+          name: "Occupied",
+          value: stalls.filter((s) => s.status !== "unavailable" && occupiedStallIds.has(s.id)).length,
+        },
+        {
+          name: "Vacant",
+          value: stalls.filter((s) => s.status !== "unavailable" && !occupiedStallIds.has(s.id)).length,
+        },
         { name: "Unavailable", value: stalls.filter((s) => s.status === "unavailable").length },
       ].filter((d) => d.value > 0),
-    [stalls],
+    [stalls, occupiedStallIds],
   );
 
   const stallColors = stallStatusData.map((d) =>
     d.name === "Occupied" ? RED : d.name === "Vacant" ? GREEN : "#9ca3af",
+  );
+
+  const sortedApplications = useMemo(
+    () =>
+      [...applications].sort(
+        (a, b) => new Date(b.dateApplied).getTime() - new Date(a.dateApplied).getTime(),
+      ),
+    [applications],
+  );
+  const pagedApplications = sortedApplications.slice(
+    (summaryPage - 1) * SUMMARY_PAGE_SIZE,
+    summaryPage * SUMMARY_PAGE_SIZE,
   );
 
   const violationData = useMemo(() => {
@@ -259,7 +301,7 @@ export function Analytics() {
     },
     {
       label: "Active Stalls",
-      value: stalls.filter((s) => s.status === "occupied").length,
+      value: stalls.filter((s) => s.status !== "unavailable" && occupiedStallIds.has(s.id)).length,
       icon: Store,
       color: "text-teal-700",
       bg: "bg-teal-100",
@@ -272,8 +314,8 @@ export function Analytics() {
       bg: "bg-purple-100",
     },
     {
-      label: "Open Violations",
-      value: violations.filter((v) => v.status === "open").length,
+      label: "Total Violations",
+      value: violations.length,
       icon: AlertTriangle,
       color: "text-red-700",
       bg: "bg-red-100",
@@ -307,6 +349,14 @@ export function Analytics() {
         </div>
       }
     >
+      {analyticsLoading ? (
+        <div className="p-6 flex items-center justify-center" style={{ minHeight: 400 }}>
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-8 h-8 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+            <p className="text-sm text-gray-400">Loading analytics…</p>
+          </div>
+        </div>
+      ) : (
       <div className="p-6 space-y-6">
         {/* KPI Cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -433,7 +483,12 @@ export function Analytics() {
           <div className="px-6 py-4 border-b border-gray-100">
             <h3 className="text-sm font-semibold text-gray-900">Applications Summary</h3>
           </div>
-          <div className="overflow-x-auto">
+          {/* Fixed min-height, not stretched rows — every row stays the same
+              size on every page, whether it's a full page of 10 or a
+              partial last page. Any leftover space just stays blank below
+              the last row, which reads as more consistent/neat across
+              pagination than rows changing size depending on the count. */}
+          <div className="overflow-x-auto" style={{ minHeight: 520 }}>
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50">
@@ -451,11 +506,7 @@ export function Analytics() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {applications
-                  .sort(
-                    (a, b) => new Date(b.dateApplied).getTime() - new Date(a.dateApplied).getTime(),
-                  )
-                  .slice(0, 10)
+                {pagedApplications
                   .map((a) => (
                     <tr key={a.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-5 py-3.5 font-medium text-gray-900">{a.applicantName}</td>
@@ -495,15 +546,15 @@ export function Analytics() {
               </tbody>
             </table>
           </div>
-          {applications.length > 10 && (
-            <div className="px-5 py-3 border-t border-gray-100 text-center">
-              <p className="text-xs text-gray-400">
-                Showing 10 of {applications.length} applications
-              </p>
-            </div>
-          )}
+          <TablePagination
+            page={summaryPage}
+            pageSize={SUMMARY_PAGE_SIZE}
+            total={applications.length}
+            onPageChange={setSummaryPage}
+          />
         </div>
       </div>
+      )}
     </DashboardLayout>
   );
 }

@@ -15,6 +15,7 @@ import {
   AlertTriangle,
   Flag,
   CheckSquare,
+  Loader2,
 } from "lucide-react";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
@@ -429,6 +430,16 @@ export function UserMapDashboard() {
           )}
         </div>
       </div>
+
+      {/* ── Loading state ─────────────────────────────────── */}
+      {stallsLoading && (
+        <div className="absolute inset-0 z-[500] flex items-center justify-center bg-white/60 backdrop-blur-[1px]">
+          <div className="flex flex-col items-center gap-3">
+            <Loader2 className="w-7 h-7 text-teal-600 animate-spin" />
+            <p className="text-sm font-medium text-gray-600">Loading stalls…</p>
+          </div>
+        </div>
+      )}
 
       {/* ── Empty state ────────────────────────────────── */}
       {!stallsLoading && storedStalls.length === 0 && (

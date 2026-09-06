@@ -133,13 +133,16 @@ async function loadOfficerCheckRequests(officerId, officerName) {
 export function OfficerDashboard() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { stalls } = useStalls();
-  const { applications } = useApplications();
+  const { stalls, loading: stallsLoading } = useStalls();
+  const { applications, loading: applicationsLoading } = useApplications();
   const [session, setSession] = useState(null);
   const [activeTab, setActiveTab] = useState(
     location.pathname === "/officer/receipts" ? "receipts" : "dashboard",
   );
   const [violations, setViolations] = useState([]);
+  const [violationsLoading, setViolationsLoading] = useState(true);
+  const [checkRequestsLoading, setCheckRequestsLoading] = useState(true);
+  const [receiptsLoading, setReceiptsLoading] = useState(true);
 
   const [selectedViolation, setSelectedViolation] = useState(null);
   const [showNewForm, setShowNewForm] = useState(false);
@@ -194,11 +197,13 @@ export function OfficerDashboard() {
     : null;
 
   useEffect(() => {
+    setReceiptsLoading(true);
     void getReceipts()
       .then(setReceipts)
       .catch((error) => {
         showToast(`Failed to load receipts: ${error.message}`, "error");
-      });
+      })
+      .finally(() => setReceiptsLoading(false));
   }, [activeTab]);
 
   async function handleSubmitReceipt() {
@@ -239,17 +244,21 @@ export function OfficerDashboard() {
 
   useEffect(() => {
     const s = getSession();
+    setViolationsLoading(true);
     void getViolations()
       .then(setViolations)
       .catch((error) => {
         showToast(`Failed to load violations: ${error.message}`, "error");
-      });
+      })
+      .finally(() => setViolationsLoading(false));
     if (s) {
+      setCheckRequestsLoading(true);
       void loadOfficerCheckRequests(s.userId, s.name)
         .then(setCheckRequests)
         .catch((error) => {
           showToast(`Failed to load check requests: ${error.message}`, "error");
-        });
+        })
+        .finally(() => setCheckRequestsLoading(false));
     }
   }, [activeTab]);
 
@@ -481,24 +490,33 @@ export function OfficerDashboard() {
             </div>
 
             {/* Stats row */}
-            <div className="px-4 mt-4 grid grid-cols-4 gap-2">
-              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3 text-center">
-                <div className="text-lg font-bold text-gray-900">{stats.total}</div>
-                <div className="text-[10px] text-gray-500 mt-0.5">Total</div>
+            {violationsLoading ? (
+              <div className="px-4 mt-4">
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 py-5 flex items-center justify-center gap-2">
+                  <div className="w-4 h-4 border-2 border-gray-200 border-t-amber-500 rounded-full animate-spin" />
+                  <p className="text-xs text-gray-400">Loading stats…</p>
+                </div>
               </div>
-              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3 text-center">
-                <div className="text-lg font-bold text-red-500">{stats.open}</div>
-                <div className="text-[10px] text-gray-500 mt-0.5">Open</div>
+            ) : (
+              <div className="px-4 mt-4 grid grid-cols-4 gap-2">
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3 text-center">
+                  <div className="text-lg font-bold text-gray-900">{stats.total}</div>
+                  <div className="text-[10px] text-gray-500 mt-0.5">Total</div>
+                </div>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3 text-center">
+                  <div className="text-lg font-bold text-red-500">{stats.open}</div>
+                  <div className="text-[10px] text-gray-500 mt-0.5">Open</div>
+                </div>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3 text-center">
+                  <div className="text-lg font-bold text-emerald-500">{stats.resolved}</div>
+                  <div className="text-[10px] text-gray-500 mt-0.5">Resolved</div>
+                </div>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3 text-center">
+                  <div className="text-lg font-bold text-gray-500">{stats.dismissed}</div>
+                  <div className="text-[10px] text-gray-500 mt-0.5">Dismissed</div>
+                </div>
               </div>
-              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3 text-center">
-                <div className="text-lg font-bold text-emerald-500">{stats.resolved}</div>
-                <div className="text-[10px] text-gray-500 mt-0.5">Resolved</div>
-              </div>
-              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3 text-center">
-                <div className="text-lg font-bold text-gray-500">{stats.dismissed}</div>
-                <div className="text-[10px] text-gray-500 mt-0.5">Dismissed</div>
-              </div>
-            </div>
+            )}
 
             {/* Category breakdown */}
             <div className="px-4 mt-5">
@@ -622,7 +640,13 @@ export function OfficerDashboard() {
             </div>
 
             <div className="space-y-2.5">
-              {checkRequests
+              {checkRequestsLoading && (
+                <div className="text-center py-16">
+                  <div className="w-7 h-7 border-2 border-gray-200 border-t-amber-500 rounded-full animate-spin mx-auto mb-3" />
+                  <p className="text-sm text-gray-400">Loading requests…</p>
+                </div>
+              )}
+              {!checkRequestsLoading && checkRequests
                 .filter((r) => {
                   const matchStatus = reqStatusFilter === "all" || r.status === reqStatusFilter;
                   const matchSearch =
@@ -705,7 +729,7 @@ export function OfficerDashboard() {
                     </div>
                   );
                 })}
-              {checkRequests.filter((r) => {
+              {!checkRequestsLoading && checkRequests.filter((r) => {
                 const matchStatus = reqStatusFilter === "all" || r.status === reqStatusFilter;
                 const matchSearch =
                   !reqSearch ||
@@ -750,7 +774,12 @@ export function OfficerDashboard() {
             {/* ── Requests sub-tab ── */}
             {logSubTab === "requests" && (
               <div className="px-4 space-y-2.5">
-                {checkRequests.length === 0 ? (
+                {checkRequestsLoading ? (
+                  <div className="text-center py-16">
+                    <div className="w-7 h-7 border-2 border-gray-200 border-t-amber-500 rounded-full animate-spin mx-auto mb-3" />
+                    <p className="text-sm text-gray-400">Loading requests…</p>
+                  </div>
+                ) : checkRequests.length === 0 ? (
                   <div className="text-center py-16">
                     <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                       <ClipboardList className="w-8 h-8 text-gray-400" />
@@ -846,7 +875,12 @@ export function OfficerDashboard() {
             {/* ── Reports sub-tab ── */}
             {logSubTab === "reports" && (
               <div className="px-4 space-y-2.5">
-                {violations.length === 0 ? (
+                {violationsLoading ? (
+                  <div className="text-center py-16">
+                    <div className="w-7 h-7 border-2 border-gray-200 border-t-amber-500 rounded-full animate-spin mx-auto mb-3" />
+                    <p className="text-sm text-gray-400">Loading reports…</p>
+                  </div>
+                ) : violations.length === 0 ? (
                   <div className="text-center py-16">
                     <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                       <AlertTriangle className="w-8 h-8 text-gray-400" />
@@ -1108,10 +1142,16 @@ export function OfficerDashboard() {
             <div>
               <h3 className="text-sm font-semibold text-gray-800 mb-2">Your Submissions</h3>
               <div className="space-y-2">
-                {receipts.length === 0 && (
+                {receiptsLoading && (
+                  <div className="text-center py-8">
+                    <div className="w-6 h-6 border-2 border-gray-200 border-t-amber-500 rounded-full animate-spin mx-auto mb-2" />
+                    <p className="text-xs text-gray-400">Loading receipts…</p>
+                  </div>
+                )}
+                {!receiptsLoading && receipts.length === 0 && (
                   <p className="text-xs text-gray-400 italic px-1">No receipts submitted yet.</p>
                 )}
-                {receipts.map((r) => (
+                {!receiptsLoading && receipts.map((r) => (
                   <div
                     key={r.id}
                     className="flex items-center gap-3 p-3 bg-white rounded-xl border border-gray-200"

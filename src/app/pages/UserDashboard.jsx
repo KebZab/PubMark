@@ -28,6 +28,7 @@ import {
   Layers,
   ShieldOff,
   FileX,
+  Loader2,
 } from "lucide-react";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
@@ -131,7 +132,7 @@ const typeConfig = {
 };
 
 function MapTabContent({ navigate }) {
-  const { stalls: storedStalls } = useStalls();
+  const { stalls: storedStalls, loading: stallsLoading } = useStalls();
   const { applications } = useApplications();
   const [activeFloor, setActiveFloor] = useState("1");
 
@@ -223,7 +224,16 @@ function MapTabContent({ navigate }) {
           <MiniDrawnStallsLayer stalls={floorStalls} applications={applications} />
         </MapContainer>
 
-        {storedStalls.length === 0 && (
+        {stallsLoading && (
+          <div className="absolute inset-0 z-[500] flex items-center justify-center bg-white/60 backdrop-blur-[1px]">
+            <div className="flex flex-col items-center gap-2">
+              <Loader2 className="w-5 h-5 text-teal-600 animate-spin" />
+              <p className="text-[11px] font-medium text-gray-600">Loading stalls…</p>
+            </div>
+          </div>
+        )}
+
+        {!stallsLoading && storedStalls.length === 0 && (
           <div className="absolute inset-0 z-[500] flex items-center justify-center pointer-events-none">
             <div className="bg-white/90 backdrop-blur-sm rounded-xl px-4 py-3 shadow border border-gray-100 text-center">
               <p className="text-xs font-semibold text-gray-600">No stalls mapped yet</p>
@@ -1197,20 +1207,7 @@ export function UserDashboard() {
                   <p className="text-xs font-semibold text-red-700">Danger Zone</p>
                 </div>
                 <div className="p-4">
-                  {stats.approved > 0 ? (
-                    <div className="flex items-start gap-3">
-                      <div className="w-9 h-9 bg-amber-100 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5">
-                        <ShieldOff className="w-4 h-4 text-amber-600" />
-                      </div>
-                      <div className="flex-1">
-                        <p className="text-sm font-semibold text-gray-900">Terminate Account</p>
-                        <p className="text-xs text-gray-500 mt-0.5 leading-snug">
-                          You currently hold an active stall. Transfer or terminate that contract
-                          first, then you can request account closure.
-                        </p>
-                      </div>
-                    </div>
-                  ) : !terminateAccountConfirm ? (
+                  {!terminateAccountConfirm ? (
                     <div className="flex items-start gap-3">
                       <div className="w-9 h-9 bg-red-100 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5">
                         <ShieldOff className="w-4 h-4 text-red-600" />

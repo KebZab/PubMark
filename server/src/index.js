@@ -166,11 +166,26 @@ function setSession(res, profile) {
 }
 // Accepts either an Authorization: Bearer token (mobile) or the session cookie
 // (web). React Native does not persist cookies reliably, hence the header path.
-function requireAuth(req, res, next) {
+//
+// Also checks `is_archived` on every request (not just at login) — a vendor
+// whose account gets terminated while they're still signed in is cut off on
+// their very next action instead of staying logged in until their token's
+// natural 8h expiry. `code: "account_terminated"` lets the client tell this
+// apart from an ordinary expired/invalid session and force a clean logout.
+async function requireAuth(req, res, next) {
   const bearerToken = req.headers.authorization?.match(/^Bearer (.+)$/i)?.[1];
   const cookieToken = req.headers.cookie?.match(/(?:^|; )pubmark_session=([^;]+)/)?.[1];
-  try { req.auth = jwt.verify(bearerToken || cookieToken || "", jwtSecret); next(); }
-  catch { res.status(401).json({ message: "Sign in is required." }); }
+  let auth;
+  try { auth = jwt.verify(bearerToken || cookieToken || "", jwtSecret); }
+  catch { return res.status(401).json({ message: "Sign in is required." }); }
+  try {
+    const { rows } = await db.query("SELECT is_archived FROM profiles WHERE id = $1", [auth.sub]);
+    if (!rows[0] || rows[0].is_archived) {
+      return res.status(401).json({ message: "This account has been terminated.", code: "account_terminated" });
+    }
+  } catch (error) { return next(error); }
+  req.auth = auth;
+  next();
 }
 function profile(row) { return { id: row.id, email: row.email, name: row.name, role: row.role, address: row.address, phone: row.phone, department: row.department, createdAt: row.created_at }; }
 function requireRole(...roles) { return (req, res, next) => { if (!roles.includes(req.auth?.role)) return res.status(403).json({ message: "Access denied." }); next(); }; }
@@ -300,11 +315,12 @@ function mapViolationRequestRow(row) {
   };
 }
 
-async function listCheckRequestsInternal(officerId = null) {
+async function listCheckRequestsInternal(officerId = null, { includeArchived = false } = {}) {
   const params = [];
-  const where = officerId
-    ? (params.push(officerId), "WHERE cr.assigned_to = $1 OR cr.assigned_to IS NULL")
-    : "";
+  const conditions = [];
+  if (officerId) { params.push(officerId); conditions.push(`(cr.assigned_to = $${params.length} OR cr.assigned_to IS NULL)`); }
+  if (!includeArchived) conditions.push("cr.is_archived = false");
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const { rows } = await db.query(`
     SELECT
       cr.id, cr.stall_id, cr.requested_by, cr.assigned_to, cr.priority, cr.reason, cr.category, cr.notes,
@@ -460,6 +476,10 @@ function mapTerminationRequestRow(row) {
     status: row.status,
     createdAt: row.created_at,
     resolvedAt: row.resolved_at,
+    // Only populated for type "account" — the stall(s), if any, the vendor
+    // still actively holds at the moment of the request, so an admin can see
+    // this before approving (which will end all of them as a side effect).
+    activeStalls: row.active_stalls ?? [],
   };
 }
 
@@ -468,11 +488,17 @@ function mapTerminationRequestRow(row) {
  *   vendor's own violations. Evidence photos are only signed for rows that
  *   come back, so this filter is what keeps one vendor from opening another
  *   vendor's evidence.
+ * @param {{includeArchived?: boolean}} [options] Staff views (vendorId null)
+ *   exclude archived violations by default, so an admin archiving a closed-
+ *   out violation makes it disappear from the working list; a vendor still
+ *   sees their own full history regardless.
  */
-async function listViolationsInternal(vendorId = null) {
+async function listViolationsInternal(vendorId = null, { includeArchived = !!vendorId } = {}) {
   const params = [];
-  let where = "";
-  if (vendorId) { params.push(vendorId); where = `WHERE v.vendor_id = $${params.length}`; }
+  const conditions = [];
+  if (vendorId) { params.push(vendorId); conditions.push(`v.vendor_id = $${params.length}`); }
+  if (!includeArchived) conditions.push("v.is_archived = false");
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const { rows } = await db.query(`
     SELECT
       v.id, v.stall_id, v.vendor_id, v.officer_id, v.category, v.description, v.status, v.remarks, v.created_at, v.resolved_at,
@@ -496,10 +522,17 @@ async function listTerminationRequestsInternal() {
       tr.id, tr.type, tr.vendor_id, tr.stall_id, tr.reason, tr.status, tr.created_at, tr.resolved_at,
       vp.name AS vendor_name,
       vp.email AS vendor_email,
-      s.stall_name
+      s.stall_name,
+      active.stalls AS active_stalls
     FROM termination_requests tr
     LEFT JOIN profiles vp ON vp.id = tr.vendor_id
     LEFT JOIN stalls s ON s.id = tr.stall_id
+    LEFT JOIN LATERAL (
+      SELECT json_agg(json_build_object('stallId', a.stall_id, 'stallName', st.stall_name, 'contractEnd', a.contract_end) ORDER BY a.contract_end) AS stalls
+      FROM applications a
+      JOIN stalls st ON st.id = a.stall_id
+      WHERE a.user_id = tr.vendor_id AND a.status = 'approved'
+    ) active ON tr.type = 'account'
     ORDER BY tr.created_at DESC
   `);
   return rows.map(mapTerminationRequestRow);
@@ -609,7 +642,7 @@ app.post("/api/auth/login", async (req, res, next) => {
     if (!user || !(await bcrypt.compare(String(req.body.password || ""), user.password_hash))) return res.status(401).json({ message: "Invalid email or password." });
     // Checked only after the password is confirmed correct, so a wrong
     // guess never reveals whether an account was terminated.
-    if (user.is_archived) return res.status(403).json({ message: "This account has been terminated. Contact the market office if you believe this is a mistake." });
+    if (user.is_archived) return res.status(403).json({ message: "This account has been terminated.", code: "account_terminated" });
     const result = profile(user); const token = setSession(res, result); res.json({ profile: result, token });
   } catch (error) { next(error); }
 });
@@ -821,7 +854,7 @@ app.post("/api/check-requests", requireAuth, requireRole("admin", "super_admin")
         [crypto.randomUUID(), id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
       );
     }
-    res.status(201).json({ request: (await listCheckRequestsInternal()).find((item) => item.id === id) });
+    res.status(201).json({ request: (await listCheckRequestsInternal(null, { includeArchived: true })).find((item) => item.id === id) });
   } catch (error) { next(error); }
 });
 
@@ -909,7 +942,7 @@ app.patch("/api/check-requests/:id", requireAuth, requireRole("admin", "super_ad
       }
     }
 
-    const updated = (await listCheckRequestsInternal()).find((item) => item.id === req.params.id);
+    const updated = (await listCheckRequestsInternal(null, { includeArchived: true })).find((item) => item.id === req.params.id);
     if (!updated) return res.status(404).json({ message: "Check request not found." });
     res.json({ request: updated });
   } catch (error) { next(error); }
@@ -1036,7 +1069,11 @@ app.patch("/api/violation-requests/:id", requireAuth, requireRole("admin", "supe
 app.get("/api/violations", requireAuth, requireRole("admin", "super_admin", "officer", "vendor"), async (req, res, next) => {
   try {
     const vendorId = req.auth.role === "vendor" ? req.auth.sub : null;
-    res.json({ violations: await listViolationsInternal(vendorId) });
+    // Staff working lists (Reports & Requests) want archived violations
+    // hidden by default; a true historical count (e.g. Analytics) needs to
+    // opt back in explicitly, since archiving never deletes the row.
+    const includeArchived = vendorId ? true : req.query.includeArchived === "true";
+    res.json({ violations: await listViolationsInternal(vendorId, { includeArchived }) });
   } catch (error) { next(error); }
 });
 
@@ -1080,7 +1117,7 @@ app.post("/api/violations", requireAuth, requireRole("admin", "super_admin", "of
         [crypto.randomUUID(), id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
       );
     }
-    res.status(201).json({ violation: (await listViolationsInternal()).find((item) => item.id === id) });
+    res.status(201).json({ violation: (await listViolationsInternal(null, { includeArchived: true })).find((item) => item.id === id) });
   } catch (error) { next(error); }
 });
 
@@ -1118,7 +1155,7 @@ app.patch("/api/violations/:id", requireAuth, requireRole("admin", "super_admin"
         );
       }
     }
-    const updated = (await listViolationsInternal()).find((item) => item.id === req.params.id);
+    const updated = (await listViolationsInternal(null, { includeArchived: true })).find((item) => item.id === req.params.id);
     if (!updated) return res.status(404).json({ message: "Violation not found." });
     res.json({ violation: updated });
   } catch (error) { next(error); }
@@ -1141,18 +1178,6 @@ app.post("/api/termination-requests", requireAuth, requireRole("admin", "super_a
     const resolvedAt = req.body.resolvedAt ? new Date(req.body.resolvedAt) : (status === "pending" ? null : new Date());
     if (!["account", "contract"].includes(type) || !reason) return res.status(400).json({ message: "Type and reason are required." });
     if (!["pending", "approved", "rejected"].includes(status)) return res.status(400).json({ message: "Invalid status." });
-    // Closing the whole account is meant for someone with nothing left to
-    // hand off — a vendor holding a stall has to transfer or terminate that
-    // contract first, rather than have it silently end as a side effect.
-    if (type === "account") {
-      const { rows: activeStalls } = await db.query(
-        "SELECT count(*)::int AS count FROM applications WHERE user_id = $1 AND status = 'approved'",
-        [vendorId]
-      );
-      if (activeStalls[0].count > 0) {
-        return res.status(409).json({ message: "You currently hold an active stall. Transfer or terminate your stall contract first, then request account closure." });
-      }
-    }
     const id = crypto.randomUUID();
     await db.query(
       "INSERT INTO termination_requests (id, type, vendor_id, stall_id, reason, status, created_at, resolved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
@@ -1531,6 +1556,10 @@ app.get("/api/applications", requireAuth, async (req, res, next) => {
     if (req.auth.role === "vendor") {
       values.push(req.auth.sub);
       conditions.push(`a.user_id = $${values.length}`);
+    } else {
+      // Staff views only — a vendor should still see their own history even
+      // after an admin archives one of their decided applications.
+      conditions.push(`a.is_archived = false`);
     }
     if (status) { values.push(status); conditions.push(`a.status = $${values.length}`); }
     if (search) {
@@ -1959,18 +1988,46 @@ app.get("/api/archive", requireAuth, requireRole("admin", "super_admin"), async 
   } catch (error) { next(error); }
 });
 
+// Archiving a completed application or violation never deletes it — the row
+// stays exactly as it is, just flagged with `is_archived`, which is what
+// makes it disappear from the working admin lists (GET /api/applications,
+// GET /api/violations) while remaining fully intact in the database and
+// now also catalogued here. Only records that are actually done (a decided
+// application, a closed-out violation) can be archived this way, so nothing
+// still in progress can vanish from view by mistake.
 app.post("/api/archive", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
+  const conn = await db.connect();
   try {
     const type = String(req.body.type || "").trim();
     const title = String(req.body.title || "").trim();
     const originalId = String(req.body.originalId || "").trim();
-    if (!["application", "vendor", "stall", "violation"].includes(type)) {
+    if (!["application", "vendor", "stall", "violation", "check_request"].includes(type)) {
+      conn.release();
       return res.status(400).json({ message: "Invalid archive type." });
     }
-    if (!title || !originalId) return res.status(400).json({ message: "Title and original record are required." });
+    if (!title || !originalId) { conn.release(); return res.status(400).json({ message: "Title and original record are required." }); }
+
+    await conn.query("BEGIN");
+
+    if (type === "application") {
+      const { rows } = await conn.query("SELECT status FROM applications WHERE id = $1 FOR UPDATE", [originalId]);
+      if (!rows[0]) { await conn.query("ROLLBACK"); return res.status(404).json({ message: "Application not found." }); }
+      if (rows[0].status !== "rejected") { await conn.query("ROLLBACK"); return res.status(409).json({ message: "Only a decided (rejected/terminated) application can be archived." }); }
+      await conn.query("UPDATE applications SET is_archived = true WHERE id = $1", [originalId]);
+    } else if (type === "violation") {
+      const { rows } = await conn.query("SELECT status FROM violations WHERE id = $1 FOR UPDATE", [originalId]);
+      if (!rows[0]) { await conn.query("ROLLBACK"); return res.status(404).json({ message: "Violation not found." }); }
+      if (!["resolved", "dismissed"].includes(rows[0].status)) { await conn.query("ROLLBACK"); return res.status(409).json({ message: "Only a resolved or dismissed violation can be archived." }); }
+      await conn.query("UPDATE violations SET is_archived = true WHERE id = $1", [originalId]);
+    } else if (type === "check_request") {
+      const { rows } = await conn.query("SELECT status FROM check_requests WHERE id = $1 FOR UPDATE", [originalId]);
+      if (!rows[0]) { await conn.query("ROLLBACK"); return res.status(404).json({ message: "Inspection request not found." }); }
+      if (rows[0].status !== "completed") { await conn.query("ROLLBACK"); return res.status(409).json({ message: "Only a completed inspection can be archived." }); }
+      await conn.query("UPDATE check_requests SET is_archived = true WHERE id = $1", [originalId]);
+    }
 
     const id = crypto.randomUUID();
-    await db.query(
+    await conn.query(
       `INSERT INTO archive (id, type, title, description, original_id, original_data, archived_by, reason, can_restore)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
@@ -1985,9 +2042,11 @@ app.post("/api/archive", requireAuth, requireRole("admin", "super_admin"), async
         req.body.canRestore !== false,
       ]
     );
+    await conn.query("COMMIT");
+
     const { rows } = await db.query(`${ARCHIVE_SELECT} WHERE a.id = $1`, [id]);
     res.status(201).json({ record: mapArchiveRow(rows[0]) });
-  } catch (error) { next(error); }
+  } catch (error) { await conn.query("ROLLBACK"); next(error); } finally { conn.release(); }
 });
 
 app.delete("/api/archive/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {

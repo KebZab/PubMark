@@ -1,3 +1,5 @@
+import { clearSession } from "../components/authStorage";
+
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "");
 // A configured URL pointing at "localhost" only works on the machine running
 // the backend. When the app is loaded from another device on the LAN (via
@@ -25,6 +27,16 @@ async function apiFetch(path, init = {}) {
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
+    // The server flags EVERY authenticated request this way once an admin
+    // approves closing an account, not just login — so a vendor who's still
+    // signed in gets kicked out on their very next action instead of staying
+    // in until the session cookie's normal 8h expiry.
+    if (error.code === "account_terminated") {
+      clearSession();
+      if (typeof window !== "undefined" && window.location.pathname !== "/") {
+        window.location.href = "/";
+      }
+    }
     throw new Error(error.message || "Unable to complete the request.");
   }
   return response.json();

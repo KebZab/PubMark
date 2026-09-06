@@ -278,20 +278,7 @@ export default function HomeScreen({ navigation }) {
             <View className="mt-8">
               <Text className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Account Termination</Text>
               <View className="overflow-hidden rounded-2xl border border-red-100 bg-white">
-                {stats.approved > 0 ? (
-                  <View className="flex-row items-center gap-3 px-4 py-4">
-                    <View className="h-9 w-9 items-center justify-center rounded-full bg-amber-50">
-                      <Ionicons name="close-circle-outline" size={18} color="#d97706" />
-                    </View>
-                    <View className="flex-1">
-                      <Text className="text-sm font-semibold text-gray-900">Terminate Account</Text>
-                      <Text className="mt-0.5 text-xs text-gray-500">
-                        You hold an active stall — transfer or terminate that contract first, then
-                        you can request account closure.
-                      </Text>
-                    </View>
-                  </View>
-                ) : !terminateConfirm ? (
+                {!terminateConfirm ? (
                   <Pressable
                     onPress={() => setTerminateConfirm(true)}
                     className="flex-row items-center gap-3 px-4 py-4 active:bg-red-50"
