@@ -1197,7 +1197,20 @@ export function UserDashboard() {
                   <p className="text-xs font-semibold text-red-700">Danger Zone</p>
                 </div>
                 <div className="p-4">
-                  {!terminateAccountConfirm ? (
+                  {stats.approved > 0 ? (
+                    <div className="flex items-start gap-3">
+                      <div className="w-9 h-9 bg-amber-100 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5">
+                        <ShieldOff className="w-4 h-4 text-amber-600" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-semibold text-gray-900">Terminate Account</p>
+                        <p className="text-xs text-gray-500 mt-0.5 leading-snug">
+                          You currently hold an active stall. Transfer or terminate that contract
+                          first, then you can request account closure.
+                        </p>
+                      </div>
+                    </div>
+                  ) : !terminateAccountConfirm ? (
                     <div className="flex items-start gap-3">
                       <div className="w-9 h-9 bg-red-100 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5">
                         <ShieldOff className="w-4 h-4 text-red-600" />

@@ -2377,7 +2377,7 @@ export function AdminDashboard() {
                                 </span>
                               </div>
                             </div>
-                            {t.reason && (
+                            {t.type === "contract" && t.reason && (
                               <p className="text-xs text-gray-600 mt-2 bg-gray-50 rounded-lg px-3 py-2 leading-relaxed">
                                 <span className="font-medium">Reason:</span>{" "}
                                 {t.reason}
@@ -3047,7 +3047,7 @@ export function AdminDashboard() {
             <p className="text-sm text-gray-500 text-center mb-6">
               {terminationActionConfirm.action === "approved"
                 ? terminationActionConfirm.type === "account"
-                  ? `This will archive ${terminationActionConfirm.name}'s account, block them from logging in, and reject any pending or approved stall applications they have. This action cannot be undone.`
+                  ? `This will archive ${terminationActionConfirm.name}'s account and close out their stall applications.`
                   : `This will approve the termination request submitted by ${terminationActionConfirm.name}. This action cannot be undone.`
                 : `The termination request from ${terminationActionConfirm.name} will be rejected and they will be notified.`}
             </p>

@@ -1141,6 +1141,18 @@ app.post("/api/termination-requests", requireAuth, requireRole("admin", "super_a
     const resolvedAt = req.body.resolvedAt ? new Date(req.body.resolvedAt) : (status === "pending" ? null : new Date());
     if (!["account", "contract"].includes(type) || !reason) return res.status(400).json({ message: "Type and reason are required." });
     if (!["pending", "approved", "rejected"].includes(status)) return res.status(400).json({ message: "Invalid status." });
+    // Closing the whole account is meant for someone with nothing left to
+    // hand off — a vendor holding a stall has to transfer or terminate that
+    // contract first, rather than have it silently end as a side effect.
+    if (type === "account") {
+      const { rows: activeStalls } = await db.query(
+        "SELECT count(*)::int AS count FROM applications WHERE user_id = $1 AND status = 'approved'",
+        [vendorId]
+      );
+      if (activeStalls[0].count > 0) {
+        return res.status(409).json({ message: "You currently hold an active stall. Transfer or terminate your stall contract first, then request account closure." });
+      }
+    }
     const id = crypto.randomUUID();
     await db.query(
       "INSERT INTO termination_requests (id, type, vendor_id, stall_id, reason, status, created_at, resolved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
