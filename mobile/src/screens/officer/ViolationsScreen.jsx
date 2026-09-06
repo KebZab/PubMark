@@ -17,7 +17,7 @@ import * as DocumentPicker from "expo-document-picker";
 import { readAssetForUpload, formatFileSize, DOCUMENT_PICKER_TYPES } from "../../services/fileUpload";
 import { useApiData } from "../../hooks/useApiData";
 import { createViolation, getApplications, getStalls, getViolations } from "../../services/api";
-import { Attachments, Card, EmptyState, ErrorState, LoadingState, OfficerHeader, formatDate } from "../../components/ui";
+import { Attachments, Card, EmptyState, ErrorState, LoadingState, OfficerHeader, buttonShadow, formatDate } from "../../components/ui";
 
 // Same eight categories the web officer dashboard offers.
 const CATEGORIES = [
@@ -494,6 +494,7 @@ export default function ViolationsScreen() {
             <Pressable
               onPress={submitReport}
               disabled={submitting}
+              style={buttonShadow("#f59e0b")}
               className={`mt-6 items-center rounded-xl py-4 ${submitting ? "bg-amber-500/50" : "bg-amber-500"}`}
             >
               {submitting ? (

@@ -35,7 +35,10 @@ export function ErrorState({ message }) {
 
 export function EmptyState({ title, note }) {
   return (
-    <View className="mx-4 mt-4 items-center rounded-2xl border border-gray-200 bg-white px-5 py-12">
+    <View
+      className={`mx-4 mt-4 items-center rounded-2xl bg-white px-5 py-12 ${CARD_BORDER}`}
+      style={CARD_SHADOW}
+    >
       <Text className="text-sm font-semibold text-gray-700">{title}</Text>
       {note ? <Text className="mt-1.5 text-center text-xs leading-5 text-gray-400">{note}</Text> : null}
     </View>
@@ -59,8 +62,38 @@ export function StatusPill({ status }) {
   );
 }
 
+// Same soft, colorless lift the login card uses — cards read as raised off
+// the screen's gray background instead of just outlined against it.
+//
+// iOS-only: Android's `elevation` is a native compositing layer that doesn't
+// track an animated parent's opacity/transform, so combined with the tab
+// screen transition it rendered as a solid box detached from the card mid-
+// animation. iOS shadows are drawn in the same compositing pass as opacity,
+// so they don't have this bug. Android keeps a plain border for the same
+// visual definition instead.
+const IS_IOS = Platform.OS === "ios";
+const CARD_SHADOW = IS_IOS
+  ? { shadowColor: "#0f172a", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.06, shadowRadius: 12 }
+  : {};
+const CARD_BORDER = IS_IOS ? "" : "border border-gray-200";
+
 export function Card({ children, className = "" }) {
-  return <View className={`rounded-2xl border border-gray-200 bg-white ${className}`}>{children}</View>;
+  return (
+    <View className={`rounded-2xl bg-white ${CARD_BORDER} ${className}`} style={CARD_SHADOW}>
+      {children}
+    </View>
+  );
+}
+
+// Any other colored/soft shadow in the officer app (buttons, the floating
+// map panel) — same Android elevation-vs-animated-transition issue as
+// CARD_SHADOW, so iOS-only here too.
+export function iosShadow(color, { offsetY = 4, opacity = 0.25, radius = 8 } = {}) {
+  return IS_IOS ? { shadowColor: color, shadowOffset: { width: 0, height: offsetY }, shadowOpacity: opacity, shadowRadius: radius } : {};
+}
+
+export function buttonShadow(color) {
+  return iosShadow(color);
 }
 
 export function formatDate(value) {
@@ -89,25 +122,33 @@ export function OfficerHeader({ title, subtitle, right }) {
   };
 
   return (
-    <View className="border-b border-gray-200 bg-white px-5 py-4">
-      <View className="mb-2 flex-row items-center">
-        <Text className="flex-1 text-[11px] text-gray-400" numberOfLines={1}>
-          {user?.name} · Officer
+    <View
+      className={`bg-white px-5 py-4 ${IS_IOS ? "" : "border-b border-gray-200"}`}
+      style={IS_IOS ? { shadowColor: "#0f172a", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8 } : {}}
+    >
+      <View className="mb-3 flex-row items-center justify-between">
+        <Text className="text-[11px] text-gray-400" numberOfLines={1}>
+          {user?.name}
         </Text>
         <Pressable
           onPress={confirmSignOut}
           hitSlop={10}
-          className="flex-row items-center rounded-lg bg-gray-100 px-2.5 py-1.5"
+          className="flex-row items-center gap-1 rounded-full bg-red-50 px-2.5 py-1"
         >
-          <Ionicons name="log-out-outline" size={13} color="#4b5563" />
-          <Text className="ml-1 text-[11px] font-semibold text-gray-600">Sign out</Text>
+          <Ionicons name="log-out-outline" size={13} color="#dc2626" />
+          <Text className="text-[11px] font-semibold text-red-600">Sign out</Text>
         </Pressable>
       </View>
 
       <View className="flex-row items-center justify-between">
-        <View className="flex-1 pr-3">
-          <Text className="text-lg font-semibold text-gray-900">{title}</Text>
-          {subtitle ? <Text className="mt-0.5 text-xs text-gray-500">{subtitle}</Text> : null}
+        <View className="flex-1 flex-row items-center gap-2.5 pr-3">
+          <View className="h-9 w-9 items-center justify-center rounded-xl bg-amber-500">
+            <Ionicons name="shield-checkmark-outline" size={18} color="#ffffff" />
+          </View>
+          <View className="flex-1">
+            <Text className="text-lg font-semibold text-gray-900">{title}</Text>
+            {subtitle ? <Text className="mt-0.5 text-xs text-gray-500">{subtitle}</Text> : null}
+          </View>
         </View>
         {right}
       </View>

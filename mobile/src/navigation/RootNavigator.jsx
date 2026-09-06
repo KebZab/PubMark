@@ -43,6 +43,13 @@ const tabScreenOptions = {
 const officerTabScreenOptions = {
   ...tabScreenOptions,
   tabBarActiveTintColor: "#f59e0b",
+  // "shift" (slide+fade) is bottom-tabs' closest match to the slide
+  // transition the login/auth stack uses by default, so switching officer
+  // tabs feels like the same kind of screen change as signing in does.
+  // (Previously swapped to "fade" because Android `elevation` shadows used
+  // to detach into a floating box under this slide — now that those shadows
+  // are iOS-only (see ui.jsx), "shift" is safe again on Android too.)
+  animation: "shift",
 };
 
 // Each tab needs an explicit icon; without one the tab bar renders an empty box.

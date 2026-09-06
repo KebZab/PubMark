@@ -17,7 +17,7 @@ import * as DocumentPicker from "expo-document-picker";
 import { readAssetForUpload, DOCUMENT_PICKER_TYPES } from "../../services/fileUpload";
 import { useApiData } from "../../hooks/useApiData";
 import { createReceipt, getApplications, getReceipts, getStalls } from "../../services/api";
-import { Card, EmptyState, ErrorState, LoadingState, OfficerHeader, formatDate } from "../../components/ui";
+import { Card, EmptyState, ErrorState, LoadingState, OfficerHeader, buttonShadow, formatDate } from "../../components/ui";
 
 const STATUS_STYLE = {
   pending: { bg: "bg-amber-100", text: "text-amber-700", label: "Pending" },
@@ -459,6 +459,7 @@ export default function ReceiptsScreen() {
             <Pressable
               onPress={submit}
               disabled={submitting}
+              style={buttonShadow("#f59e0b")}
               className={`mt-6 items-center rounded-xl py-4 ${submitting ? "bg-amber-500/50" : "bg-amber-500"}`}
             >
               {submitting ? (

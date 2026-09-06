@@ -607,6 +607,9 @@ app.post("/api/auth/login", async (req, res, next) => {
     const { rows } = await db.query("SELECT * FROM profiles WHERE email = $1 LIMIT 1", [String(req.body.email || "").toLowerCase()]);
     const user = rows[0];
     if (!user || !(await bcrypt.compare(String(req.body.password || ""), user.password_hash))) return res.status(401).json({ message: "Invalid email or password." });
+    // Checked only after the password is confirmed correct, so a wrong
+    // guess never reveals whether an account was terminated.
+    if (user.is_archived) return res.status(403).json({ message: "This account has been terminated. Contact the market office if you believe this is a mistake." });
     const result = profile(user); const token = setSession(res, result); res.json({ profile: result, token });
   } catch (error) { next(error); }
 });
@@ -1147,18 +1150,62 @@ app.post("/api/termination-requests", requireAuth, requireRole("admin", "super_a
   } catch (error) { next(error); }
 });
 
+// Approving an "account" request archives the vendor and rejects their open
+// applications atomically — all in one transaction, so a mid-way failure
+// can't leave a vendor archived with their applications untouched (or vice
+// versa). "contract" requests are unaffected: the client still drives that
+// case with its own two calls, exactly as before.
 app.patch("/api/termination-requests/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
+  const conn = await db.connect();
   try {
     const status = String(req.body.status || "").trim();
-    if (!["pending", "approved", "rejected"].includes(status)) return res.status(400).json({ message: "Invalid status." });
-    await db.query(
+    if (!["pending", "approved", "rejected"].includes(status)) { conn.release(); return res.status(400).json({ message: "Invalid status." }); }
+
+    await conn.query("BEGIN");
+    const { rows: requestRows } = await conn.query("SELECT * FROM termination_requests WHERE id = $1 FOR UPDATE", [req.params.id]);
+    const request = requestRows[0];
+    if (!request) { await conn.query("ROLLBACK"); return res.status(404).json({ message: "Termination request not found." }); }
+
+    if (status === "approved" && request.type === "account") {
+      const { rows: vendorRows } = await conn.query("SELECT * FROM profiles WHERE id = $1", [request.vendor_id]);
+      const vendor = vendorRows[0];
+      if (vendor) {
+        const { rows: rejectedApps } = await conn.query(
+          `UPDATE applications
+           SET status = 'rejected', admin_remarks = TRIM(BOTH E'\n' FROM COALESCE(admin_remarks, '') || E'\n\n' || 'Rejected — vendor account terminated.')
+           WHERE user_id = $1 AND status IN ('pending', 'approved')
+           RETURNING id`,
+          [vendor.id]
+        );
+        const archiveId = crypto.randomUUID();
+        await conn.query(
+          "INSERT INTO archive (id, type, title, description, original_id, original_data, archived_by, reason, can_restore) VALUES ($1, 'vendor', $2, $3, $4, $5, $6, $7, false)",
+          [
+            archiveId,
+            vendor.name,
+            `${vendor.email} — account terminated; ${rejectedApps.length} application(s) rejected.`,
+            vendor.id,
+            JSON.stringify({
+              id: vendor.id, email: vendor.email, name: vendor.name, phone: vendor.phone,
+              address: vendor.address, role: vendor.role, department: vendor.department, createdAt: vendor.created_at,
+            }),
+            req.auth.sub,
+            request.reason,
+          ]
+        );
+        await conn.query("UPDATE profiles SET is_archived = true WHERE id = $1", [vendor.id]);
+      }
+    }
+
+    await conn.query(
       "UPDATE termination_requests SET status = $1, resolved_at = $2 WHERE id = $3",
       [status, status === "pending" ? null : new Date(), req.params.id]
     );
+    await conn.query("COMMIT");
+
     const updated = (await listTerminationRequestsInternal()).find((item) => item.id === req.params.id);
-    if (!updated) return res.status(404).json({ message: "Termination request not found." });
     res.json({ request: updated });
-  } catch (error) { next(error); }
+  } catch (error) { await conn.query("ROLLBACK"); next(error); } finally { conn.release(); }
 });
 
 app.get("/api/stalls", async (req, res, next) => {

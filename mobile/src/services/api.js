@@ -186,6 +186,21 @@ export async function createReceipt(input) {
   });
 }
 
+// ── Termination requests ────────────────────────────────────────────────────
+
+/**
+ * Requests closing the whole account (`type: "account"`) or ending a single
+ * stall contract (`type: "contract"`, with `stallId`) — an admin reviews and
+ * approves/rejects it, this only ever queues the request.
+ * @param {{type: "account"|"contract", stallId?: string, reason: string}} input
+ */
+export async function createTerminationRequest(input) {
+  return apiFetch("/termination-requests", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function getContractRenewals() {
   return apiFetch("/contract-renewals");
 }

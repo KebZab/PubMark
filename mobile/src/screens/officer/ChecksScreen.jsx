@@ -18,7 +18,7 @@ import * as DocumentPicker from "expo-document-picker";
 import { readAssetForUpload, formatFileSize, DOCUMENT_PICKER_TYPES } from "../../services/fileUpload";
 import { useApiData } from "../../hooks/useApiData";
 import { getCheckRequests, updateCheckRequest, createViolation } from "../../services/api";
-import { Attachments, Card, EmptyState, ErrorState, LoadingState, OfficerHeader, formatDate } from "../../components/ui";
+import { Attachments, Card, EmptyState, ErrorState, LoadingState, OfficerHeader, buttonShadow, formatDate } from "../../components/ui";
 
 const PRIORITY_STYLE = {
   urgent: { bg: "bg-red-100", text: "text-red-700" },
@@ -452,6 +452,7 @@ export default function ChecksScreen() {
             <Pressable
               onPress={submitCompletion}
               disabled={submitting}
+              style={buttonShadow("#f59e0b")}
               className={`mt-6 items-center rounded-xl py-4 ${submitting ? "bg-amber-500/50" : "bg-amber-500"}`}
             >
               {submitting ? (
@@ -578,6 +579,7 @@ export default function ChecksScreen() {
             <Pressable
               onPress={submitViolationReport}
               disabled={violationSubmitting}
+              style={buttonShadow("#ef4444")}
               className={`mt-6 items-center rounded-xl py-4 ${violationSubmitting ? "bg-red-500/50" : "bg-red-500"}`}
             >
               {violationSubmitting ? (

@@ -7,7 +7,7 @@ import * as DocumentPicker from "expo-document-picker";
 import { useApiData } from "../../hooks/useApiData";
 import { getApplications, getStalls, getViolations, createViolation } from "../../services/api";
 import { readAssetForUpload, formatFileSize, DOCUMENT_PICKER_TYPES } from "../../services/fileUpload";
-import { Card, ErrorState, LoadingState, OfficerHeader } from "../../components/ui";
+import { Card, ErrorState, LoadingState, OfficerHeader, buttonShadow, iosShadow } from "../../components/ui";
 import StallMap from "../../components/StallMap";
 import ImageViewerModal from "../../components/ImageViewerModal";
 
@@ -238,7 +238,10 @@ export default function OfficerMapScreen() {
       </View>
 
       {selected ? (
-        <View className="absolute inset-x-3 bottom-24 rounded-2xl border border-gray-200 bg-white p-4 shadow-lg">
+        <View
+          className="absolute inset-x-3 bottom-24 rounded-2xl border border-gray-200 bg-white p-4"
+          style={iosShadow("#0f172a", { offsetY: 8, opacity: 0.18, radius: 20 })}
+        >
           <View className="flex-row items-start justify-between">
             <View className="flex-1 pr-3">
               <Text className="text-base font-semibold text-gray-900">{selected.stall_name}</Text>
@@ -298,6 +301,7 @@ export default function OfficerMapScreen() {
           {selectedApp?.status === "approved" ? (
             <Pressable
               onPress={() => openReport(selected)}
+              style={buttonShadow("#f59e0b")}
               className="mt-2 flex-row items-center justify-center rounded-xl bg-amber-500 py-3"
             >
               <Ionicons name="alert-circle-outline" size={16} color="#ffffff" />
@@ -419,6 +423,7 @@ export default function OfficerMapScreen() {
             <Pressable
               onPress={submitReport}
               disabled={submitting}
+              style={buttonShadow("#f59e0b")}
               className={`mt-6 items-center rounded-xl py-4 ${submitting ? "bg-amber-500/50" : "bg-amber-500"}`}
             >
               {submitting ? (

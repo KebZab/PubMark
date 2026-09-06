@@ -2799,7 +2799,9 @@ export function SuperAdminDashboard() {
             </h3>
             <p className="text-sm text-gray-500 text-center mb-6">
               {terminationActionConfirm.action === "approved"
-                ? `This will approve the termination request from ${terminationActionConfirm.name}. This action cannot be undone.`
+                ? terminationActionConfirm.type === "account"
+                  ? `This will archive ${terminationActionConfirm.name}'s account, block them from logging in, and reject any pending or approved stall applications they have. This action cannot be undone.`
+                  : `This will approve the termination request from ${terminationActionConfirm.name}. This action cannot be undone.`
                 : `The termination request from ${terminationActionConfirm.name} will be rejected.`}
             </p>
             <div className="flex gap-3">
