@@ -30,6 +30,9 @@ import { FloorSwitcher } from "./FloorSwitcher";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
 import { usePerimeters } from "../hooks/usePerimeters";
+import { useMapFacilities } from "../hooks/useMapFacilities";
+import { MapFacilitiesLayer, MapFacilitiesLegend, stallFloaterHtml } from "./MapFacilitiesLayer";
+import { registerMapFloater } from "./mapFloaterDeclutter";
 import {
   createStall,
   updateStall,
@@ -186,6 +189,7 @@ function DrawControl({
     map.addLayer(fg);
 
     const layersMap = new Map();
+    const unregisterFloaters = [];
     let mainControl = null;
     // toolbarForDraw = control was opened via "Create New Stall"
     let toolbarForDraw = false;
@@ -265,9 +269,12 @@ function DrawControl({
         const path = l;
         path._stallId = stall.id;
         path._stallName = stall.stall_name;
-        path.bindTooltip(stallTooltip(stall), { direction: "top", opacity: 0.95 });
+        path.bindTooltip(stallFloaterHtml(stall.stall_name, color), { permanent: true, direction: "center", className: "vendor-stall-floater", opacity: 0.95 });
         path.on("click", () => cbRef.current.onSelectStall(stall.id));
         fg.addLayer(path);
+        const floaterRegistration = registerMapFloater(map, path);
+        path._setFloaterSelected = floaterRegistration.setSelected;
+        unregisterFloaters.push(floaterRegistration);
         paths.push(path);
       });
       layersMap.set(stall.id, paths);
@@ -290,14 +297,15 @@ function DrawControl({
         layersMap.forEach((paths, stallId) => {
           const sel = stallId === id;
           const baseColor = stallColor(stallId);
-          paths.forEach((p) =>
+          paths.forEach((p) => {
+            p._setFloaterSelected?.(sel);
             p.setStyle({
               color: sel ? "#1d4ed8" : baseColor,
               fillColor: sel ? "#1d4ed8" : baseColor,
               fillOpacity: sel ? 0.35 : 0.2,
               weight: sel ? 3 : 2,
-            }),
-          );
+            });
+          });
         });
       },
       enableEditMode: () => {
@@ -351,6 +359,7 @@ function DrawControl({
     map.on("draw:deletestop", onEditStop);
 
     return () => {
+      unregisterFloaters.forEach((remove) => remove());
       map.off(L.Draw.Event.CREATED, onDrawCreated);
       map.off(L.Draw.Event.EDITED, onDrawEdited);
       map.off(L.Draw.Event.DELETED, onDrawDeleted);
@@ -902,6 +911,7 @@ export function AdminMapView() {
   const [isEditMode, setIsEditMode] = useState(false);
   const [isToolbarVisible, setIsToolbarVisible] = useState(false);
   const [activeFloor, setActiveFloor] = useState("1");
+  const { facilities } = useMapFacilities(activeFloor);
 
   const drawApiRef = useRef(null);
   const floorStalls = useMemo(
@@ -1217,6 +1227,7 @@ export function AdminMapView() {
             <PerimeterLayer key={zone.id} geometry={zone.geometry} />
           ))}
           <FlyTo target={flyToTarget} />
+          <MapFacilitiesLayer facilities={facilities} />
         </MapContainer>
 
         {/* ── Top-center: Floor Switcher ── */}
@@ -1241,6 +1252,7 @@ export function AdminMapView() {
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
               Legend
             </p>
+            <MapFacilitiesLegend className="mb-2 space-y-1 border-b pb-2" />
             <div className="flex items-center gap-2.5">
               <div className="w-7 h-4 rounded border-2 border-green-500 bg-green-500/20" />
               <span className="text-xs font-medium text-gray-700">Vacant</span>

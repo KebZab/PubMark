@@ -6,7 +6,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import { readAssetForUpload, DOCUMENT_PICKER_TYPES, formatFileSize } from "../../services/fileUpload";
-import { createReceipt, createTransfer, getApplications, getContractRenewals, getReceipts, requestContractRenewal, updateApplicationPermit } from "../../services/api";
+import { createReceipt, createTerminationRequest, createTransfer, getApplications, getContractRenewals, getReceipts, requestContractRenewal, updateApplicationPermit } from "../../services/api";
 import { Card, StatusPill, formatDate } from "../../components/ui";
 import {
   formatPermitDeadline,
@@ -61,6 +61,11 @@ export default function ApplicationDetailScreen({ route, navigation }) {
   const [busy, setBusy] = useState(false);
 
   const [transferOpen, setTransferOpen] = useState(false);
+  const [contractActionOpen, setContractActionOpen] = useState(false);
+  const [terminationOpen, setTerminationOpen] = useState(false);
+  const [terminationReason, setTerminationReason] = useState("");
+  const [terminationSending, setTerminationSending] = useState(false);
+  const [terminationError, setTerminationError] = useState("");
   const [transferEmail, setTransferEmail] = useState("");
   const [transferError, setTransferError] = useState("");
   const [transferSending, setTransferSending] = useState(false);
@@ -200,6 +205,25 @@ export default function ApplicationDetailScreen({ route, navigation }) {
       setTransferError(e instanceof Error ? e.message : "Could not send the offer.");
     } finally {
       setTransferSending(false);
+    }
+  };
+
+  const sendTermination = async () => {
+    setTerminationSending(true);
+    setTerminationError("");
+    try {
+      await createTerminationRequest({
+        type: "contract",
+        stallId: app.stallId,
+        reason: terminationReason.trim() || "No reason provided",
+      });
+      setTerminationOpen(false);
+      setTerminationReason("");
+      Alert.alert("Request submitted", "Your contract termination request has been sent to the admin for review.");
+    } catch (e) {
+      setTerminationError(e instanceof Error ? e.message : "Could not submit the termination request.");
+    } finally {
+      setTerminationSending(false);
     }
   };
 
@@ -528,14 +552,14 @@ export default function ApplicationDetailScreen({ route, navigation }) {
         {canTransfer ? (
           <>
             <Pressable
-              onPress={() => setTransferOpen(true)}
-              className="mt-6 flex-row items-center justify-center rounded-xl border border-primary bg-white py-3.5"
+              onPress={() => setContractActionOpen(true)}
+              className="mt-6 flex-row items-center justify-center rounded-xl border border-red-200 bg-red-50 py-3.5"
             >
-              <Ionicons name="swap-horizontal-outline" size={18} color="#0d9488" />
-              <Text className="ml-2 text-sm font-semibold text-primary-darker">Transfer this stall</Text>
+              <Ionicons name="document-text-outline" size={18} color="#dc2626" />
+              <Text className="ml-2 text-sm font-semibold text-red-700">Termination</Text>
             </Pressable>
             <Text className="mt-2 text-center text-xs leading-5 text-gray-400">
-              Hand this stall to another vendor. They'll get an offer to accept or decline.
+              Transfer this contract or submit a termination request for admin review.
             </Text>
           </>
         ) : null}
@@ -626,6 +650,101 @@ export default function ApplicationDetailScreen({ route, navigation }) {
               </View>
             </View>
           </ScrollView>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={contractActionOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setContractActionOpen(false)}
+      >
+        <View className="flex-1 justify-center bg-black/50 px-5">
+          <View className="overflow-hidden rounded-2xl bg-white">
+            <View className="flex-row items-center justify-between bg-slate-800 px-5 py-4">
+              <View>
+                <Text className="text-base font-semibold text-white">Contract Request</Text>
+                <Text className="mt-0.5 text-xs text-slate-300">{app.stallName}</Text>
+              </View>
+              <Pressable onPress={() => setContractActionOpen(false)} hitSlop={12}>
+                <Ionicons name="close" size={22} color="#ffffff" />
+              </Pressable>
+            </View>
+            <View className="gap-3 p-5">
+              <Text className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-xs leading-5 text-gray-600">
+                Choose whether to transfer this contract to another PubMark user or apply to terminate it.
+              </Text>
+              <Pressable
+                onPress={() => { setContractActionOpen(false); setTransferOpen(true); setTransferError(""); }}
+                className="flex-row items-center rounded-xl border border-purple-200 bg-purple-50 p-4"
+              >
+                <View className="h-10 w-10 items-center justify-center rounded-xl bg-purple-100">
+                  <Ionicons name="swap-horizontal-outline" size={20} color="#7c3aed" />
+                </View>
+                <View className="ml-3 flex-1">
+                  <Text className="text-sm font-semibold text-gray-900">Transfer Contract</Text>
+                  <Text className="mt-0.5 text-xs leading-5 text-gray-500">Send the contract to another registered vendor.</Text>
+                </View>
+              </Pressable>
+              <Pressable
+                onPress={() => { setContractActionOpen(false); setTerminationOpen(true); setTerminationError(""); }}
+                className="flex-row items-center rounded-xl border border-red-200 bg-red-50 p-4"
+              >
+                <View className="h-10 w-10 items-center justify-center rounded-xl bg-red-100">
+                  <Ionicons name="document-text-outline" size={20} color="#dc2626" />
+                </View>
+                <View className="ml-3 flex-1">
+                  <Text className="text-sm font-semibold text-gray-900">Apply for Termination</Text>
+                  <Text className="mt-0.5 text-xs leading-5 text-gray-500">Send a termination request to the admin for review.</Text>
+                </View>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={terminationOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !terminationSending && setTerminationOpen(false)}
+      >
+        <View className="flex-1 justify-center bg-black/50 px-5">
+          <View className="overflow-hidden rounded-2xl bg-white">
+            <View className="flex-row items-center justify-between bg-red-600 px-5 py-4">
+              <View>
+                <Text className="text-base font-semibold text-white">Apply for Termination</Text>
+                <Text className="mt-0.5 text-xs text-red-100">{app.stallName}</Text>
+              </View>
+              <Pressable onPress={() => setTerminationOpen(false)} disabled={terminationSending} hitSlop={12}>
+                <Ionicons name="close" size={22} color="#ffffff" />
+              </Pressable>
+            </View>
+            <View className="p-5">
+              <Text className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+                The contract remains active until an admin reviews and approves this request.
+              </Text>
+              <Text className="mb-2 mt-4 text-xs font-semibold text-gray-700">Reason for termination</Text>
+              <TextInput
+                value={terminationReason}
+                onChangeText={(value) => { setTerminationReason(value); setTerminationError(""); }}
+                placeholder="Please state your reason..."
+                placeholderTextColor="#9ca3af"
+                multiline
+                editable={!terminationSending}
+                className="min-h-24 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-900"
+              />
+              {terminationError ? <Text className="mt-2 text-xs leading-5 text-red-600">{terminationError}</Text> : null}
+              <View className="mt-5 flex-row gap-2">
+                <Pressable onPress={() => setTerminationOpen(false)} disabled={terminationSending} className="flex-1 items-center rounded-xl bg-gray-100 py-3">
+                  <Text className="text-sm font-semibold text-gray-700">Cancel</Text>
+                </Pressable>
+                <Pressable onPress={sendTermination} disabled={terminationSending} className={`flex-1 items-center rounded-xl py-3 ${terminationSending ? "bg-red-300" : "bg-red-600"}`}>
+                  {terminationSending ? <ActivityIndicator color="#ffffff" /> : <Text className="text-sm font-semibold text-white">Submit Request</Text>}
+                </Pressable>
+              </View>
+            </View>
+          </View>
         </View>
       </Modal>
 

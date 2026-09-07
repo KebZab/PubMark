@@ -9,6 +9,9 @@ import { useApplications } from "../hooks/useApplications";
 import { saveCheckRequest } from "./checkRequestsStore";
 import { listUsers } from "../services/api";
 import { showToast } from "./Toast";
+import { useMapFacilities } from "../hooks/useMapFacilities";
+import { MapFacilitiesLayer, MapFacilitiesLegend, stallFloaterHtml } from "./MapFacilitiesLayer";
+import { registerMapFloater } from "./mapFloaterDeclutter";
 
 // The one application that represents a stall's current state: the approved
 // tenant if there is one, otherwise whoever applied first — matches how
@@ -37,6 +40,8 @@ function StallMarkers({ stalls, applications, currentFloor, selectedStallId, onS
   const map = useMap();
 
   useEffect(() => {
+    const renderedLayers = [];
+    const unregister = [];
     function stallColor(stallId) {
       const app = getActiveApp(stallId, applications);
       if (app?.status === "approved") return "#ef4444";
@@ -72,18 +77,17 @@ function StallMarkers({ stalls, applications, currentFloor, selectedStallId, onS
       );
       geo.eachLayer((l) => {
         const layer = l;
-        layer.bindTooltip(stallTooltip(stall), { direction: "top", opacity: 0.95 });
+        layer.bindTooltip(stallFloaterHtml(stall.stall_name, color), { permanent: true, direction: "center", className: "vendor-stall-floater", opacity: 0.95 });
         layer.on("click", () => onSelectStall(stall.id));
         map.addLayer(layer);
+        unregister.push(registerMapFloater(map, layer, { selected: isSelected }));
+        renderedLayers.push(layer);
       });
     });
 
     return () => {
-      map.eachLayer((layer) => {
-        if (layer instanceof L.Path && !(layer instanceof L.TileLayer)) {
-          map.removeLayer(layer);
-        }
-      });
+      unregister.forEach((remove) => remove());
+      renderedLayers.forEach((layer) => map.removeLayer(layer));
     };
   }, [map, stalls, applications, currentFloor, selectedStallId, onSelectStall]);
 
@@ -94,6 +98,7 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
   const { stalls } = useStalls();
   const { applications } = useApplications();
   const [activeFloor, setActiveFloor] = useState("1");
+  const { facilities } = useMapFacilities(activeFloor);
   const [selectedStallId, setSelectedStallId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [priority, setPriority] = useState("normal");
@@ -224,6 +229,7 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
             selectedStallId={selectedStallId}
             onSelectStall={handleStallClick}
           />
+          <MapFacilitiesLayer facilities={facilities} />
         </MapContainer>
 
         {/* Legend */}
@@ -231,6 +237,7 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
           <p className="font-semibold text-gray-500 uppercase text-[10px] tracking-wide mb-1">
             Legend
           </p>
+          <MapFacilitiesLegend className="mb-2 space-y-1 border-b pb-2" />
           <div className="flex items-center gap-2">
             <div className="w-5 h-3 rounded border-2 border-green-500 bg-green-500/20" />
             <span className="text-gray-700">Vacant</span>

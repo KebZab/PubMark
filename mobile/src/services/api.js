@@ -113,6 +113,11 @@ export async function getStalls() {
   return apiFetch("/stalls");
 }
 
+export async function getMapFacilities(floor) {
+  const query = floor ? `?floor=${encodeURIComponent(floor)}` : "";
+  return apiFetch(`/map-facilities${query}`);
+}
+
 export async function createApplication(input) {
   return apiFetch("/applications", {
     method: "POST",

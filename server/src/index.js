@@ -2333,6 +2333,107 @@ app.patch("/api/transfers/:id", requireAuth, async (req, res, next) => {
 });
 
 // ── Market Perimeters (multi-zone) ────────────────────────────────────────────
+const FACILITY_TYPES = new Set(["entrance", "cr", "stairs", "office"]);
+const FACILITY_FLOORS = new Set(["1", "2"]);
+const FACILITY_LABELS = { entrance: "Entrance", cr: "CR", stairs: "Stairs", office: "Office" };
+
+function validFacilityPosition(position) {
+  return Array.isArray(position) && position.length >= 2 && Number.isFinite(position[0]) && Number.isFinite(position[1]);
+}
+
+function validFacilityGeometry(type, geometry) {
+  if (!geometry || typeof geometry !== "object") return false;
+  if (type === "cr") {
+    const ring = geometry.type === "Polygon" ? geometry.coordinates?.[0] : null;
+    return Array.isArray(ring) && ring.length >= 4 && ring.every(validFacilityPosition) &&
+      ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1];
+  }
+  return geometry.type === "Point" && validFacilityPosition(geometry.coordinates);
+}
+
+function normalizeConnectedFloors(type, floor, value) {
+  if (type !== "stairs") return null;
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map(String))].filter((item) => FACILITY_FLOORS.has(item) && item !== floor);
+}
+
+function mapFacilityRow(row) {
+  return {
+    id: row.id, type: row.type, name: FACILITY_LABELS[row.type] ?? row.name, floor: row.floor,
+    geometry: typeof row.geometry === "string" ? JSON.parse(row.geometry) : row.geometry,
+    connectedFloors: Array.isArray(row.connected_floors) ? row.connected_floors
+      : typeof row.connected_floors === "string" ? JSON.parse(row.connected_floors) : [],
+    isAccessible: Boolean(row.is_accessible), notes: row.notes || "", createdAt: row.created_at,
+  };
+}
+
+app.get("/api/map-facilities", async (req, res, next) => {
+  try {
+    const floor = req.query.floor ? String(req.query.floor) : null;
+    if (floor && !FACILITY_FLOORS.has(floor)) return res.status(400).json({ message: "Floor must be 1 or 2." });
+    const { rows } = await db.query("SELECT * FROM map_facilities ORDER BY type, name");
+    const facilities = rows.map(mapFacilityRow).filter((item) => !floor || item.floor === floor || item.connectedFloors.includes(floor));
+    res.json({ facilities });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/map-facilities", requireAuth, requireRole("super_admin"), async (req, res, next) => {
+  try {
+    const type = String(req.body.type || "");
+    const name = FACILITY_LABELS[type];
+    const floor = String(req.body.floor || "");
+    const { geometry } = req.body;
+    if (!FACILITY_TYPES.has(type)) return res.status(400).json({ message: "Unsupported facility type." });
+    if (!FACILITY_FLOORS.has(floor)) return res.status(400).json({ message: "Floor must be 1 or 2." });
+    if (!validFacilityGeometry(type, geometry)) return res.status(400).json({ message: `Invalid geometry for ${type}.` });
+    const connectedFloors = normalizeConnectedFloors(type, floor, req.body.connectedFloors);
+    const id = crypto.randomUUID();
+    const { rows } = await db.query(
+      `INSERT INTO map_facilities (id,type,name,floor,geometry,connected_floors,is_accessible,notes,created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [id, type, name, floor, JSON.stringify(geometry), connectedFloors ? JSON.stringify(connectedFloors) : null,
+        Boolean(req.body.isAccessible), String(req.body.notes || "").trim(), req.auth.sub]
+    );
+    res.status(201).json({ facility: mapFacilityRow(rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.patch("/api/map-facilities/:id", requireAuth, requireRole("super_admin"), async (req, res, next) => {
+  try {
+    const found = await db.query("SELECT * FROM map_facilities WHERE id = $1", [req.params.id]);
+    if (!found.rows[0]) return res.status(404).json({ message: "Facility not found." });
+    const current = mapFacilityRow(found.rows[0]);
+    const value = {
+      type: req.body.type === undefined ? current.type : String(req.body.type),
+      name: FACILITY_LABELS[req.body.type === undefined ? current.type : String(req.body.type)],
+      floor: req.body.floor === undefined ? current.floor : String(req.body.floor),
+      geometry: req.body.geometry === undefined ? current.geometry : req.body.geometry,
+      isAccessible: req.body.isAccessible === undefined ? current.isAccessible : Boolean(req.body.isAccessible),
+      notes: req.body.notes === undefined ? current.notes : String(req.body.notes).trim(),
+    };
+    if (!FACILITY_TYPES.has(value.type)) return res.status(400).json({ message: "Unsupported facility type." });
+    if (!FACILITY_FLOORS.has(value.floor)) return res.status(400).json({ message: "Floor must be 1 or 2." });
+    if (!validFacilityGeometry(value.type, value.geometry)) return res.status(400).json({ message: `Invalid geometry for ${value.type}.` });
+    const connectedInput = req.body.connectedFloors === undefined ? current.connectedFloors : req.body.connectedFloors;
+    const connectedFloors = normalizeConnectedFloors(value.type, value.floor, connectedInput);
+    const { rows } = await db.query(
+      `UPDATE map_facilities SET type=$1,name=$2,floor=$3,geometry=$4,connected_floors=$5,is_accessible=$6,notes=$7,updated_at=now()
+       WHERE id=$8 RETURNING *`,
+      [value.type, value.name, value.floor, JSON.stringify(value.geometry), connectedFloors ? JSON.stringify(connectedFloors) : null,
+        value.isAccessible, value.notes, req.params.id]
+    );
+    res.json({ facility: mapFacilityRow(rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/map-facilities/:id", requireAuth, requireRole("super_admin"), async (req, res, next) => {
+  try {
+    const result = await db.query("DELETE FROM map_facilities WHERE id = $1 RETURNING id", [req.params.id]);
+    if (!result.rows[0]) return res.status(404).json({ message: "Facility not found." });
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
 app.get("/api/perimeters", async (req, res, next) => {
   try {
     const { rows } = await db.query(`

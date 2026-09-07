@@ -4,15 +4,15 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
 import { useApiData } from "../hooks/useApiData";
-import { getStalls, getStallReservations } from "../services/api";
+import { getStalls, getStallReservations, getMapFacilities } from "../services/api";
 import StallMap from "../components/StallMap";
 import ImageViewerModal from "../components/ImageViewerModal";
 import { LoadingState } from "../components/ui";
 
 // Both endpoints are public. Never fetch applications or applicant profiles here.
 async function getGuestMapData() {
-  const [stalls, reservations] = await Promise.all([getStalls(), getStallReservations()]);
-  return { stalls: stalls.stalls, ...reservations };
+  const [stalls, reservations, facilityResult] = await Promise.all([getStalls(), getStallReservations(), getMapFacilities()]);
+  return { stalls: stalls.stalls, facilities: facilityResult.facilities, ...reservations };
 }
 
 function Action({ children, onPress, primary = false, icon }) {
@@ -35,6 +35,7 @@ export default function GuestMapScreen({ navigation, pendingApplication }) {
   const [viewer, setViewer] = useState(null);
   const allStalls = query.data?.stalls ?? [];
   const stalls = useMemo(() => allStalls.filter((s) => s.floor === floor), [allStalls, floor]);
+  const facilities = useMemo(() => (query.data?.facilities ?? []).filter((item) => item.floor === floor || item.connectedFloors?.includes(floor)), [query.data, floor]);
   const styleInputs = useMemo(() => {
     const occupied = new Set(query.data?.approved ?? []);
     const pending = new Set(query.data?.pending ?? []);
@@ -91,7 +92,7 @@ export default function GuestMapScreen({ navigation, pendingApplication }) {
         <View className="flex-1 justify-center gap-4 px-6"><Text accessibilityRole="alert" className="text-center text-sm text-red-700">{query.error}</Text><Action onPress={query.refetch}>Retry</Action></View>
       ) : (
         <View className="flex-1">
-          <StallMap stalls={stalls} selectedId={selectedId} selectedIds={selectedIds} multiSelectMode={multi} onSelect={select} styleInputs={styleInputs} showEmptyMap />
+          <StallMap stalls={stalls} facilities={facilities} selectedId={selectedId} selectedIds={selectedIds} multiSelectMode={multi} onSelect={select} styleInputs={styleInputs} showEmptyMap />
           {!stalls.length ? <View pointerEvents="none" className="absolute inset-x-6 top-6 rounded-2xl bg-white p-5"><Text className="text-center text-sm font-semibold text-gray-700">No stalls on {floor}F</Text><Text className="mt-1 text-center text-xs text-gray-500">Try the other floor or check back later.</Text></View> : null}
         </View>
       )}

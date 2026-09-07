@@ -5,7 +5,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import { useApiData } from "../../hooks/useApiData";
-import { getApplications, getStalls, getViolations, createViolation } from "../../services/api";
+import { getApplications, getStalls, getViolations, createViolation, getMapFacilities } from "../../services/api";
 import { readAssetForUpload, formatFileSize, DOCUMENT_PICKER_TYPES } from "../../services/fileUpload";
 import { Card, ErrorState, LoadingState, OfficerHeader, buttonShadow, iosShadow } from "../../components/ui";
 import StallMap from "../../components/StallMap";
@@ -54,6 +54,7 @@ export default function OfficerMapScreen() {
   const stallsQuery = useApiData(getStalls);
   const applicationsQuery = useApiData(getApplications);
   const violationsQuery = useApiData(getViolations);
+  const facilitiesQuery = useApiData(getMapFacilities);
   const [floor, setFloor] = useState("1");
   const [selectedId, setSelectedId] = useState(null);
   const [viewer, setViewer] = useState(null);
@@ -70,6 +71,7 @@ export default function OfficerMapScreen() {
   const violations = violationsQuery.data?.violations ?? [];
 
   const stalls = useMemo(() => allStalls.filter((s) => s.floor === floor), [allStalls, floor]);
+  const facilities = useMemo(() => (facilitiesQuery.data?.facilities ?? []).filter((item) => item.floor === floor || item.connectedFloors?.includes(floor)), [facilitiesQuery.data, floor]);
 
   // Still useful to an officer even though it no longer drives the map
   // colour — shown as a supplementary note when a stall is selected.
@@ -217,7 +219,7 @@ export default function OfficerMapScreen() {
         <LoadingState />
       ) : error ? (
         <ErrorState message={error} />
-      ) : stalls.length === 0 ? (
+      ) : stalls.length === 0 && facilities.length === 0 ? (
         <View className="flex-1 items-center justify-center px-8">
           <Text className="text-sm font-semibold text-gray-700">No stalls on {floor}F</Text>
           <Text className="mt-1.5 text-center text-xs leading-5 text-gray-400">Try the other floor.</Text>
@@ -225,6 +227,7 @@ export default function OfficerMapScreen() {
       ) : (
         <StallMap
           stalls={stalls}
+          facilities={facilities}
           selectedId={selectedId}
           onSelect={setSelectedId}
           styleInputs={styleInputs}

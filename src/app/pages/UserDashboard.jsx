@@ -36,6 +36,9 @@ import "leaflet/dist/leaflet.css";
 import { getAnnouncements } from "../services/announcementsApi";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
+import { useMapFacilities } from "../hooks/useMapFacilities";
+import { MapFacilitiesLayer, stallFloaterHtml } from "../components/MapFacilitiesLayer";
+import { registerMapFloater } from "../components/mapFloaterDeclutter";
 import { getSession, clearSession } from "../components/authStorage";
 
 import { showToast } from "../components/Toast";
@@ -71,6 +74,7 @@ function MiniDrawnStallsLayer({ stalls, applications }) {
   const map = useMap();
   useEffect(() => {
     const layers = [];
+    const unregister = [];
     stalls.forEach((stall) => {
       const app = getActiveApp(stall.id, applications);
       const color =
@@ -79,10 +83,18 @@ function MiniDrawnStallsLayer({ stalls, applications }) {
         { type: "Feature", properties: {}, geometry: stall.geometry },
         { style: { color, weight: 1.5, opacity: 0.9, fillColor: color, fillOpacity: 0.25 } },
       );
+      layer.bindTooltip(stallFloaterHtml(stall.stall_name, color), {
+        permanent: true,
+        direction: "center",
+        className: "vendor-stall-floater",
+        opacity: 0.95,
+      });
       layer.addTo(map);
+      unregister.push(registerMapFloater(map, layer));
       layers.push(layer);
     });
     return () => {
+      unregister.forEach((remove) => remove());
       layers.forEach((l) => map.removeLayer(l));
     };
   }, [stalls, applications, map]);
@@ -135,6 +147,7 @@ function MapTabContent({ navigate }) {
   const { stalls: storedStalls, loading: stallsLoading } = useStalls();
   const { applications } = useApplications();
   const [activeFloor, setActiveFloor] = useState("1");
+  const { facilities } = useMapFacilities(activeFloor);
 
   const floorStalls = storedStalls.filter((s) => s.floor === activeFloor);
   const floorCounts = {
@@ -222,6 +235,7 @@ function MapTabContent({ navigate }) {
             maxZoom={22}
           />
           <MiniDrawnStallsLayer stalls={floorStalls} applications={applications} />
+          <MapFacilitiesLayer facilities={facilities} />
         </MapContainer>
 
         {stallsLoading && (
@@ -1008,20 +1022,6 @@ export function UserDashboard() {
                             Upload Permit
                           </button>
                         )}
-                        {app.status === "approved" && (
-                          <button
-                            onClick={() => {
-                              setContractActionModal(app);
-                              setTerminateReason("");
-                              setTransferError("");
-                              setTransferEmail("");
-                            }}
-                            className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-red-50 text-red-600 border border-red-200 rounded-lg text-xs font-medium hover:bg-red-100 transition-colors"
-                          >
-                            <FileX className="w-3.5 h-3.5" />
-                            Terminate
-                          </button>
-                        )}
                       </div>
                     </div>
                   );
@@ -1333,7 +1333,7 @@ export function UserDashboard() {
                   <FileX className="w-4 h-4 text-red-600" />
                 </div>
                 <div className="flex-1">
-                  <p className="text-sm font-semibold text-gray-900">Terminate Contract</p>
+                  <p className="text-sm font-semibold text-gray-900">Apply for Termination</p>
                   <p className="text-xs text-gray-500 mt-0.5">
                     Send a termination request to the admin for review.
                   </p>

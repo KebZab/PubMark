@@ -8,6 +8,7 @@ import { MapPin, Trash2, CheckCircle, AlertTriangle, PenLine, X, Loader2 } from 
 import { createPerimeter, deletePerimeter } from "../services/perimeterApi";
 import { usePerimeters } from "../hooks/usePerimeters";
 import { showToast } from "./Toast";
+import { FacilityMapEditor } from "./FacilityMapEditor";
 
 const PERIMETER_STYLE = {
   color: "#7c3aed",
@@ -32,7 +33,13 @@ const EXTRA_CSS = `
   .perimeter-draw-toolbar .leaflet-draw-toolbar a:hover { background-color: #f5f3ff !important; }
   .perimeter-draw-toolbar .leaflet-draw-actions a { background-color: #7c3aed !important; color: white !important; }
   .perimeter-draw-toolbar .leaflet-draw-actions a:hover { background-color: #6d28d9 !important; }
-  .perimeter-zone-label { background: transparent; border: none; box-shadow: none; font-weight: 600; color: #6d28d9; text-shadow: 0 1px 2px rgba(255,255,255,0.9); }
+  .leaflet-tooltip.perimeter-zone-label {
+    padding: 7px 12px; border: 2px solid rgba(255,255,255,.92); border-radius: 999px;
+    background: linear-gradient(135deg, #8b5cf6, #6d28d9); color: white;
+    box-shadow: 0 5px 14px rgba(76,29,149,.28); font: 700 11px/1.1 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing: .015em; text-shadow: 0 1px 1px rgba(0,0,0,.18);
+  }
+  .leaflet-tooltip.perimeter-zone-label::before { display: none; }
 `;
 
 function calculatePerimeterMetrics(geometry) {
@@ -319,6 +326,7 @@ export function SuperAdminMapEditor({ session }) {
   const { perimeters, refetch, loading: perimetersLoading } = usePerimeters();
   const isSaving = false;
   const [deletingId, setDeletingId] = useState(null);
+  const [editorTab, setEditorTab] = useState("zones");
 
   const handleCreated = useCallback(async () => {
     await refetch();
@@ -347,6 +355,12 @@ export function SuperAdminMapEditor({ session }) {
   return (
     <div className="h-full flex flex-col">
       <style>{EXTRA_CSS}</style>
+      <div className="flex flex-shrink-0 gap-2 border-b bg-white px-5 py-2">
+        <button onClick={() => setEditorTab("zones")} className={`rounded-lg px-4 py-2 text-sm font-semibold ${editorTab === "zones" ? "bg-purple-600 text-white" : "bg-gray-100 text-gray-600"}`}>Market Zones</button>
+        <button onClick={() => setEditorTab("facilities")} className={`rounded-lg px-4 py-2 text-sm font-semibold ${editorTab === "facilities" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600"}`}>Entrances, CR, Stairs & Offices</button>
+      </div>
+
+      {editorTab === "facilities" ? <div className="min-h-0 flex-1"><FacilityMapEditor /></div> : <>
 
       {/* Status banner */}
       <div
@@ -497,6 +511,7 @@ export function SuperAdminMapEditor({ session }) {
           )}
         </div>
       </div>
+      </>}
     </div>
   );
 }

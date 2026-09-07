@@ -29,6 +29,11 @@ Supabase project. It adds renewal deadline and termination fields to
 `applications`, the `contract_renewal_requests` queue, and the audited
 `renewal_deadline_extensions` table.
 
+Also run `server/migrations/2026-09-07-map-facilities.sql` once in every
+Supabase project before using entrance, comfort-room, and stair map overlays.
+Existing installations must then run `2026-09-07-map-facilities-office.sql`
+to add offices and normalize facility labels.
+
 The default renewal deadline is seven days after `contract_end`. Vendors may
 request renewal until that deadline, and a pending request prevents automatic
 termination. Admin and Super Admin may approve or reject requests. Only Super
