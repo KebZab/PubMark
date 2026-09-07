@@ -82,8 +82,22 @@ export async function listUsersPage(params) {
 }
 
 export async function createUser(data) {
-  const result = await apiFetch("/users", { method: "POST", body: JSON.stringify(data) });
-  return result.user;
+  // The account doesn't exist yet — this only sends a confirmation email and
+  // creates a pending invitation. See getPendingUsers().
+  return apiFetch("/users", { method: "POST", body: JSON.stringify(data) });
+}
+
+export async function getPendingUsers() {
+  const result = await apiFetch("/pending-users");
+  return result.pendingUsers;
+}
+
+export async function resendPendingUser(id) {
+  return apiFetch(`/pending-users/${id}/resend`, { method: "POST" });
+}
+
+export async function cancelPendingUser(id) {
+  return apiFetch(`/pending-users/${id}`, { method: "DELETE" });
 }
 
 export async function updateUserApi(id, data) {

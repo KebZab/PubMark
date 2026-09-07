@@ -4,6 +4,8 @@ import cors from "cors";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import pg from "pg";
+import crypto from "node:crypto";
+import nodemailer from "nodemailer";
 import { createClient } from "@supabase/supabase-js";
 
 const app = express();
@@ -33,6 +35,44 @@ const VIRTUAL_PATH_PREFIX = "virtual://";
 const supabaseStorage = process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
   ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
   : null;
+
+// ── Account confirmation email (super-admin-created accounts) ──────────────
+// Nothing is written to `profiles` when a super-admin submits the "Create
+// User" form — a `pending_user_creations` row is created instead and this
+// mailer sends the new person a confirmation link over Gmail SMTP. Without
+// real Gmail credentials configured, the link is logged instead of emailed,
+// so local dev works with no SMTP setup. Unlike a free-tier transactional
+// email API (Resend, SendGrid, etc.), a real Gmail account can send to any
+// recipient immediately — no domain verification required — which is why
+// this app uses it instead, despite the one-time App Password setup cost.
+const mailer = process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD
+  ? nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD },
+    })
+  : null;
+
+function apiPublicUrl() {
+  return process.env.API_PUBLIC_URL || `http://localhost:${port}`;
+}
+
+function confirmUserSignupUrl(token) {
+  return `${apiPublicUrl()}/api/auth/confirm-user?token=${token}`;
+}
+
+async function sendUserConfirmationEmail(email, token) {
+  const url = confirmUserSignupUrl(token);
+  if (!mailer) {
+    console.log(`[pending user confirmation] ${email}: ${url}`);
+    return;
+  }
+  await mailer.sendMail({
+    from: process.env.GMAIL_USER,
+    to: email,
+    subject: "Confirm your PubMark account",
+    html: `<p>An administrator created a PubMark account for you.</p><p>Click the link below to confirm your email and activate the account:</p><p><a href="${url}">${url}</a></p><p>This link expires in 24 hours. If you weren't expecting this, you can ignore this email.</p>`,
+  });
+}
 
 class AttachmentError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -675,6 +715,38 @@ app.get("/api/auth/users/by-email", requireAuth, async (req, res, next) => {
 });
 app.post("/api/auth/logout", (_req, res) => { res.clearCookie("pubmark_session", cookieOptions()); res.json({ ok: true }); });
 
+// Plain link opened from the confirmation email, not called by either app —
+// returns a small HTML page rather than JSON.
+function confirmationPage(title, message) {
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
+  <style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1.5rem;color:#1f2937}h1{font-size:1.25rem;color:#0f766e}</style>
+  </head><body><h1>${title}</h1><p>${message}</p></body></html>`;
+}
+app.get("/api/auth/confirm-user", async (req, res, next) => {
+  try {
+    const token = String(req.query.token || "");
+    const tokenHash = token ? crypto.createHash("sha256").update(token).digest("hex") : "";
+    const { rows } = await db.query(
+      "SELECT * FROM pending_user_creations WHERE token_hash = $1 AND expires_at > now()",
+      [tokenHash]
+    );
+    const pending = rows[0];
+    if (!pending) {
+      return res.status(400).send(confirmationPage("Link expired or invalid", "This confirmation link is no longer valid. Ask the person who created your account to resend the invitation."));
+    }
+    try {
+      await db.query(
+        "INSERT INTO profiles (id, email, password_hash, name, phone, address, role, department) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        [crypto.randomUUID(), pending.email, pending.password_hash, pending.name, pending.phone || "", pending.address || "", pending.role, pending.department || null]
+      );
+    } catch (error) {
+      if (error?.code !== "23505") throw error;
+    }
+    await db.query("DELETE FROM pending_user_creations WHERE id = $1", [pending.id]);
+    res.send(confirmationPage("Account confirmed", "Your PubMark account is now active. You can close this tab and sign in."));
+  } catch (error) { next(error); }
+});
+
 const USER_SORT_COLUMNS = { name: "name", email: "email", role: "role", phone: "phone", createdAt: "created_at" };
 
 app.get("/api/users", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
@@ -708,6 +780,9 @@ function canAssignRole(req, role) {
   return !(role === "super_admin" || role === "admin") || req.auth.role === "super_admin";
 }
 
+// Creates a *pending* invitation rather than the account itself — nothing is
+// written to `profiles` here. The account only comes into existence once the
+// invited person clicks the confirmation link (GET /api/auth/confirm-user).
 app.post("/api/users", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try {
     const { name, email, password, role, phone, address, department } = req.body;
@@ -716,14 +791,36 @@ app.post("/api/users", requireAuth, requireRole("admin", "super_admin"), async (
     if (String(password).length < 6) return res.status(400).json({ message: "Password must be at least 6 characters." });
     if (!canAssignRole(req, role)) return res.status(403).json({ message: "Only a super admin can create admin or super admin accounts." });
 
-    const id = crypto.randomUUID();
+    const normalizedEmail = String(email).toLowerCase();
+    const { rows: existing } = await db.query("SELECT id FROM profiles WHERE email = $1", [normalizedEmail]);
+    if (existing[0]) return res.status(409).json({ message: "This email is already in use." });
+
     const passwordHash = await bcrypt.hash(password, 12);
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
     await db.query(
-      "INSERT INTO profiles (id, email, password_hash, name, phone, address, role, department) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-      [id, String(email).toLowerCase(), passwordHash, name, phone || "", address || "", role, department || null]
+      `INSERT INTO pending_user_creations (email, name, password_hash, role, phone, address, department, created_by, token_hash, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (email) DO UPDATE SET
+         name = EXCLUDED.name, password_hash = EXCLUDED.password_hash, role = EXCLUDED.role,
+         phone = EXCLUDED.phone, address = EXCLUDED.address, department = EXCLUDED.department,
+         created_by = EXCLUDED.created_by, token_hash = EXCLUDED.token_hash, expires_at = EXCLUDED.expires_at,
+         created_at = now()`,
+      [normalizedEmail, name, passwordHash, role, phone || "", address || "", department || null, req.auth.sub, tokenHash, expiresAt]
     );
-    const { rows } = await db.query("SELECT id, email, name, role, address, phone, department, created_at FROM profiles WHERE id = $1", [id]);
-    res.status(201).json({ user: profile(rows[0]) });
+    try {
+      await sendUserConfirmationEmail(normalizedEmail, rawToken);
+    } catch (sendError) {
+      // Don't leave an unconfirmable invite behind if the email never went
+      // out — the admin gets a clear reason instead of a generic 500, and
+      // can fix the underlying issue (e.g. wrong recipient in Resend
+      // sandbox mode) and just resubmit the form.
+      await db.query("DELETE FROM pending_user_creations WHERE email = $1", [normalizedEmail]).catch(() => {});
+      return res.status(502).json({ message: `The confirmation email could not be sent: ${sendError.message}` });
+    }
+    res.json({ pendingConfirmation: true, email: normalizedEmail });
   } catch (error) {
     if (error?.code === "23505") return res.status(409).json({ message: "This email is already in use." });
     next(error);
@@ -766,6 +863,47 @@ app.delete("/api/users/:id", requireAuth, requireRole("admin", "super_admin"), a
     if (error?.code === "23503") return res.status(409).json({ message: "Cannot delete this user: they have existing applications, violations, or other records linked to their account." });
     next(error);
   }
+});
+
+// Accounts invited via "Create User" that haven't clicked their confirmation
+// link yet — makes an in-flight invite visible instead of silently
+// disappearing after the super-admin submits the form.
+app.get("/api/pending-users", requireAuth, requireRole("super_admin"), async (_req, res, next) => {
+  try {
+    const { rows } = await db.query(`
+      SELECT pu.id, pu.email, pu.name, pu.role, pu.phone, pu.created_at, pu.expires_at, p.name AS created_by_name
+      FROM pending_user_creations pu
+      LEFT JOIN profiles p ON p.id = pu.created_by
+      ORDER BY pu.created_at DESC
+    `);
+    res.json({ pendingUsers: rows });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/pending-users/:id/resend", requireAuth, requireRole("super_admin"), async (req, res, next) => {
+  try {
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const { rows } = await db.query(
+      "UPDATE pending_user_creations SET token_hash = $1, expires_at = $2 WHERE id = $3 RETURNING email",
+      [tokenHash, expiresAt, req.params.id]
+    );
+    if (!rows[0]) return res.status(404).json({ message: "Pending invitation not found." });
+    try {
+      await sendUserConfirmationEmail(rows[0].email, rawToken);
+    } catch (sendError) {
+      return res.status(502).json({ message: `The confirmation email could not be sent: ${sendError.message}` });
+    }
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/pending-users/:id", requireAuth, requireRole("super_admin"), async (req, res, next) => {
+  try {
+    await db.query("DELETE FROM pending_user_creations WHERE id = $1", [req.params.id]);
+    res.json({ ok: true });
+  } catch (error) { next(error); }
 });
 
 app.get("/api/announcements", requireAuth, async (_req, res, next) => {

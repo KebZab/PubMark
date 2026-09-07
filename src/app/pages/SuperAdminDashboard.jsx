@@ -29,6 +29,7 @@ import {
   Send,
   Archive,
   Loader2,
+  Mail,
 } from "lucide-react";
 import { AdminMapView } from "../components/AdminMapView";
 import { getSession } from "../components/authStorage";
@@ -43,6 +44,9 @@ import {
   createUser,
   updateUserApi,
   deleteUserApi,
+  getPendingUsers,
+  resendPendingUser,
+  cancelPendingUser,
 } from "../services/api";
 import { TablePagination } from "../components/ui/TablePagination";
 import { migrateLegacyRequests } from "../services/legacyRequestMigration";
@@ -199,6 +203,10 @@ export function SuperAdminDashboard() {
   const [reportsLoading, setReportsLoading] = useState(true);
   const [receiptsTabLoading, setReceiptsTabLoading] = useState(true);
   const [requestDataLoading, setRequestDataLoading] = useState(true);
+  const [pendingInvitations, setPendingInvitations] = useState([]);
+  const [pendingInvitationsLoading, setPendingInvitationsLoading] = useState(true);
+  const [pendingActionIds, setPendingActionIds] = useState(new Set());
+  const [invitationSentEmail, setInvitationSentEmail] = useState(null);
 
   useEffect(() => {
     void loadUsers();
@@ -245,6 +253,51 @@ export function SuperAdminDashboard() {
       showToast(`Failed to load users: ${error.message}`, "error");
     } finally {
       setTableUsersLoading(false);
+    }
+  }
+
+  async function loadPendingInvitations() {
+    setPendingInvitationsLoading(true);
+    try {
+      setPendingInvitations(await getPendingUsers());
+    } catch (error) {
+      showToast(`Failed to load pending invitations: ${error.message}`, "error");
+    } finally {
+      setPendingInvitationsLoading(false);
+    }
+  }
+
+  function markPendingAction(id, isActive) {
+    setPendingActionIds((prev) => {
+      const next = new Set(prev);
+      if (isActive) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  async function handleResendInvitation(id) {
+    markPendingAction(id, true);
+    try {
+      await resendPendingUser(id);
+      showToast("Confirmation email resent.", "success");
+      await loadPendingInvitations();
+    } catch (error) {
+      showToast(`Failed to resend invitation: ${error.message}`, "error");
+    } finally {
+      markPendingAction(id, false);
+    }
+  }
+
+  async function handleCancelInvitation(id) {
+    markPendingAction(id, true);
+    try {
+      await cancelPendingUser(id);
+      setPendingInvitations((prev) => prev.filter((item) => item.id !== id));
+      showToast("Invitation cancelled.", "success");
+    } catch (error) {
+      showToast(`Failed to cancel invitation: ${error.message}`, "error");
+      markPendingAction(id, false);
     }
   }
 
@@ -307,6 +360,10 @@ export function SuperAdminDashboard() {
   useEffect(() => {
     if (tab === "users") void loadUsersTable();
   }, [tab, usersPageNum, debouncedUserSearch, roleFilter, sortField, sortAsc]);
+
+  useEffect(() => {
+    if (tab === "users") void loadPendingInvitations();
+  }, [tab]);
 
   useEffect(() => {
     if (tab === "stalls") void loadStallsTable();
@@ -532,7 +589,8 @@ export function SuperAdminDashboard() {
           address: form.address,
           department: form.department || undefined,
         });
-        showToast(`User "${form.name}" created.`, "success");
+        setInvitationSentEmail(form.email.trim());
+        await loadPendingInvitations();
       }
       setShowForm(false);
       await Promise.all([loadUsersTable(), loadUsers()]);
@@ -1141,14 +1199,17 @@ export function SuperAdminDashboard() {
               </select>
             </div>
 
-            {/* Users table */}
+            {/* Users table — pending invitations are pinned at the top, page 1 only */}
             <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
               <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
                 <p className="text-xs text-gray-500">
                   {usersTotal} user{usersTotal !== 1 ? "s" : ""}
+                  {pendingInvitations.length > 0 && (
+                    <span className="text-amber-600"> · {pendingInvitations.length} pending invitation{pendingInvitations.length !== 1 ? "s" : ""}</span>
+                  )}
                 </p>
                 <button
-                  onClick={() => void loadUsersTable()}
+                  onClick={() => void Promise.all([loadUsersTable(), loadPendingInvitations()])}
                   className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
                 >
                   <RefreshCw className="w-3.5 h-3.5 text-gray-400" />
@@ -1207,6 +1268,64 @@ export function SuperAdminDashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
+                    {usersPageNum === 1 && pendingInvitationsLoading && (
+                      <tr>
+                        <td colSpan={6} className="px-5 py-4 text-center bg-amber-50/40">
+                          <div className="w-5 h-5 border-2 border-amber-200 border-t-amber-500 rounded-full animate-spin mx-auto" />
+                        </td>
+                      </tr>
+                    )}
+                    {usersPageNum === 1 && !pendingInvitationsLoading && pendingInvitations.map((invite) => (
+                      <tr key={`pending-${invite.id}`} className="bg-amber-50/40 hover:bg-amber-50/70 transition-colors">
+                        <td className="px-5 py-3.5">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-7 h-7 bg-gradient-to-br from-amber-400 to-amber-300 rounded-lg flex items-center justify-center flex-shrink-0">
+                              <Mail className="w-3.5 h-3.5 text-white" />
+                            </div>
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="font-medium text-gray-900 truncate">{invite.name}</span>
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 flex-shrink-0">
+                                Pending
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3.5 text-gray-600">{invite.email}</td>
+                        <td className="px-5 py-3.5">
+                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${ROLE_COLORS[invite.role]}`}>
+                            {ROLE_LABELS[invite.role]}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3.5 text-gray-500">{invite.phone || "—"}</td>
+                        <td className="px-5 py-3.5 text-gray-500" title={`Expires ${formatDate(invite.expires_at)}`}>
+                          Invited {formatDate(invite.created_at)}
+                        </td>
+                        <td className="px-5 py-3.5">
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => void handleResendInvitation(invite.id)}
+                              disabled={pendingActionIds.has(invite.id)}
+                              className="p-1.5 rounded-lg hover:bg-purple-50 text-purple-600 transition-colors disabled:opacity-50"
+                              title="Resend confirmation email"
+                            >
+                              {pendingActionIds.has(invite.id) ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Send className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                            <button
+                              onClick={() => void handleCancelInvitation(invite.id)}
+                              disabled={pendingActionIds.has(invite.id)}
+                              className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition-colors disabled:opacity-50"
+                              title="Cancel invitation"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
                     {tableUsersLoading && (
                       <tr>
                         <td colSpan={6} className="px-5 py-16 text-center">
@@ -2910,7 +3029,7 @@ export function SuperAdminDashboard() {
               </button>
             </div>
             <fieldset disabled={savingUser} className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
-              {!editUser && <p className="text-xs leading-5 text-gray-500">Create an account with a role and password. The user can sign in with this email and password.</p>}
+              {!editUser && <p className="text-xs leading-5 text-gray-500">Create an account with a role and password — they'll get a confirmation email and won't be able to sign in until they click it.</p>}
               {userSaveError && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{userSaveError}</p>}
               {[
                 { field: "name", label: "Full Name", placeholder: "Juan dela Cruz", type: "text" },
@@ -3058,6 +3177,27 @@ export function SuperAdminDashboard() {
                 {terminationActionConfirm.action === "approved" ? "Yes, Approve" : "Yes, Reject"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Invitation sent modal */}
+      {invitationSentEmail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6">
+            <div className="w-12 h-12 bg-purple-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <Mail className="w-6 h-6 text-purple-600" />
+            </div>
+            <h3 className="text-base font-semibold text-gray-900 text-center mb-1">Confirmation Email Sent</h3>
+            <p className="text-sm text-gray-500 text-center mb-6">
+              A confirmation link was sent to <span className="font-medium text-gray-700">{invitationSentEmail}</span>. The account will be created once they click it.
+            </p>
+            <button
+              onClick={() => setInvitationSentEmail(null)}
+              className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-medium transition-colors"
+            >
+              Close
+            </button>
           </div>
         </div>
       )}
