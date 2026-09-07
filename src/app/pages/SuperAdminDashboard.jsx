@@ -3190,7 +3190,7 @@ export function SuperAdminDashboard() {
             </div>
             <h3 className="text-base font-semibold text-gray-900 text-center mb-1">Confirmation Email Sent</h3>
             <p className="text-sm text-gray-500 text-center mb-6">
-              A confirmation link was sent to <span className="font-medium text-gray-700">{invitationSentEmail}</span>. The account will be created once they click it.
+              A confirmation link was sent to <span className="font-medium text-gray-700">{invitationSentEmail}</span>. The account will be created once they confirm it.
             </p>
             <button
               onClick={() => setInvitationSentEmail(null)}

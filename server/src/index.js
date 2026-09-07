@@ -677,9 +677,31 @@ async function autoTerminateExpiredPermitDeadlines() {
 
 app.post("/api/auth/login", async (req, res, next) => {
   try {
-    const { rows } = await db.query("SELECT * FROM profiles WHERE email = $1 LIMIT 1", [String(req.body.email || "").toLowerCase()]);
+    const email = String(req.body.email || "").toLowerCase();
+    const password = String(req.body.password || "");
+    const { rows } = await db.query("SELECT * FROM profiles WHERE email = $1 LIMIT 1", [email]);
     const user = rows[0];
-    if (!user || !(await bcrypt.compare(String(req.body.password || ""), user.password_hash))) return res.status(401).json({ message: "Invalid email or password." });
+    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+      // A super-admin-created account isn't in `profiles` yet if it's still
+      // waiting on its confirmation email — give that a clearer message than
+      // "invalid email or password". Only shown when the password actually
+      // matches the pending invite, so a wrong-password guess still can't
+      // reveal whether a pending invite exists for this email.
+      if (!user) {
+        const { rows: pendingRows } = await db.query(
+          "SELECT password_hash FROM pending_user_creations WHERE email = $1 AND expires_at > now()",
+          [email]
+        );
+        const pending = pendingRows[0];
+        if (pending && (await bcrypt.compare(password, pending.password_hash))) {
+          return res.status(403).json({
+            message: "Please confirm your email before signing in.",
+            code: "pending_confirmation",
+          });
+        }
+      }
+      return res.status(401).json({ message: "Invalid email or password." });
+    }
     // Checked only after the password is confirmed correct, so a wrong
     // guess never reveals whether an account was terminated.
     if (user.is_archived) return res.status(403).json({ message: "This account has been terminated.", code: "account_terminated" });
