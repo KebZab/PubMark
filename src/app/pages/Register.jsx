@@ -1,11 +1,12 @@
 import { useRef, useState } from "react";
 import { useNavigate, useSearchParams, Link } from "react-router";
 import { MapPin, UserPlus, Eye, EyeOff, FileText } from "lucide-react";
-import { setSession } from "../components/authStorage";
+import { useAuth } from "../context/AuthContext";
 import { registerVendor } from "../services/api";
 import { tenantTermsIntro, tenantTermsSections, tenantTermsTitle } from "../content/tenantTerms";
 
 export function Register() {
+  const { signIn } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const stallId = searchParams.get("stallId");
@@ -118,7 +119,7 @@ export function Register() {
         phone: form.phone,
         address: form.address,
       });
-      setSession({ userId: user.id, role: "vendor", name: user.name, email: user.email });
+      signIn(user);
       localStorage.setItem(
         "pubmark_pending_toast",
         JSON.stringify({ message: "Account created! Welcome to PubMark.", type: "success" }),

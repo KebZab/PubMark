@@ -24,7 +24,7 @@ import {
   Receipt,
   UserPlus,
 } from "lucide-react";
-import { clearSession } from "./authStorage";
+import { useAuth } from "../context/AuthContext";
 import { showToast } from "./Toast";
 
 function getNavItems(role) {
@@ -117,6 +117,7 @@ function getRoleIcon(role) {
 }
 
 export function DashboardLayout({ session, children, title, subtitle, actions, navBadges = {} }) {
+  const { signOut } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -128,8 +129,8 @@ export function DashboardLayout({ session, children, title, subtitle, actions, n
   }));
   const RoleIcon = getRoleIcon(role);
 
-  function handleLogout() {
-    clearSession();
+  async function handleLogout() {
+    await signOut();
     showToast("Logged out successfully.", "success");
     navigate("/");
   }

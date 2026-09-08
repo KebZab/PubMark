@@ -18,6 +18,15 @@ export class ApiConfigurationError extends Error {
   }
 }
 
+export class ApiError extends Error {
+  constructor(message, status, code) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
 async function apiFetch(path, init = {}) {
   if (!API_BASE_URL) throw new ApiConfigurationError();
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -31,13 +40,11 @@ async function apiFetch(path, init = {}) {
     // approves closing an account, not just login — so a vendor who's still
     // signed in gets kicked out on their very next action instead of staying
     // in until the session cookie's normal 8h expiry.
-    if (error.code === "account_terminated") {
+    if (response.status === 401) {
       clearSession();
-      if (typeof window !== "undefined" && window.location.pathname !== "/") {
-        window.location.href = "/";
-      }
+      if (typeof window !== "undefined") window.dispatchEvent(new Event("pubmark:unauthorized"));
     }
-    throw new Error(error.message || "Unable to complete the request.");
+    throw new ApiError(error.message || "Unable to complete the request.", response.status, error.code);
   }
   return response.json();
 }

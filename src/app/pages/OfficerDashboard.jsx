@@ -33,7 +33,8 @@ import {
 } from "../components/violationRequestStore";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
-import { getSession, clearSession } from "../components/authStorage";
+import { getSession } from "../components/authStorage";
+import { useAuth } from "../context/AuthContext";
 import { OfficerMapView } from "../components/OfficerMapView";
 import { showToast } from "../components/Toast";
 import { useNavigate, useLocation } from "react-router";
@@ -131,6 +132,7 @@ async function loadOfficerCheckRequests(officerId, officerName) {
 }
 
 export function OfficerDashboard() {
+  const { signOut } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const { stalls, loading: stallsLoading } = useStalls();
@@ -232,15 +234,6 @@ export function OfficerDashboard() {
       setSubmittingReceipt(false);
     }
   }
-
-  useEffect(() => {
-    const s = getSession();
-    if (!s || s.role !== "officer") {
-      navigate("/", { replace: true });
-      return;
-    }
-    setSession(s);
-  }, [navigate]);
 
   useEffect(() => {
     const s = getSession();
@@ -438,8 +431,8 @@ export function OfficerDashboard() {
                   Profile Settings
                 </button>
                 <button
-                  onClick={() => {
-                    clearSession();
+                  onClick={async () => {
+                    await signOut();
                     showToast("You've been logged out.", "success");
                     navigate("/");
                   }}

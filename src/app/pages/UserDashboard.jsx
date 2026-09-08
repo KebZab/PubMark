@@ -39,7 +39,8 @@ import { useAnnouncements } from "../hooks/useAnnouncements";
 import { useMapFacilities } from "../hooks/useMapFacilities";
 import { MapFacilitiesLayer, stallFloaterHtml } from "../components/MapFacilitiesLayer";
 import { registerMapFloater } from "../components/mapFloaterDeclutter";
-import { getSession, clearSession } from "../components/authStorage";
+import { getSession } from "../components/authStorage";
+import { useAuth } from "../context/AuthContext";
 
 import { showToast } from "../components/Toast";
 
@@ -279,6 +280,7 @@ function MapTabContent({ navigate }) {
 }
 
 export function UserDashboard() {
+  const { signOut } = useAuth();
   const navigate = useNavigate();
   const [session, setSession] = useState(null);
   const [activeTab, setActiveTab] = useState("home");
@@ -303,15 +305,6 @@ export function UserDashboard() {
   const [transferEmail, setTransferEmail] = useState("");
   const [transferError, setTransferError] = useState("");
   const [transferSubmitting, setTransferSubmitting] = useState(false);
-
-  useEffect(() => {
-    const s = getSession();
-    if (!s || (s.role !== "vendor" && s.role !== "user")) {
-      navigate("/", { replace: true });
-      return;
-    }
-    setSession(s);
-  }, [navigate]);
 
   useEffect(() => {
     const s = getSession();
@@ -506,8 +499,8 @@ export function UserDashboard() {
                   Profile Settings
                 </button>
                 <button
-                  onClick={() => {
-                    clearSession();
+                  onClick={async () => {
+                    await signOut();
                     showToast("You've been logged out.", "success");
                     navigate("/");
                   }}

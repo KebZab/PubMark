@@ -10,7 +10,7 @@ export function useMapFacilities() {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: MAP_FACILITIES_QUERY_KEY,
     queryFn: () => getMapFacilities(),
-    // Entrances/CRs/stairs/office markers essentially never move day-to-day.
+    // Map facilities essentially never move day-to-day.
     staleTime: 5 * 60_000,
   });
 

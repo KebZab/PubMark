@@ -357,7 +357,7 @@ export function SuperAdminMapEditor({ session }) {
       <style>{EXTRA_CSS}</style>
       <div className="flex flex-shrink-0 gap-2 border-b bg-white px-5 py-2">
         <button onClick={() => setEditorTab("zones")} className={`rounded-lg px-4 py-2 text-sm font-semibold ${editorTab === "zones" ? "bg-purple-600 text-white" : "bg-gray-100 text-gray-600"}`}>Market Zones</button>
-        <button onClick={() => setEditorTab("facilities")} className={`rounded-lg px-4 py-2 text-sm font-semibold ${editorTab === "facilities" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600"}`}>Entrances, CR, Stairs & Offices</button>
+        <button onClick={() => setEditorTab("facilities")} className={`rounded-lg px-4 py-2 text-sm font-semibold ${editorTab === "facilities" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600"}`}>Map Facilities</button>
       </div>
 
       {editorTab === "facilities" ? <div className="min-h-0 flex-1"><FacilityMapEditor /></div> : <>

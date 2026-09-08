@@ -8,6 +8,7 @@ export const FACILITY_META = {
   cr: { label: "CR", color: "#db2777", icon: '<svg viewBox="0 0 24 24"><circle cx="7" cy="4" r="2"/><path d="M5 22v-7H3l2-7h4l2 7H9v7M17 22v-6m0-8a2 2 0 1 0 0-4 2 2 0 0 0 0 4m-3 2h6v6h-2"/></svg>' },
   stairs: { label: "Stairs", color: "#7c3aed", icon: '<svg viewBox="0 0 24 24"><path d="M3 19h5v-4h4v-4h4V7h5M15 3l3-2 3 2M18 1v5"/></svg>' },
   office: { label: "Office", color: "#ea580c", icon: '<svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h2m4 0h2M8 11h2m4 0h2M9 21v-5h6v5"/></svg>' },
+  technical_room: { label: "Technical Room", color: "#2563eb", icon: '<svg viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5-5L12 3.6 9.6 6 7.3 3.7a4 4 0 0 0 5 5L4 17l3 3 8.3-8.3a4 4 0 0 0 5-5L18 9l-2.4-2.4 2.3-2.3a4 4 0 0 0-3.2 2z"/></svg>' },
 };
 
 const FACILITY_LABEL_CSS = `

@@ -42,6 +42,8 @@ export default function StallMap({
               ? { label: "Stairs", color: "#7c3aed", icon: "git-compare-outline" }
               : facility.type === "office"
                 ? { label: "Office", color: "#ea580c", icon: "business-outline" }
+                : facility.type === "technical_room"
+                  ? { label: "Technical Room", color: "#2563eb", icon: "construct-outline" }
                 : { label: "Entrance", color: "#16a34a", icon: "enter-outline" };
           return (
             <Pressable key={`facility-${facility.id}`} onPress={() => onFacilitySelect?.(facility)} className="flex-row items-center rounded-2xl border border-gray-200 bg-white p-4">

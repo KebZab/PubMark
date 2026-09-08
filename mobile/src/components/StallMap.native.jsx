@@ -147,7 +147,8 @@ function buildHtml(payload) {
       entrance: { label: 'Entrance', color: '#16a34a', icon: '<svg viewBox="0 0 24 24"><path d="M10 17l5-5-5-5M15 12H3M21 19V5a2 2 0 0 0-2-2h-6"/></svg>' },
       cr: { label: 'CR', color: '#db2777', icon: '<svg viewBox="0 0 24 24"><circle cx="7" cy="4" r="2"/><path d="M5 22v-7H3l2-7h4l2 7H9v7M17 22v-6m0-8a2 2 0 1 0 0-4 2 2 0 0 0 0 4m-3 2h6v6h-2"/></svg>' },
       stairs: { label: 'Stairs', color: '#7c3aed', icon: '<svg viewBox="0 0 24 24"><path d="M3 19h5v-4h4v-4h4V7h5M15 3l3-2 3 2M18 1v5"/></svg>' },
-      office: { label: 'Office', color: '#ea580c', icon: '<svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h2m4 0h2M8 11h2m4 0h2M9 21v-5h6v5"/></svg>' }
+      office: { label: 'Office', color: '#ea580c', icon: '<svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h2m4 0h2M8 11h2m4 0h2M9 21v-5h6v5"/></svg>' },
+      technical_room: { label: 'Technical Room', color: '#2563eb', icon: '<svg viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5-5L12 3.6 9.6 6 7.3 3.7a4 4 0 0 0 5 5L4 17l3 3 8.3-8.3a4 4 0 0 0 5-5L18 9l-2.4-2.4 2.3-2.3a4 4 0 0 0-3.2 2z"/></svg>' }
     };
     var escapeHtml = function (value) { return String(value || '').replace(/[&<>"']/g, function (ch) { return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' })[ch]; }); };
     data.facilities.forEach(function (facility) {
@@ -182,7 +183,7 @@ function buildHtml(payload) {
     var legend = L.control({ position: 'bottomleft' });
     legend.onAdd = function () {
       var div = L.DomUtil.create('div', 'map-legend-shell');
-      div.innerHTML = '<button class="map-legend-toggle" type="button">Legend +</button><div class="map-legend-content"><div class="map-legend-title">Stall status</div><span style="color:#14B8A6">●</span> Available<br><span style="color:#f59e0b">●</span> Pending<br><span style="color:#9ca3af">●</span> Occupied by vendor<br><span style="color:#6366f1">●</span> Your stall<div class="map-legend-title" style="margin-top:6px">Facilities</div><span style="color:#16a34a">●</span> Entrance<br><span style="color:#db2777">●</span> CR<br><span style="color:#7c3aed">●</span> Stairs<br><span style="color:#ea580c">●</span> Office</div>';
+      div.innerHTML = '<button class="map-legend-toggle" type="button">Legend +</button><div class="map-legend-content"><div class="map-legend-title">Stall status</div><span style="color:#14B8A6">●</span> Available<br><span style="color:#f59e0b">●</span> Pending<br><span style="color:#9ca3af">●</span> Occupied by vendor<br><span style="color:#6366f1">●</span> Your stall<div class="map-legend-title" style="margin-top:6px">Facilities</div><span style="color:#16a34a">●</span> Entrance<br><span style="color:#db2777">●</span> CR<br><span style="color:#7c3aed">●</span> Stairs<br><span style="color:#ea580c">●</span> Office<br><span style="color:#2563eb">●</span> Technical Room</div>';
       L.DomEvent.disableClickPropagation(div);
       var button = div.querySelector('.map-legend-toggle');
       button.addEventListener('click', function () { var open = div.classList.toggle('open'); button.textContent = open ? 'Legend −' : 'Legend +'; });

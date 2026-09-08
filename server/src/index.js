@@ -276,12 +276,21 @@ async function requireAuth(req, res, next) {
   const cookieToken = req.headers.cookie?.match(/(?:^|; )pubmark_session=([^;]+)/)?.[1];
   let auth;
   try { auth = jwt.verify(bearerToken || cookieToken || "", jwtSecret); }
-  catch { return res.status(401).json({ message: "Sign in is required." }); }
+  catch {
+    res.clearCookie("pubmark_session", cookieOptions());
+    return res.status(401).json({ message: "Sign in is required.", code: "session_invalid" });
+  }
   try {
-    const { rows } = await db.query("SELECT is_archived FROM profiles WHERE id = $1", [auth.sub]);
-    if (!rows[0] || rows[0].is_archived) {
+    const { rows } = await db.query("SELECT role, is_archived FROM profiles WHERE id = $1", [auth.sub]);
+    if (!rows[0]) {
+      res.clearCookie("pubmark_session", cookieOptions());
+      return res.status(401).json({ message: "Sign in is required.", code: "session_invalid" });
+    }
+    if (rows[0].is_archived) {
+      res.clearCookie("pubmark_session", cookieOptions());
       return res.status(401).json({ message: "This account has been terminated.", code: "account_terminated" });
     }
+    auth.role = rows[0].role;
   } catch (error) { return next(error); }
   req.auth = auth;
   next();
@@ -2762,9 +2771,10 @@ app.patch("/api/transfers/:id", requireAuth, async (req, res, next) => {
 });
 
 // ── Market Perimeters (multi-zone) ────────────────────────────────────────────
-const FACILITY_TYPES = new Set(["entrance", "cr", "stairs", "office"]);
+const FACILITY_TYPES = new Set(["entrance", "cr", "stairs", "office", "technical_room"]);
 const FACILITY_FLOORS = new Set(["1", "2"]);
-const FACILITY_LABELS = { entrance: "Entrance", cr: "CR", stairs: "Stairs", office: "Office" };
+const FACILITY_LABELS = { entrance: "Entrance", cr: "CR", stairs: "Stairs", office: "Office", technical_room: "Technical Room" };
+const FACILITY_AREA_TYPES = new Set(["cr", "office", "technical_room"]);
 
 function validFacilityPosition(position) {
   return Array.isArray(position) && position.length >= 2 && Number.isFinite(position[0]) && Number.isFinite(position[1]);
@@ -2772,7 +2782,7 @@ function validFacilityPosition(position) {
 
 function validFacilityGeometry(type, geometry) {
   if (!geometry || typeof geometry !== "object") return false;
-  if (type === "cr") {
+  if (FACILITY_AREA_TYPES.has(type)) {
     const ring = geometry.type === "Polygon" ? geometry.coordinates?.[0] : null;
     return Array.isArray(ring) && ring.length >= 4 && ring.every(validFacilityPosition) &&
       ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1];

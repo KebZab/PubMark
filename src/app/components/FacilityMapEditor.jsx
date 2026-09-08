@@ -56,11 +56,12 @@ function DrawFacility({ type, onGeometry }) {
     const drafts = new L.FeatureGroup().addTo(map);
     const meta = FACILITY_META[type] ?? FACILITY_META.entrance;
     const draftIcon = L.divIcon({ className: "", html: `<div class="facility-editor-draft-icon" style="display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:${meta.color};color:white;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,.35)">${meta.icon}</div>`, iconSize: [30, 30], iconAnchor: [15, 15] });
+    const drawsArea = ["cr", "office", "technical_room"].includes(type);
     const control = new L.Control.Draw({
       position: "topleft",
       draw: {
-        marker: type !== "cr" ? { icon: draftIcon } : false,
-        polygon: type === "cr" ? { allowIntersection: false, showArea: true } : false,
+        marker: !drawsArea ? { icon: draftIcon } : false,
+        polygon: drawsArea ? { allowIntersection: false, showArea: true } : false,
         rectangle: false, polyline: false, circle: false, circlemarker: false,
       },
       edit: { featureGroup: drafts, edit: false, remove: false },
@@ -127,7 +128,8 @@ export function FacilityMapEditor() {
 
   async function save() {
     const targetGeometry = editing?.geometry ?? geometry;
-    if (!targetGeometry) return showToast(`Place the ${form.type === "cr" ? "CR area" : "marker"} on the map first.`, "error");
+    const drawsArea = ["cr", "office", "technical_room"].includes(form.type);
+    if (!targetGeometry) return showToast(`Draw or place the ${drawsArea ? "facility area" : "marker"} on the map first.`, "error");
     setSaving(true);
     try {
       const payload = { ...form, notes: form.notes.trim(), geometry: targetGeometry };
@@ -154,14 +156,14 @@ export function FacilityMapEditor() {
           {editing ? <EditFacilityGeometry facility={editing} onSaved={handleEditedGeometry} /> : <DrawFacility type={form.type} onGeometry={handleGeometry} />}
         </MapContainer>
         <div className="absolute left-1/2 top-3 z-[1000] -translate-x-1/2 rounded-xl border bg-white px-4 py-2 text-xs font-medium shadow-lg">
-          {editing ? "Use the edit tool to move or reshape this facility; gray areas are stalls" : form.type === "cr" ? "Draw the CR footprint without overlapping the gray stalls" : `Place the ${FACILITY_META[form.type].label} marker outside the gray stalls`}
+          {editing ? "Use the edit tool to move or reshape this facility; gray areas are stalls" : ["cr", "office", "technical_room"].includes(form.type) ? `Draw the ${FACILITY_META[form.type].label} footprint without overlapping the gray stalls` : `Place the ${FACILITY_META[form.type].label} marker outside the gray stalls`}
         </div>
       </div>
 
       <aside className="flex w-96 flex-col border-l bg-white">
         <div className="space-y-3 border-b p-4">
           <div className="flex items-center justify-between"><h3 className="font-semibold">{editing ? "Edit Facility" : "New Facility"}</h3>{editing && <button onClick={reset}><X className="h-4 w-4" /></button>}</div>
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             {Object.entries(FACILITY_META).map(([type, meta]) => <button key={type} disabled={Boolean(editing)} onClick={() => { setField("type", type); setGeometry(null); }} className={`flex flex-col items-center gap-1 rounded-lg border px-2 py-2 text-xs font-semibold ${form.type === type ? "border-blue-600 bg-blue-50 text-blue-700" : "border-gray-200"}`}><FacilityIcon type={type} className="[&_svg]:h-4 [&_svg]:w-4 [&_svg]:fill-none [&_svg]:stroke-current [&_svg]:stroke-2" />{meta.label}</button>)}
           </div>
           <FloorSwitcher floor={form.floor} onChange={(value) => { setField("floor", value); setFloor(value); }} />
