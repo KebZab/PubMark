@@ -22,6 +22,7 @@ import {
   UserCog,
   Inbox,
   Receipt,
+  UserPlus,
 } from "lucide-react";
 import { clearSession } from "./authStorage";
 import { showToast } from "./Toast";
@@ -49,6 +50,7 @@ function getNavItems(role) {
         { label: "Stall Map", icon: MapPin, path: "/admin/map" },
         { label: "Applications", icon: FileText, path: "/admin/applications" },
         { label: "Vendors", icon: Users, path: "/admin/vendors" },
+        { label: "Walk-in Application", icon: UserPlus, path: "/admin/walk-in" },
         { label: "Payment Receipts", icon: Receipt, path: "/admin/receipts" },
         { label: "Contract Renewals", icon: ClipboardList, path: "/admin/renewals" },
         { label: "Reports & Requests", icon: Inbox, path: "/admin/violations" },

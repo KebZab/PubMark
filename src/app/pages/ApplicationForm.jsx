@@ -24,14 +24,14 @@ import { showToast } from "../components/Toast";
 import { describeFileProblem, FILE_ACCEPT_ATTRIBUTE } from "../services/fileUpload";
 import { AddStallMapPicker } from "../components/AddStallMapPicker";
 
-const TERM_OPTIONS = [
+export const TERM_OPTIONS = [
   { value: "6", label: "6 Months" },
   { value: "12", label: "1 Year" },
   { value: "24", label: "2 Years" },
   { value: "36", label: "3 Years" },
 ];
 
-const BUSINESS_TYPES = [
+export const BUSINESS_TYPES = [
   "Food & Beverage",
   "Retail",
   "Services",

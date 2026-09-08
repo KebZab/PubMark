@@ -74,6 +74,7 @@ export async function listUsersPage(params) {
   const query = new URLSearchParams();
   if (params.role && params.role !== "all") query.set("role", params.role);
   if (params.search) query.set("search", params.search);
+  if (params.activeOnly) query.set("activeOnly", "true");
   if (params.sortField) query.set("sortField", params.sortField);
   if (params.sortDir) query.set("sortDir", params.sortDir);
   query.set("limit", String(params.pageSize));

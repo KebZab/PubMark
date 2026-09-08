@@ -64,6 +64,10 @@ export async function createApplication(data) {
       // Was previously dropped here, so whatever the form collected was
       // silently discarded and the profile address shown instead.
       applicantAddress: data.applicantAddress,
+      // Only meaningful for an admin/super_admin caller filing on a walk-in
+      // vendor's behalf — undefined for every normal self-service call, and
+      // dropped entirely by JSON.stringify so the payload is unchanged there.
+      vendorId: data.vendorId ?? undefined,
     }),
   });
   return result.application;

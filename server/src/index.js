@@ -912,6 +912,7 @@ app.get("/api/users", requireAuth, requireRole("admin", "super_admin"), async (r
     const conditions = [];
     if (role) { values.push(role); conditions.push(`role = $${values.length}`); }
     if (search) { values.push(`%${search}%`); conditions.push(`(name ILIKE $${values.length} OR email ILIKE $${values.length})`); }
+    if (String(req.query.activeOnly) === "true") conditions.push("is_archived = false");
     const whereSql = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
 
     const sortColumn = USER_SORT_COLUMNS[String(req.query.sortField || "")] || "name";
@@ -2171,12 +2172,26 @@ app.get("/api/applications/occupied-stalls", async (_req, res, next) => {
   } catch (error) { next(error); }
 });
 
-app.post("/api/applications", requireAuth, requireRole("vendor"), async (req, res, next) => {
+app.post("/api/applications", requireAuth, requireRole("admin", "super_admin", "vendor"), async (req, res, next) => {
   try {
-    const { stallId, businessName, businessType, contractStart, contractTermMonths, contractEnd, permit, additionalFile, notes, applicantAddress } = req.body;
+    const { stallId, businessName, businessType, contractStart, contractTermMonths, contractEnd, permit, additionalFile, notes, applicantAddress, vendorId } = req.body;
     if (!stallId || !businessName || !businessType || !contractStart || !contractTermMonths || !contractEnd) {
       return res.status(400).json({ message: "Missing required fields." });
     }
+
+    // A vendor caller may only ever file for themselves — vendorId is only
+    // honored for staff filing a walk-in application on someone else's
+    // behalf. The target must be an active vendor account.
+    let targetUserId = req.auth.sub;
+    if ((req.auth.role === "admin" || req.auth.role === "super_admin") && vendorId) {
+      const { rows: vendorRows } = await db.query(
+        "SELECT id FROM profiles WHERE id = $1 AND role = 'vendor' AND is_archived = false",
+        [vendorId]
+      );
+      if (!vendorRows[0]) return res.status(400).json({ message: "Selected vendor account was not found or is no longer active." });
+      targetUserId = vendorId;
+    }
+
     const id = crypto.randomUUID();
     // Upload both documents before inserting, and clean up the first if the
     // second is rejected, so a failed submission leaves nothing behind.
@@ -2190,7 +2205,7 @@ app.post("/api/applications", requireAuth, requireRole("vendor"), async (req, re
     }
     await db.query(
       "INSERT INTO applications (id, user_id, stall_id, business_name, business_type, contract_start, contract_term_months, contract_end, permit_path, additional_file_path, notes, applicant_address) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
-      [id, req.auth.sub, stallId, businessName, businessType, contractStart, parseInt(contractTermMonths), contractEnd, storedPermit?.storagePath || null, storedAdditional?.storagePath || null, notes || "", (applicantAddress || "").trim() || null]
+      [id, targetUserId, stallId, businessName, businessType, contractStart, parseInt(contractTermMonths), contractEnd, storedPermit?.storagePath || null, storedAdditional?.storagePath || null, notes || "", (applicantAddress || "").trim() || null]
     );
     const { rows } = await db.query(
       `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.renewal_deadline_at, a.contract_terminated_at, a.approved_at, a.rejected_at, a.permit_uploaded_at, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,

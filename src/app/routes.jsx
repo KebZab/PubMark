@@ -14,6 +14,7 @@ import { OfficerDashboard } from "./pages/OfficerDashboard";
 import { Analytics } from "./pages/Analytics";
 import { ArchiveManagement } from "./pages/ArchiveManagement";
 import { CheckRequests } from "./pages/CheckRequests";
+import { WalkInApplication } from "./pages/WalkInApplication";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 
 export const router = createBrowserRouter([
@@ -130,6 +131,14 @@ export const router = createBrowserRouter([
     element: (
       <ProtectedRoute role="admin">
         <AdminDashboard />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: "/admin/walk-in",
+    element: (
+      <ProtectedRoute role="admin">
+        <WalkInApplication />
       </ProtectedRoute>
     ),
   },
