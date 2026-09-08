@@ -180,6 +180,8 @@ export function AdminDashboard() {
   const [selectedApp, setSelectedApp] = useState(null);
   const [contractApp, setContractApp] = useState(null);
   const [remarksInput, setRemarksInput] = useState("");
+  const [processingAppId, setProcessingAppId] = useState(null);
+  const [processingAction, setProcessingAction] = useState(null); // "approve" | "reject" | null
   const {
     announcements,
     setAnnouncements,
@@ -275,6 +277,7 @@ export function AdminDashboard() {
   }, [selectedApp]);
 
   const handleApprove = async (id) => {
+    if (processingAppId) return;
     const targetApp = applications.find((application) => application.id === id);
     if (!targetApp) return;
     if (
@@ -296,6 +299,8 @@ export function AdminDashboard() {
       return;
     }
 
+    setProcessingAppId(id);
+    setProcessingAction("approve");
     try {
       const adminRemarks = buildPermitDeadlineRemarks(remarksInput, {
         permitDeadlineAt:
@@ -313,10 +318,16 @@ export function AdminDashboard() {
       showToast("Application approved.", "success");
     } catch (error) {
       showToast(`Failed to approve application: ${error.message}`, "error");
+    } finally {
+      setProcessingAppId(null);
+      setProcessingAction(null);
     }
   };
 
   const handleReject = async (id) => {
+    if (processingAppId) return;
+    setProcessingAppId(id);
+    setProcessingAction("reject");
     try {
       const adminRemarks = buildPermitDeadlineRemarks(remarksInput);
       await updateApplicationStatus(id, "rejected", adminRemarks || undefined);
@@ -335,6 +346,9 @@ export function AdminDashboard() {
       showToast("Application rejected.", "error");
     } catch (error) {
       showToast(`Failed to reject application: ${error.message}`, "error");
+    } finally {
+      setProcessingAppId(null);
+      setProcessingAction(null);
     }
   };
 
@@ -1122,17 +1136,27 @@ export function AdminDashboard() {
                                 <>
                                   <button
                                     onClick={() => handleApprove(app.id)}
-                                    className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-medium hover:bg-emerald-600 transition-colors"
+                                    disabled={!!processingAppId}
+                                    className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-medium hover:bg-emerald-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                                     title="Approve"
                                   >
-                                    <Check className="w-4 h-4" />
+                                    {processingAppId === app.id && processingAction === "approve" ? (
+                                      <span className="block w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                                    ) : (
+                                      <Check className="w-4 h-4" />
+                                    )}
                                   </button>
                                   <button
                                     onClick={() => handleReject(app.id)}
-                                    className="px-3 py-1.5 bg-red-500 text-white rounded-lg text-xs font-medium hover:bg-red-600 transition-colors"
+                                    disabled={!!processingAppId}
+                                    className="px-3 py-1.5 bg-red-500 text-white rounded-lg text-xs font-medium hover:bg-red-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                                     title="Reject"
                                   >
-                                    <X className="w-4 h-4" />
+                                    {processingAppId === app.id && processingAction === "reject" ? (
+                                      <span className="block w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                                    ) : (
+                                      <X className="w-4 h-4" />
+                                    )}
                                   </button>
                                 </>
                               )}
@@ -1499,20 +1523,30 @@ export function AdminDashboard() {
                                         e.stopPropagation();
                                         handleApprove(app.id);
                                       }}
-                                      className="px-2.5 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-medium hover:bg-emerald-600 transition-colors"
+                                      disabled={!!processingAppId}
+                                      className="px-2.5 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-medium hover:bg-emerald-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                                       title="Approve"
                                     >
-                                      <Check className="w-3.5 h-3.5" />
+                                      {processingAppId === app.id && processingAction === "approve" ? (
+                                        <span className="block w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                                      ) : (
+                                        <Check className="w-3.5 h-3.5" />
+                                      )}
                                     </button>
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         handleReject(app.id);
                                       }}
-                                      className="px-2.5 py-1.5 bg-red-500 text-white rounded-lg text-xs font-medium hover:bg-red-600 transition-colors"
+                                      disabled={!!processingAppId}
+                                      className="px-2.5 py-1.5 bg-red-500 text-white rounded-lg text-xs font-medium hover:bg-red-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                                       title="Reject"
                                     >
-                                      <X className="w-3.5 h-3.5" />
+                                      {processingAppId === app.id && processingAction === "reject" ? (
+                                        <span className="block w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                                      ) : (
+                                        <X className="w-3.5 h-3.5" />
+                                      )}
                                     </button>
                                   </>
                                 )}
@@ -1804,15 +1838,31 @@ export function AdminDashboard() {
                         <div className="flex gap-2 pt-1">
                           <button
                             onClick={() => handleApprove(selectedApp.id)}
-                            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-emerald-500 text-white rounded-xl text-sm font-medium hover:bg-emerald-600 transition-colors"
+                            disabled={!!processingAppId}
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-emerald-500 text-white rounded-xl text-sm font-medium hover:bg-emerald-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                           >
-                            <Check className="w-4 h-4" /> Approve
+                            {processingAppId === selectedApp.id && processingAction === "approve" ? (
+                              <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                            ) : (
+                              <Check className="w-4 h-4" />
+                            )}
+                            {processingAppId === selectedApp.id && processingAction === "approve"
+                              ? "Approving…"
+                              : "Approve"}
                           </button>
                           <button
                             onClick={() => handleReject(selectedApp.id)}
-                            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-red-500 text-white rounded-xl text-sm font-medium hover:bg-red-600 transition-colors"
+                            disabled={!!processingAppId}
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-red-500 text-white rounded-xl text-sm font-medium hover:bg-red-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                           >
-                            <X className="w-4 h-4" /> Reject
+                            {processingAppId === selectedApp.id && processingAction === "reject" ? (
+                              <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                            ) : (
+                              <X className="w-4 h-4" />
+                            )}
+                            {processingAppId === selectedApp.id && processingAction === "reject"
+                              ? "Rejecting…"
+                              : "Reject"}
                           </button>
                         </div>
                       )}

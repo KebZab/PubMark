@@ -664,6 +664,24 @@ function displayFileName(storagePath) {
   return base.replace(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-/i, "") || null;
 }
 
+// Keeps the stored stalls.status column truthful whenever an application's
+// approval state changes, so a direct look at the stalls table (Supabase
+// dashboard, a raw query, etc.) shows the same thing the app already
+// computes live everywhere else (AdminMapView, Analytics, SuperAdminDashboard).
+// "unavailable" is a real manual admin flag (maintenance/closure) and always
+// wins — this never overwrites it, matching the same precedence the UI uses.
+async function syncStallOccupancy(stallId, client = db) {
+  if (!stallId) return;
+  const { rows } = await client.query(
+    "SELECT 1 FROM applications WHERE stall_id = $1 AND status = 'approved' LIMIT 1",
+    [stallId]
+  );
+  await client.query(
+    "UPDATE stalls SET status = $1 WHERE id = $2 AND status <> 'unavailable'",
+    [rows.length > 0 ? "occupied" : "vacant", stallId]
+  );
+}
+
 async function mapApplicationRow(r) {
   const permitMeta = parsePermitMeta(r.admin_remarks || "");
 
@@ -694,6 +712,9 @@ async function mapApplicationRow(r) {
     status: r.status,
     adminRemarks: r.admin_remarks || "",
     dateApplied: r.date_applied,
+    approvedAt: r.approved_at,
+    rejectedAt: r.rejected_at,
+    permitUploadedAt: r.permit_uploaded_at,
     permitDeadlineAt: permitMeta.permitDeadlineAt,
     permitDeadlineUpdatedAt: permitMeta.permitDeadlineUpdatedAt,
     permitTerminatedAt: permitMeta.permitTerminatedAt,
@@ -703,7 +724,7 @@ async function mapApplicationRow(r) {
 }
 
 async function autoTerminateExpiredContracts() {
-  await db.query(`
+  const { rows } = await db.query(`
     UPDATE applications
     SET status = 'rejected', contract_terminated_at = NOW()
     WHERE status = 'approved'
@@ -713,11 +734,13 @@ async function autoTerminateExpiredContracts() {
         SELECT 1 FROM contract_renewal_requests rr
         WHERE rr.application_id = applications.id AND rr.status = 'pending'
       )
+    RETURNING stall_id
   `);
+  for (const row of rows) await syncStallOccupancy(row.stall_id);
 }
 
 async function autoTerminateExpiredPermitDeadlines() {
-  const { rows } = await db.query("SELECT id, permit_path, status, admin_remarks FROM applications WHERE status = 'approved'");
+  const { rows } = await db.query("SELECT id, stall_id, permit_path, status, admin_remarks FROM applications WHERE status = 'approved'");
   const now = Date.now();
 
   for (const row of rows) {
@@ -750,6 +773,7 @@ async function autoTerminateExpiredPermitDeadlines() {
         row.id,
       ]
     );
+    await syncStallOccupancy(row.stall_id);
   }
 }
 
@@ -800,6 +824,37 @@ app.post("/api/auth/register", async (req, res, next) => {
 
 app.get("/api/auth/me", requireAuth, async (req, res, next) => {
   try { const { rows } = await db.query("SELECT id, email, name, role, address, phone, department FROM profiles WHERE id = $1", [req.auth.sub]); if (!rows[0]) return res.status(401).json({ message: "Account not found." }); res.json({ profile: profile(rows[0]) }); } catch (error) { next(error); }
+});
+
+// Per-account "last seen" watermarks for notification badges (mobile
+// Notices tab, and any future badge type — keyed generically by
+// `tracker_key` rather than one column per notification type). Any
+// authenticated role reads/writes only its own row, scoped by req.auth.sub.
+app.get("/api/notification-read-state", requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      "SELECT tracker_key, last_seen_at FROM notification_read_state WHERE user_id = $1",
+      [req.auth.sub]
+    );
+    const state = {};
+    for (const row of rows) state[row.tracker_key] = row.last_seen_at;
+    res.json({ state });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/notification-read-state/:trackerKey", requireAuth, async (req, res, next) => {
+  try {
+    const trackerKey = String(req.params.trackerKey || "").trim();
+    if (!trackerKey) return res.status(400).json({ message: "A tracker key is required." });
+    const { rows } = await db.query(
+      `INSERT INTO notification_read_state (user_id, tracker_key, last_seen_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (user_id, tracker_key) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at
+       RETURNING last_seen_at`,
+      [req.auth.sub, trackerKey]
+    );
+    res.json({ trackerKey, lastSeenAt: rows[0].last_seen_at });
+  } catch (error) { next(error); }
 });
 app.get("/api/auth/users/by-email", requireAuth, async (req, res, next) => {
   try {
@@ -1592,7 +1647,7 @@ app.patch("/api/termination-requests/:id", requireAuth, requireRole("admin", "su
           `UPDATE applications
            SET status = 'rejected', admin_remarks = TRIM(BOTH E'\n' FROM COALESCE(admin_remarks, '') || E'\n\n' || 'Rejected — vendor account terminated.')
            WHERE user_id = $1 AND status IN ('pending', 'approved')
-           RETURNING id`,
+           RETURNING id, stall_id`,
           [vendor.id]
         );
         const archiveId = crypto.randomUUID();
@@ -1612,6 +1667,7 @@ app.patch("/api/termination-requests/:id", requireAuth, requireRole("admin", "su
           ]
         );
         await conn.query("UPDATE profiles SET is_archived = true WHERE id = $1", [vendor.id]);
+        for (const app of rejectedApps) await syncStallOccupancy(app.stall_id, conn);
       }
     }
 
@@ -2064,7 +2120,8 @@ app.get("/api/applications", requireAuth, async (req, res, next) => {
     let sql = `
       SELECT
         a.id, a.user_id, a.stall_id, a.business_name, a.business_type,
-        a.contract_start, a.contract_term_months, a.contract_end, a.renewal_deadline_at, a.contract_terminated_at, a.permit_path, a.additional_file_path,
+        a.contract_start, a.contract_term_months, a.contract_end, a.renewal_deadline_at, a.contract_terminated_at,
+        a.approved_at, a.rejected_at, a.permit_uploaded_at, a.permit_path, a.additional_file_path,
         a.notes, a.status, a.admin_remarks, a.date_applied,
         s.stall_name, s.section, s.floor_area,
         p.name as applicant_name, p.email as applicant_email,
@@ -2136,7 +2193,7 @@ app.post("/api/applications", requireAuth, requireRole("vendor"), async (req, re
       [id, req.auth.sub, stallId, businessName, businessType, contractStart, parseInt(contractTermMonths), contractEnd, storedPermit?.storagePath || null, storedAdditional?.storagePath || null, notes || "", (applicantAddress || "").trim() || null]
     );
     const { rows } = await db.query(
-      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.renewal_deadline_at, a.contract_terminated_at, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
+      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.renewal_deadline_at, a.contract_terminated_at, a.approved_at, a.rejected_at, a.permit_uploaded_at, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
       [id]
     );
     const app = await mapApplicationRow(rows[0]);
@@ -2148,16 +2205,27 @@ app.patch("/api/applications/:id", requireAuth, requireRole("admin", "super_admi
   try {
     const { status, adminRemarks } = req.body;
     const updates = []; const values = [];
-    if (status !== undefined) { values.push(status); updates.push(`status = $${values.length}`); }
+    if (status !== undefined) {
+      values.push(status); updates.push(`status = $${values.length}`);
+      // Stamps the decision moment, not just the decision — same idea as
+      // contract_terminated_at already timestamping termination. Only an
+      // explicit admin decision sets these; the two auto-termination paths
+      // (autoTerminateExpiredContracts, autoTerminateExpiredPermitDeadlines)
+      // deliberately do not, so they stay distinguishable on the tracking
+      // timeline from a reviewed rejection.
+      if (status === "approved") updates.push(`approved_at = NOW()`);
+      if (status === "rejected") updates.push(`rejected_at = NOW()`);
+    }
     if (adminRemarks !== undefined) { values.push(adminRemarks); updates.push(`admin_remarks = $${values.length}`); }
     if (updates.length === 0) return res.status(400).json({ message: "No fields to update." });
     values.push(req.params.id);
     await db.query(`UPDATE applications SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
     const { rows } = await db.query(
-      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.renewal_deadline_at, a.contract_terminated_at, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
+      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.renewal_deadline_at, a.contract_terminated_at, a.approved_at, a.rejected_at, a.permit_uploaded_at, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
       [req.params.id]
     );
     if (!rows[0]) return res.status(404).json({ message: "Application not found." });
+    if (status !== undefined) await syncStallOccupancy(rows[0].stall_id);
     const app = await mapApplicationRow(rows[0]);
     res.json({ application: app });
   } catch (error) { next(error); }
@@ -2194,7 +2262,7 @@ app.patch("/api/applications/:id/permit", requireAuth, requireRole("admin", "sup
 
     const [stored] = await storeAttachments("permits", req.params.id, [permit], req.auth.sub);
     await db.query(
-      "UPDATE applications SET permit_path = $1, admin_remarks = $2 WHERE id = $3",
+      "UPDATE applications SET permit_path = $1, admin_remarks = $2, permit_uploaded_at = NOW() WHERE id = $3",
       [stored.storagePath, buildPermitMetaRemarks(meta.visibleRemarks, {}), req.params.id]
     );
     // Drop the file this one replaced, so re-uploads don't accumulate.
@@ -2203,7 +2271,7 @@ app.patch("/api/applications/:id/permit", requireAuth, requireRole("admin", "sup
     }
 
     const { rows } = await db.query(
-      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.renewal_deadline_at, a.contract_terminated_at, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
+      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.renewal_deadline_at, a.contract_terminated_at, a.approved_at, a.rejected_at, a.permit_uploaded_at, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
       [req.params.id]
     );
     if (!rows[0]) return res.status(404).json({ message: "Application not found." });
@@ -2216,13 +2284,14 @@ app.delete("/api/applications/:id", requireAuth, requireRole("admin", "super_adm
     // Read the file paths before the row goes, or the permit is stranded in
     // Storage with nothing left pointing at it.
     const { rows } = await db.query(
-      "SELECT permit_path, additional_file_path FROM applications WHERE id = $1",
+      "SELECT stall_id, permit_path, additional_file_path FROM applications WHERE id = $1",
       [req.params.id]
     );
     await db.query("DELETE FROM applications WHERE id = $1", [req.params.id]);
     if (rows[0]) {
       await removeAttachment(rows[0].permit_path);
       await removeAttachment(rows[0].additional_file_path);
+      await syncStallOccupancy(rows[0].stall_id);
     }
     res.json({ ok: true });
   } catch (error) { next(error); }

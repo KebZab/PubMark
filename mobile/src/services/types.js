@@ -25,14 +25,23 @@
  * @property {string} contractTermMonths
  * @property {string} contractEnd
  * @property {string|null} permitFileName
+ * @property {number|null} permitFileSize
+ * @property {string|null} permitUrl Signed link, null if no file is stored.
  * @property {string|null} additionalFileName
+ * @property {number|null} additionalFileSize
+ * @property {string|null} additionalFileUrl Signed link, null if no file is stored.
  * @property {string} notes
  * @property {ApplicationStatus} status
  * @property {string} adminRemarks
  * @property {string} dateApplied
+ * @property {string|null} approvedAt Set once an admin approves this application.
+ * @property {string|null} rejectedAt Set once an admin rejects this application.
+ * @property {string|null} permitUploadedAt Set on every successful permit upload/re-upload.
  * @property {string|null} permitDeadlineAt
  * @property {string|null} permitDeadlineUpdatedAt
- * @property {string|null} permitTerminatedAt
+ * @property {string|null} permitTerminatedAt Set if auto-terminated for a missed permit deadline.
+ * @property {string|null} renewalDeadlineAt
+ * @property {string|null} contractTerminatedAt
  */
 
 /** @typedef {"info" | "warning" | "urgent" | "success"} AnnouncementType */

@@ -109,6 +109,16 @@ export async function getAnnouncements() {
   return apiFetch("/announcements");
 }
 
+// Per-account "last seen" watermarks behind notification badges (e.g. the
+// Notices tab's unread count) — see hooks/useLastSeenTracker.js.
+export async function getNotificationReadState() {
+  return apiFetch("/notification-read-state");
+}
+
+export async function markNotificationSeen(trackerKey) {
+  return apiFetch(`/notification-read-state/${trackerKey}`, { method: "POST" });
+}
+
 export async function getStalls() {
   return apiFetch("/stalls");
 }

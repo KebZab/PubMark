@@ -91,6 +91,7 @@ export function AdminApplicationDetails() {
   const [remarksInput, setRemarksInput] = useState("");
   const [permitDeadlineInput, setPermitDeadlineInput] = useState("");
   const [contractApp, setContractApp] = useState(null);
+  const [decisionAction, setDecisionAction] = useState(null); // "approve" | "reject" | null
 
   useEffect(() => {
     const session = getSession();
@@ -144,11 +145,12 @@ export function AdminApplicationDetails() {
     `${app.contractTermMonths} months`;
 
   const handleApprove = async () => {
-    if (!app) return;
+    if (!app || decisionAction) return;
     if (!app.permitFileName && !permitDeadlineInput) {
       showToast("Set a business permit deadline before approving this application.", "error");
       return;
     }
+    setDecisionAction("approve");
     try {
       await updateApplicationAdmin(app.id, {
         status: "approved",
@@ -163,11 +165,14 @@ export function AdminApplicationDetails() {
       showToast("Application approved.", "success");
     } catch (error) {
       showToast(`Failed to approve application: ${error.message}`, "error");
+    } finally {
+      setDecisionAction(null);
     }
   };
 
   const handleReject = async () => {
-    if (!app) return;
+    if (!app || decisionAction) return;
+    setDecisionAction("reject");
     try {
       await updateApplicationAdmin(app.id, {
         status: "rejected",
@@ -177,6 +182,8 @@ export function AdminApplicationDetails() {
       showToast("Application rejected.", "error");
     } catch (error) {
       showToast(`Failed to reject application: ${error.message}`, "error");
+    } finally {
+      setDecisionAction(null);
     }
   };
 
@@ -464,15 +471,27 @@ export function AdminApplicationDetails() {
               <div className="flex flex-col sm:flex-row gap-3">
                 <button
                   onClick={handleApprove}
-                  className="flex-1 flex items-center justify-center gap-2 py-3 bg-emerald-500 text-white rounded-xl text-sm font-semibold hover:bg-emerald-600 transition-colors"
+                  disabled={!!decisionAction}
+                  className="flex-1 flex items-center justify-center gap-2 py-3 bg-emerald-500 text-white rounded-xl text-sm font-semibold hover:bg-emerald-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <Check className="w-4 h-4" /> Approve Application
+                  {decisionAction === "approve" ? (
+                    <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <Check className="w-4 h-4" />
+                  )}
+                  {decisionAction === "approve" ? "Approving…" : "Approve Application"}
                 </button>
                 <button
                   onClick={handleReject}
-                  className="flex-1 flex items-center justify-center gap-2 py-3 bg-red-500 text-white rounded-xl text-sm font-semibold hover:bg-red-600 transition-colors"
+                  disabled={!!decisionAction}
+                  className="flex-1 flex items-center justify-center gap-2 py-3 bg-red-500 text-white rounded-xl text-sm font-semibold hover:bg-red-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <X className="w-4 h-4" /> Reject Application
+                  {decisionAction === "reject" ? (
+                    <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <X className="w-4 h-4" />
+                  )}
+                  {decisionAction === "reject" ? "Rejecting…" : "Reject Application"}
                 </button>
               </div>
             </>

@@ -6,6 +6,7 @@ import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { useAuth } from "../context/AuthContext";
+import { useNoticesBadge } from "../hooks/useNoticesBadge";
 import LoginScreen from "../screens/LoginScreen";
 import RegisterScreen from "../screens/RegisterScreen";
 import VendorHomeScreen from "../screens/vendor/HomeScreen";
@@ -36,6 +37,7 @@ const tabScreenOptions = {
   tabBarInactiveTintColor: "#9ca3af",
   tabBarStyle: { borderTopColor: "#e5e7eb" },
   tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
+  tabBarBadgeStyle: { backgroundColor: "#ef4444" },
 };
 
 // The web app gives officers an amber accent rather than the vendor teal, so
@@ -59,6 +61,7 @@ function tabIcon(name) {
 
 // Vendor tabs mirror the web vendor dashboard: home / applications / notices / map
 function VendorTabs() {
+  const { unreadCount } = useNoticesBadge();
   return (
     <Tab.Navigator screenOptions={tabScreenOptions}>
       <Tab.Screen
@@ -79,7 +82,7 @@ function VendorTabs() {
       <Tab.Screen
         name="Notices"
         component={VendorNoticesScreen}
-        options={{ tabBarIcon: tabIcon("megaphone-outline") }}
+        options={{ tabBarIcon: tabIcon("megaphone-outline"), tabBarBadge: unreadCount > 0 ? unreadCount : undefined }}
       />
       <Tab.Screen name="Map" component={VendorMapScreen} options={{ tabBarIcon: tabIcon("map-outline") }} />
     </Tab.Navigator>
@@ -92,8 +95,16 @@ function VendorEntry({ navigation, pendingApplication }) {
   useEffect(() => {
     const stalls = pendingApplication.current;
     if (!stalls?.length) return;
-    pendingApplication.current = null;
-    navigation.navigate("ApplyForStall", { stalls });
+    // This screen and its Stack.Navigator mount in the same commit as this
+    // effect fires, so navigating immediately can land before
+    // react-navigation's own state is attached and get silently dropped (a
+    // known timing hazard). Deferring one tick lets the navigator finish
+    // mounting first. Deliberately NOT clearing pendingApplication.current
+    // here — ApplicationFormScreen clears it once it has actually consumed
+    // the stalls, so a dropped attempt leaves the selection recoverable
+    // instead of silently destroying it up front.
+    const timer = setTimeout(() => navigation.navigate("ApplyForStall", { stalls }), 0);
+    return () => clearTimeout(timer);
   }, [navigation, pendingApplication]);
   return <VendorTabs />;
 }
@@ -109,17 +120,16 @@ function VendorNavigator({ pendingApplication }) {
         component={ApplicationDetailScreen}
         options={{ animation: "slide_from_right" }}
       />
-      <Stack.Screen
-        name="ApplyForStall"
-        component={ApplicationFormScreen}
-        options={{ presentation: "card", animation: "slide_from_right" }}
-      />
+      <Stack.Screen name="ApplyForStall" options={{ presentation: "card", animation: "slide_from_right" }}>
+        {(props) => <ApplicationFormScreen {...props} pendingApplication={pendingApplication} />}
+      </Stack.Screen>
     </Stack.Navigator>
   );
 }
 
 // Officer tabs mirror the web officer dashboard: violations / checks / map / receipts / notices
 function OfficerTabs() {
+  const { unreadCount } = useNoticesBadge();
   return (
     <Tab.Navigator screenOptions={officerTabScreenOptions}>
       <Tab.Screen
@@ -141,7 +151,7 @@ function OfficerTabs() {
       <Tab.Screen
         name="Notices"
         component={OfficerNoticesScreen}
-        options={{ tabBarIcon: tabIcon("megaphone-outline") }}
+        options={{ tabBarIcon: tabIcon("megaphone-outline"), tabBarBadge: unreadCount > 0 ? unreadCount : undefined }}
       />
     </Tab.Navigator>
   );

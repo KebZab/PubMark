@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { Alert } from "react-native";
+import { useQueryClient } from "@tanstack/react-query";
 import { login as apiLogin, registerVendor, getCurrentProfile, setAccountTerminatedHandler } from "../services/api";
 import { clearSession, getProfile, saveSession } from "../services/tokenStore";
 
@@ -8,6 +9,7 @@ const AuthContext = createContext(undefined);
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
 
   // Fires from apiFetch the moment ANY request notices the account was
   // terminated — not just at login — so a vendor who's still signed in when
@@ -16,9 +18,10 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     setAccountTerminatedHandler(() => {
       setUser(null);
+      queryClient.clear();
       Alert.alert("Account terminated", "This account has been terminated.");
     });
-  }, []);
+  }, [queryClient]);
 
   // On launch, restore a saved session. We re-check with the server rather
   // than trusting the stored copy blindly — the token may have expired (8h).
@@ -66,6 +69,11 @@ export function AuthProvider({ children }) {
   const signOut = async () => {
     await clearSession();
     setUser(null);
+    // None of this app's query keys (stalls, applications, announcements,
+    // notification read-state, etc.) are scoped by user id — without this, a
+    // different account signing in right after would briefly see whatever
+    // the previous account had cached.
+    queryClient.clear();
   };
 
   return <AuthContext.Provider value={{ user, loading, signIn, signUp, signOut }}>{children}</AuthContext.Provider>;

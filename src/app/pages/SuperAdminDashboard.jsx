@@ -512,6 +512,22 @@ export function SuperAdminDashboard() {
     }
   }, [tab]);
 
+  // "Occupied" isn't a value an admin sets by hand — it's derived live from
+  // approved applications (same pattern AdminMapView.jsx and Analytics.jsx
+  // already use), since the stored stalls.status column is never updated
+  // when an application gets approved/rejected and would otherwise drift
+  // out of sync. `status === "unavailable"` is still the one real stored/
+  // manual flag (maintenance/closure), so that still wins.
+  const occupiedStallIds = new Set(
+    applications.filter((a) => a.status === "approved").map((a) => a.stallId),
+  );
+  const getStallDisplayStatus = (stall) =>
+    stall.status === "unavailable"
+      ? "unavailable"
+      : occupiedStallIds.has(stall.id)
+        ? "occupied"
+        : "vacant";
+
   const stats = {
     total: users.length,
     vendors: users.filter((u) => u.role === "vendor").length,
@@ -519,7 +535,7 @@ export function SuperAdminDashboard() {
     admins: users.filter((u) => u.role === "admin" || u.role === "super_admin").length,
     openViolations: allViolations.filter((v) => v.status === "open").length,
     pendingApps: applications.filter((a) => a.status === "pending").length,
-    occupiedStalls: stalls.filter((s) => s.status === "occupied").length,
+    occupiedStalls: stalls.filter((s) => getStallDisplayStatus(s) === "occupied").length,
   };
 
   function openCreate() {
@@ -1509,20 +1525,19 @@ export function SuperAdminDashboard() {
                               autoFocus
                             >
                               <option value="vacant">Vacant</option>
-                              <option value="occupied">Occupied</option>
                               <option value="unavailable">Unavailable</option>
                             </select>
                           ) : (
                             <span
                               className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                                s.status === "vacant"
+                                getStallDisplayStatus(s) === "vacant"
                                   ? "bg-green-100 text-green-700"
-                                  : s.status === "occupied"
-                                    ? "bg-red-100 text-red-700"
+                                  : getStallDisplayStatus(s) === "occupied"
+                                    ? "bg-gray-200 text-gray-800"
                                     : "bg-gray-100 text-gray-700"
                               }`}
                             >
-                              {s.status}
+                              {getStallDisplayStatus(s)}
                             </span>
                           )}
                         </td>
@@ -2956,14 +2971,14 @@ export function SuperAdminDashboard() {
                           <span className="font-medium text-gray-900">{s.stall_name}</span>
                           <span
                             className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
-                              s.status === "vacant"
+                              getStallDisplayStatus(s) === "vacant"
                                 ? "bg-green-100 text-green-700"
-                                : s.status === "occupied"
-                                  ? "bg-blue-100 text-blue-700"
+                                : getStallDisplayStatus(s) === "occupied"
+                                  ? "bg-gray-200 text-gray-800"
                                   : "bg-gray-100 text-gray-700"
                             }`}
                           >
-                            {s.status}
+                            {getStallDisplayStatus(s)}
                           </span>
                         </div>
                       </button>

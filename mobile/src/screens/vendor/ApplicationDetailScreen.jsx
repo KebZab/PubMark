@@ -8,6 +8,7 @@ import * as DocumentPicker from "expo-document-picker";
 import { readAssetForUpload, DOCUMENT_PICKER_TYPES, formatFileSize } from "../../services/fileUpload";
 import { createReceipt, createTerminationRequest, createTransfer, getApplications, getContractRenewals, getReceipts, requestContractRenewal, updateApplicationPermit } from "../../services/api";
 import { Card, StatusPill, formatDate } from "../../components/ui";
+import { Timeline } from "../../components/Timeline";
 import {
   formatPermitDeadline,
   getApplicationDisplayStatus,
@@ -15,6 +16,7 @@ import {
   getRenewalDeadline,
   parsePermitDeadlineMeta,
 } from "../../utils/permitDeadline";
+import { buildApplicationTimeline } from "../../utils/applicationTimeline";
 
 const STATUS_CONFIG = {
   pending: {
@@ -87,6 +89,7 @@ export default function ApplicationDetailScreen({ route, navigation }) {
   const permitDeadlineAt = permitMeta.permitDeadlineAt ?? app.permitDeadlineAt;
   const statusConfig = STATUS_CONFIG[displayStatus] ?? STATUS_CONFIG.pending;
   const contractStatus = getContractEndStatus(app.contractEnd);
+  const timelineEntries = buildApplicationTimeline(app);
 
   // A stall can only be handed on once it's actually yours and still active.
   const canTransfer = displayStatus === "approved";
@@ -334,6 +337,8 @@ export default function ApplicationDetailScreen({ route, navigation }) {
             <Text className="mt-0.5 text-xs leading-5 text-gray-600">{statusConfig.description}</Text>
           </View>
         </View>
+
+        <Timeline entries={timelineEntries} />
 
         {displayStatus === "approved" && !app.permitFileName && permitDeadlineAt ? (
           <View className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">

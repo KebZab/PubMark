@@ -46,6 +46,10 @@ export default function GuestMapScreen({ navigation, pendingApplication }) {
   const selected = stalls.find((s) => s.id === selectedId);
   const status = selected ? styleInputs[selected.id] : {};
   const targets = allStalls.filter((s) => selectedIds.has(s.id) && !styleInputs[s.id]?.occupied);
+  // Whatever the guest currently has selected on the map, regardless of
+  // single/multi mode — carried through by any sign-in entry point below,
+  // not just the "Account Required" modal's own buttons.
+  const selectedTargets = multi ? targets : selected ? [selected] : [];
 
   function select(id) {
     setNotice("");
@@ -73,8 +77,8 @@ export default function GuestMapScreen({ navigation, pendingApplication }) {
           <View><Text className="text-sm font-bold text-gray-900">PubMark</Text><Text className="text-[10px] text-gray-400">Browse Available Stalls</Text></View>
         </View>
         <View className="flex-row gap-2">
-          <Action icon="log-in-outline" onPress={() => authenticate("Login")}>Log In</Action>
-          <Action icon="person-add-outline" primary onPress={() => authenticate("Register")}>Register</Action>
+          <Action icon="log-in-outline" onPress={() => authenticate("Login", selectedTargets)}>Log In</Action>
+          <Action icon="person-add-outline" primary onPress={() => authenticate("Register", selectedTargets)}>Register</Action>
         </View>
       </View>
 
