@@ -1,24 +1,22 @@
-import { useCallback, useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { getMapFacilities } from "../services/mapFacilitiesApi";
 
-export function useMapFacilities(floor) {
-  const [facilities, setFacilities] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  const refetch = useCallback(async () => {
-    setLoading(true);
-    try {
-      setFacilities(await getMapFacilities(floor));
-      setError(null);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [floor]);
-
-  useEffect(() => { refetch(); }, [refetch]);
-  return { facilities, loading, error, refetch };
+export function mapFacilitiesQueryKey(floor) {
+  return ["mapFacilities", floor];
 }
 
+export function useMapFacilities(floor) {
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: mapFacilitiesQueryKey(floor),
+    queryFn: () => getMapFacilities(floor),
+    // Entrances/CRs/stairs/office markers essentially never move day-to-day.
+    staleTime: 5 * 60_000,
+  });
+
+  return {
+    facilities: data ?? [],
+    loading: isLoading,
+    error: error?.message ?? null,
+    refetch,
+  };
+}

@@ -1,7 +1,6 @@
 import { RefreshControl, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useApiData } from "../../hooks/useApiData";
-import { getAnnouncements } from "../../services/api";
+import { useAnnouncements } from "../../hooks/useAnnouncements";
 import { Card, EmptyState, ErrorState, LoadingState, OfficerHeader, formatDate } from "../../components/ui";
 
 // Same four announcement types and color language as the web app and the
@@ -15,7 +14,7 @@ const TYPE_STYLES = {
 };
 
 export default function NoticesScreen() {
-  const { data, loading, error, refetch } = useApiData(getAnnouncements);
+  const { data, loading, error, refetch } = useAnnouncements();
   const announcements = data?.announcements ?? [];
 
   return (

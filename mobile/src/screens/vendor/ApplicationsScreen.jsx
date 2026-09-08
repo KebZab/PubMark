@@ -4,8 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../../context/AuthContext";
-import { useApiData } from "../../hooks/useApiData";
-import { getApplications } from "../../services/api";
+import { useApplications } from "../../hooks/useApplications";
 import {
   Card,
   EmptyState,
@@ -26,7 +25,7 @@ const FILTERS = ["all", "pending", "approved", "rejected"];
 
 export default function ApplicationsScreen({ navigation }) {
   const { user } = useAuth();
-  const { data, loading, error, refetch } = useApiData(getApplications);
+  const { data, loading, error, refetch } = useApplications();
 
   // Kept mounted while you're on another tab, so this stays stale until a
   // manual pull-to-refresh unless refetched on every return to this tab.

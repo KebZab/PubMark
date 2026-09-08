@@ -33,9 +33,9 @@ import {
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { getAnnouncements } from "../services/announcementsApi";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
+import { useAnnouncements } from "../hooks/useAnnouncements";
 import { useMapFacilities } from "../hooks/useMapFacilities";
 import { MapFacilitiesLayer, stallFloaterHtml } from "../components/MapFacilitiesLayer";
 import { registerMapFloater } from "../components/mapFloaterDeclutter";
@@ -282,7 +282,7 @@ export function UserDashboard() {
   const navigate = useNavigate();
   const [session, setSession] = useState(null);
   const [activeTab, setActiveTab] = useState("home");
-  const [announcements, setAnnouncements] = useState([]);
+  const { announcements } = useAnnouncements();
   const { applications } = useApplications();
   useStalls();
   const [showDropdown, setShowDropdown] = useState(false);
@@ -339,25 +339,6 @@ export function UserDashboard() {
       cancelled = true;
     };
   }, [activeTab]);
-
-  useEffect(() => {
-    if (!session) return;
-
-    let cancelled = false;
-    async function loadAnnouncements() {
-      try {
-        const nextAnnouncements = await getAnnouncements();
-        if (!cancelled) setAnnouncements(nextAnnouncements);
-      } catch (error) {
-        if (!cancelled) showToast(`Failed to load announcements: ${error.message}`, "error");
-      }
-    }
-
-    void loadAnnouncements();
-    return () => {
-      cancelled = true;
-    };
-  }, [session, activeTab]);
 
   useEffect(() => {
     function handleClickOutside(e) {

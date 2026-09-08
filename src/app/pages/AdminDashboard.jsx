@@ -33,10 +33,10 @@ import { AdminMapView } from "../components/AdminMapView";
 import { StallManagementPanel } from "../components/StallManagementPanel";
 import { ContractModal } from "../components/ContractModal";
 import {
-  getAnnouncements,
   createAnnouncement,
   deleteAnnouncement,
 } from "../services/announcementsApi";
+import { useAnnouncements } from "../hooks/useAnnouncements";
 import { useApplications } from "../hooks/useApplications";
 import {
   updateApplicationAdmin,
@@ -180,7 +180,12 @@ export function AdminDashboard() {
   const [selectedApp, setSelectedApp] = useState(null);
   const [contractApp, setContractApp] = useState(null);
   const [remarksInput, setRemarksInput] = useState("");
-  const [announcements, setAnnouncements] = useState([]);
+  const {
+    announcements,
+    setAnnouncements,
+    loading: announcementsLoading,
+    refetch: refetchAnnouncementsQuery,
+  } = useAnnouncements();
   const [showForm, setShowForm] = useState(false);
   const [newMessage, setNewMessage] = useState("");
   const [newType, setNewType] = useState("info");
@@ -240,7 +245,6 @@ export function AdminDashboard() {
   const [reportsLoading, setReportsLoading] = useState(true);
   const [receiptsTabLoading, setReceiptsTabLoading] = useState(true);
   const [requestDataLoading, setRequestDataLoading] = useState(true);
-  const [announcementsLoading, setAnnouncementsLoading] = useState(true);
   const approvedStallIds = new Set(
     applications.filter((a) => a.status === "approved").map((a) => a.stallId),
   );
@@ -406,14 +410,8 @@ export function AdminDashboard() {
   }, [tab, applicationsPageNum, appStatusFilter, appSortField, appSortAsc]);
 
   async function loadAnnouncements() {
-    setAnnouncementsLoading(true);
-    try {
-      setAnnouncements(await getAnnouncements());
-    } catch (error) {
-      showToast(`Failed to load announcements: ${error.message}`, "error");
-    } finally {
-      setAnnouncementsLoading(false);
-    }
+    const result = await refetchAnnouncementsQuery();
+    if (result.error) showToast(`Failed to load announcements: ${result.error.message}`, "error");
   }
 
   async function loadRequestData() {

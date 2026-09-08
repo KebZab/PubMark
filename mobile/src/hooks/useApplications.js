@@ -1,10 +1,9 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getApplications } from "../services/applicationsApi";
+import { useQuery } from "@tanstack/react-query";
+import { getApplications } from "../services/api";
 
 export const APPLICATIONS_QUERY_KEY = ["applications"];
 
 export function useApplications() {
-  const queryClient = useQueryClient();
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: APPLICATIONS_QUERY_KEY,
     queryFn: getApplications,
@@ -13,15 +12,8 @@ export function useApplications() {
     staleTime: 15_000,
   });
 
-  function setApplications(next) {
-    queryClient.setQueryData(APPLICATIONS_QUERY_KEY, (prev) =>
-      typeof next === "function" ? next(prev ?? []) : next,
-    );
-  }
-
   return {
-    applications: data ?? [],
-    setApplications,
+    data,
     loading: isLoading,
     error: error?.message ?? null,
     refetch,

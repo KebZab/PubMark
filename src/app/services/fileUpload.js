@@ -1,9 +1,15 @@
 // Shared file-attachment helper for the web app.
 //
-// Attachments are sent to the API as base64 inside the JSON body, which the
-// server decodes, checks and stores in Supabase Storage. Validating here too
-// means the user is told immediately rather than after uploading megabytes
-// only to be refused — but the server is the authority, not this file.
+// Two upload strategies coexist during migration (see PROJECT docs, Phase 4):
+// the original — base64 the file into the same JSON request that creates the
+// record — and the newer direct-to-Storage path (uploadFileDirect below),
+// which asks the server for a one-time signed link and PUTs the raw file
+// straight to Storage, avoiding both the ~33% base64 size bloat and routing
+// megabytes through the API server at all. Validating here too means the
+// user is told immediately rather than after uploading megabytes only to be
+// refused — but the server is the authority, not this file.
+
+import { signUpload } from "./api";
 
 export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024; // 5 MB
 
@@ -76,4 +82,47 @@ export async function readFileForUpload(file) {
 /** True when an attachment has a file behind it that can actually be opened. */
 export function isViewable(attachment) {
   return Boolean(attachment && attachment.url);
+}
+
+/**
+ * Checks one picked File, then uploads it straight to Storage via a signed
+ * URL instead of reading it into base64. Returns the shape the API's
+ * pre-signed-image fields expect: `{ path, fileName, mimeType, fileSize }`,
+ * plus `name`/`type`/`previewUrl` so it can be dropped straight into the same
+ * local "picked images" list a base64 upload would have produced.
+ *
+ * Throws an Error with a message meant to be shown to the user.
+ */
+export async function uploadFileDirect(file, purpose) {
+  if (!file) throw new Error("No file selected.");
+  const problem = describeFileProblem(file);
+  if (problem) throw new Error(problem);
+
+  const { signedUrl, path } = await signUpload({
+    purpose,
+    fileName: file.name,
+    mimeType: file.type,
+    fileSize: file.size,
+  });
+
+  const response = await fetch(signedUrl, {
+    method: "PUT",
+    headers: { "Content-Type": file.type },
+    body: file,
+  });
+  if (!response.ok) {
+    throw new Error(`"${file.name}" failed to upload. Please try again.`);
+  }
+
+  return {
+    path,
+    fileName: file.name,
+    mimeType: file.type,
+    fileSize: file.size,
+    name: file.name,
+    type: file.type,
+    // Local-only preview so the picker can show a thumbnail before saving —
+    // never sent to the server, which only ever sees `path`.
+    previewUrl: URL.createObjectURL(file),
+  };
 }

@@ -13,7 +13,18 @@ const port = Number(process.env.PORT || 4000);
 const jwtSecret = process.env.JWT_SECRET;
 if (!jwtSecret) throw new Error("JWT_SECRET is required.");
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required. Copy server/.env.example to server/.env and fill in real values.");
-const db = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+const db = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+  // Safe defaults for Supabase's connection pooler: cap how many clients we
+  // hold open, fail fast on a stuck connection attempt instead of hanging
+  // the request forever, and bound how long any single query can run.
+  max: 10,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 10_000,
+  statement_timeout: 15_000,
+  query_timeout: 15_000,
+});
 
 // ── Attachments (Supabase Storage) ──────────────────────────────────────────
 // One private bucket holds every attachment, separated by prefix:
@@ -140,6 +151,19 @@ async function removeAttachment(storagePath) {
   await supabaseStorage.storage.from(ATTACHMENTS_BUCKET).remove([storagePath]).catch(() => {});
 }
 
+// Confirms a client-reported upload is real before the server ever trusts it
+// as a database reference: the path must be under the folder this specific
+// user was signed to upload into, and the object must actually exist there
+// (a client could otherwise claim any path with no file behind it).
+async function verifyUploadedObject(storagePath, expectedPrefix) {
+  if (!supabaseStorage || !storagePath || !storagePath.startsWith(expectedPrefix)) return false;
+  const lastSlash = storagePath.lastIndexOf("/");
+  const folder = storagePath.slice(0, lastSlash);
+  const fileName = storagePath.slice(lastSlash + 1);
+  const { data } = await supabaseStorage.storage.from(ATTACHMENTS_BUCKET).list(folder, { search: fileName });
+  return Array.isArray(data) && data.some((f) => f.name === fileName);
+}
+
 /**
  * Uploads a list of attachments for one owning record and returns the rows to
  * insert. If any file is rejected, everything already uploaded in this batch
@@ -168,6 +192,41 @@ async function storeAttachments(prefix, ownerId, files, uploadedBy) {
     throw error;
   }
   return stored;
+}
+
+/**
+ * Resolves attachments the client already uploaded directly to Storage via a
+ * signed URL from POST /api/uploads/sign — verifies each one is real and
+ * actually belongs to this user before the caller ever writes its path into
+ * the database. If any entry fails verification, every entry already
+ * confirmed in this same batch is removed, so a rejected upload doesn't leave
+ * its siblings orphaned in Storage with no database row pointing at them.
+ */
+async function resolvePreSignedAttachments(prefix, userId, entries) {
+  const list = (Array.isArray(entries) ? entries : []).filter(Boolean);
+  const expectedPrefix = `${prefix}/${userId}/`;
+  const resolved = [];
+  try {
+    for (const entry of list) {
+      const storagePath = String(entry.path || "");
+      const ok = await verifyUploadedObject(storagePath, expectedPrefix);
+      if (!ok) {
+        throw new AttachmentError(
+          `"${entry.fileName || "The attachment"}" could not be verified. Please upload it again.`
+        );
+      }
+      resolved.push({
+        storagePath,
+        fileName: String(entry.fileName || "attachment"),
+        mimeType: String(entry.mimeType || "application/octet-stream"),
+        fileSize: Number(entry.fileSize) || 0,
+      });
+    }
+  } catch (error) {
+    await Promise.all(resolved.map((f) => removeAttachment(f.storagePath)));
+    throw error;
+  }
+  return resolved;
 }
 const configuredOrigins = (process.env.CLIENT_ORIGIN || "").split(",").map((origin) => origin.trim()).filter(Boolean);
 const allowedOrigins = new Set(configuredOrigins);
@@ -236,6 +295,18 @@ function parsePagination(req, maxLimit = 100) {
   return { limit, offset };
 }
 
+// For stable, frequently-repeated public reads (stalls/facilities/perimeters
+// on map screens) — sends a strong ETag over the exact JSON body and answers
+// with a bodyless 304 when the caller's cached copy is still current, so
+// polling a screen that hasn't changed doesn't re-send the full payload.
+function sendWithETag(req, res, payload) {
+  const body = JSON.stringify(payload);
+  const etag = `"${crypto.createHash("sha1").update(body).digest("hex")}"`;
+  res.set("ETag", etag);
+  if (req.headers["if-none-match"] === etag) return res.status(304).end();
+  res.type("application/json").send(body);
+}
+
 function mapAnnouncementRow(row) {
   return {
     id: row.id,
@@ -296,10 +367,12 @@ async function getCheckRequestFilesMap(requestIds) {
     `SELECT id, check_request_id, storage_path, file_name, mime_type, file_size FROM check_request_files WHERE check_request_id IN (${placeholders}) ORDER BY created_at ASC`,
     requestIds
   );
-  const filesMap = new Map();
-  for (const row of rows) {
-    const existing = filesMap.get(row.check_request_id) || [];
-    existing.push({
+  // Signed URLs are generated in parallel, not one at a time — this runs on
+  // GET /api/check-requests, so a sequential await per file across every
+  // request turned a page with several inspections into a slow wait.
+  const entries = await Promise.all(rows.map(async (row) => ({
+    checkRequestId: row.check_request_id,
+    file: {
       // `id` lets a client hand an existing file back on update without
       // re-uploading it; `url` is null for rows recorded before real uploads.
       id: row.id,
@@ -307,8 +380,13 @@ async function getCheckRequestFilesMap(requestIds) {
       type: mapCompletionFileType(row.mime_type),
       size: formatBytes(row.file_size),
       url: await signedUrlFor(row.storage_path),
-    });
-    filesMap.set(row.check_request_id, existing);
+    },
+  })));
+  const filesMap = new Map();
+  for (const { checkRequestId, file } of entries) {
+    const existing = filesMap.get(checkRequestId) || [];
+    existing.push(file);
+    filesMap.set(checkRequestId, existing);
   }
   return filesMap;
 }
@@ -980,7 +1058,34 @@ app.get("/api/check-requests", requireAuth, requireRole("admin", "super_admin", 
   try {
     await syncViolationRequestsToCheckRequests();
     const officerId = req.auth.role === "officer" ? req.auth.sub : null;
-    res.json({ requests: await listCheckRequestsInternal(officerId) });
+    const includeArchived = req.query.includeArchived === "true";
+    const { limit, offset } = parsePagination(req);
+    if (limit == null) {
+      return res.json({ requests: await listCheckRequestsInternal(officerId, { includeArchived }) });
+    }
+    const values = [];
+    const conditions = [];
+    if (officerId) { values.push(officerId); conditions.push(`(cr.assigned_to = $${values.length} OR cr.assigned_to IS NULL)`); }
+    if (!includeArchived) conditions.push("cr.is_archived = false");
+    const whereSql = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
+    const total = Number((await db.query(`SELECT COUNT(*) FROM check_requests cr${whereSql}`, values)).rows[0].count);
+    values.push(limit); const limitParam = values.length;
+    values.push(offset); const offsetParam = values.length;
+    const { rows } = await db.query(`
+      SELECT
+        cr.id, cr.stall_id, cr.requested_by, cr.assigned_to, cr.priority, cr.reason, cr.category, cr.notes,
+        cr.status, cr.created_at, cr.completed_at, cr.completion_notes, cr.completion_summary,
+        s.stall_name, rp.name AS requested_by_name, ap.name AS assigned_to_name
+      FROM check_requests cr
+      LEFT JOIN stalls s ON s.id = cr.stall_id
+      LEFT JOIN profiles rp ON rp.id = cr.requested_by
+      LEFT JOIN profiles ap ON ap.id = cr.assigned_to
+      ${whereSql}
+      ORDER BY cr.created_at DESC
+      LIMIT $${limitParam} OFFSET $${offsetParam}
+    `, values);
+    const filesMap = await getCheckRequestFilesMap(rows.map((row) => row.id));
+    res.json({ requests: rows.map((row) => mapCheckRequestRow(row, filesMap)), total });
   } catch (error) { next(error); }
 });
 
@@ -1004,16 +1109,22 @@ app.post("/api/check-requests", requireAuth, requireRole("admin", "super_admin")
     const id = crypto.randomUUID();
     const storedFiles = await storeAttachments("checks", id, req.body.completionFiles, req.auth.sub);
 
-    await db.query(
-      "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
-      [id, stallId, requestedBy, assignedTo, priority, reason, notes || null, status, createdAt, completedAt, completionNotes, completionSummary]
-    );
-    for (const file of storedFiles) {
-      await db.query(
-        "INSERT INTO check_request_files (id, check_request_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        [crypto.randomUUID(), id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
+    const conn = await db.connect();
+    try {
+      await conn.query("BEGIN");
+      await conn.query(
+        "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+        [id, stallId, requestedBy, assignedTo, priority, reason, notes || null, status, createdAt, completedAt, completionNotes, completionSummary]
       );
-    }
+      for (const file of storedFiles) {
+        await conn.query(
+          "INSERT INTO check_request_files (id, check_request_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+          [crypto.randomUUID(), id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
+        );
+      }
+      await conn.query("COMMIT");
+    } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
+    finally { conn.release(); }
     res.status(201).json({ request: (await listCheckRequestsInternal(null, { includeArchived: true })).find((item) => item.id === id) });
   } catch (error) { next(error); }
 });
@@ -1045,62 +1156,77 @@ app.patch("/api/check-requests/:id", requireAuth, requireRole("admin", "super_ad
     }
     if (req.body.completionNotes !== undefined) { values.push(String(req.body.completionNotes || "")); updates.push(`completion_notes = $${values.length}`); }
     if (req.body.completionSummary !== undefined) { values.push(String(req.body.completionSummary || "")); updates.push(`completion_summary = $${values.length}`); }
-    if (updates.length > 0) {
-      values.push(req.params.id);
-      await db.query(`UPDATE check_requests SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
-    }
 
-    // A check request generated from a violation's "Send Req" shares its id
-    // with the violation_requests row that spawned it. Completing it here
-    // means the followup was done, so resolve the violation it was about
-    // instead of leaving it stuck on "Reviewing" forever.
-    if (req.body.status === "completed") {
-      const completedAt = new Date();
-      const { rows: linked } = await db.query(
-        "SELECT violation_id FROM violation_requests WHERE id = $1",
-        [req.params.id]
-      );
-      if (linked[0]) {
-        await db.query(
-          "UPDATE violation_requests SET status = 'completed', completed_at = $1 WHERE id = $2",
-          [completedAt, req.params.id]
-        );
-      }
-      if (linked[0]?.violation_id) {
-        await db.query(
-          "UPDATE violations SET status = 'resolved', resolved_at = $1 WHERE id = $2 AND status <> 'resolved'",
-          [completedAt, linked[0].violation_id]
-        );
-      }
-    }
-
+    // Uploaded to Storage before the transaction opens — a rejected/failed
+    // upload should never hold a DB connection open waiting on it.
+    let currentFiles = [];
+    let keptIds = new Set();
+    let storedFiles = [];
     if (Array.isArray(req.body.completionFiles)) {
       // A client editing an inspection sends back the files it already had
       // (identified by id, with no contents) plus any new ones. Keep the
       // former untouched — re-inserting them would throw away the real
       // uploads — and delete only what was actually removed.
-      const { rows: currentFiles } = await db.query(
+      const { rows } = await db.query(
         "SELECT id, storage_path FROM check_request_files WHERE check_request_id = $1",
         [req.params.id]
       );
-      const keptIds = new Set(
+      currentFiles = rows;
+      keptIds = new Set(
         req.body.completionFiles.map((file) => file?.id).filter(Boolean).map(String)
       );
       const incoming = req.body.completionFiles.filter((file) => !file?.id);
-      const storedFiles = await storeAttachments("checks", req.params.id, incoming, req.auth.sub);
+      storedFiles = await storeAttachments("checks", req.params.id, incoming, req.auth.sub);
+    }
 
-      for (const row of currentFiles) {
-        if (keptIds.has(String(row.id))) continue;
-        await db.query("DELETE FROM check_request_files WHERE id = $1", [row.id]);
-        await removeAttachment(row.storage_path);
+    const conn = await db.connect();
+    let removedPaths = [];
+    try {
+      await conn.query("BEGIN");
+      if (updates.length > 0) {
+        values.push(req.params.id);
+        await conn.query(`UPDATE check_requests SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
+      }
+
+      // A check request generated from a violation's "Send Req" shares its id
+      // with the violation_requests row that spawned it. Completing it here
+      // means the followup was done, so resolve the violation it was about
+      // instead of leaving it stuck on "Reviewing" forever.
+      if (req.body.status === "completed") {
+        const completedAt = new Date();
+        const { rows: linked } = await conn.query(
+          "SELECT violation_id FROM violation_requests WHERE id = $1",
+          [req.params.id]
+        );
+        if (linked[0]) {
+          await conn.query(
+            "UPDATE violation_requests SET status = 'completed', completed_at = $1 WHERE id = $2",
+            [completedAt, req.params.id]
+          );
+        }
+        if (linked[0]?.violation_id) {
+          await conn.query(
+            "UPDATE violations SET status = 'resolved', resolved_at = $1 WHERE id = $2 AND status <> 'resolved'",
+            [completedAt, linked[0].violation_id]
+          );
+        }
+      }
+
+      const toRemove = currentFiles.filter((row) => !keptIds.has(String(row.id)));
+      for (const row of toRemove) {
+        await conn.query("DELETE FROM check_request_files WHERE id = $1", [row.id]);
       }
       for (const file of storedFiles) {
-        await db.query(
+        await conn.query(
           "INSERT INTO check_request_files (id, check_request_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
           [crypto.randomUUID(), req.params.id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
         );
       }
-    }
+      await conn.query("COMMIT");
+      removedPaths = toRemove.map((row) => row.storage_path);
+    } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
+    finally { conn.release(); }
+    await Promise.all(removedPaths.map(removeAttachment));
 
     const updated = (await listCheckRequestsInternal(null, { includeArchived: true })).find((item) => item.id === req.params.id);
     if (!updated) return res.status(404).json({ message: "Check request not found." });
@@ -1120,10 +1246,27 @@ app.delete("/api/check-requests/:id", requireAuth, requireRole("admin", "super_a
   } catch (error) { next(error); }
 });
 
-app.get("/api/violation-requests", requireAuth, requireRole("admin", "super_admin", "officer"), async (_req, res, next) => {
+app.get("/api/violation-requests", requireAuth, requireRole("admin", "super_admin", "officer"), async (req, res, next) => {
   try {
     await syncViolationRequestsToCheckRequests();
-    res.json({ requests: await listViolationRequestsInternal() });
+    const { limit, offset } = parsePagination(req);
+    if (limit == null) {
+      return res.json({ requests: await listViolationRequestsInternal() });
+    }
+    const total = Number((await db.query("SELECT COUNT(*) FROM violation_requests")).rows[0].count);
+    const { rows } = await db.query(`
+      SELECT
+        vr.id, vr.stall_id, vr.requested_by, vr.reason, vr.category, vr.status, vr.assigned_officer_id,
+        vr.created_at, vr.completed_at,
+        s.stall_name, rp.name AS requested_by_name, ap.name AS assigned_officer_name
+      FROM violation_requests vr
+      LEFT JOIN stalls s ON s.id = vr.stall_id
+      LEFT JOIN profiles rp ON rp.id = vr.requested_by
+      LEFT JOIN profiles ap ON ap.id = vr.assigned_officer_id
+      ORDER BY vr.created_at DESC
+      LIMIT $1 OFFSET $2
+    `, [limit, offset]);
+    res.json({ requests: rows.map(mapViolationRequestRow), total });
   } catch (error) { next(error); }
 });
 
@@ -1148,28 +1291,34 @@ app.post("/api/violation-requests", requireAuth, requireRole("admin", "super_adm
     if (!["pending", "assigned", "completed"].includes(status)) return res.status(400).json({ message: "Invalid status." });
 
     const id = crypto.randomUUID();
-    await db.query(
-      "INSERT INTO violation_requests (id, stall_id, requested_by, reason, category, violation_id, status, assigned_officer_id, created_at, completed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-      [id, stallId, requestedBy, reason, category, violationId, status, assignedOfficerId, createdAt, completedAt]
-    );
-    await db.query(
-      "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, category, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
-      [
-        id,
-        stallId,
-        requestedBy,
-        assignedOfficerId,
-        "normal",
-        reason,
-        category,
-        "Generated from violation request.",
-        status === "completed" ? "completed" : "pending",
-        createdAt,
-        status === "completed" ? completedAt || new Date() : null,
-        "",
-        "",
-      ]
-    );
+    const conn = await db.connect();
+    try {
+      await conn.query("BEGIN");
+      await conn.query(
+        "INSERT INTO violation_requests (id, stall_id, requested_by, reason, category, violation_id, status, assigned_officer_id, created_at, completed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        [id, stallId, requestedBy, reason, category, violationId, status, assignedOfficerId, createdAt, completedAt]
+      );
+      await conn.query(
+        "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, category, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+        [
+          id,
+          stallId,
+          requestedBy,
+          assignedOfficerId,
+          "normal",
+          reason,
+          category,
+          "Generated from violation request.",
+          status === "completed" ? "completed" : "pending",
+          createdAt,
+          status === "completed" ? completedAt || new Date() : null,
+          "",
+          "",
+        ]
+      );
+      await conn.query("COMMIT");
+    } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
+    finally { conn.release(); }
     res.status(201).json({ request: (await listViolationRequestsInternal()).find((item) => item.id === id) });
   } catch (error) { next(error); }
 });
@@ -1195,8 +1344,6 @@ app.patch("/api/violation-requests/:id", requireAuth, requireRole("admin", "supe
     }
     if (updates.length === 0) return res.status(400).json({ message: "No fields to update." });
 
-    values.push(req.params.id);
-    await db.query(`UPDATE violation_requests SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
     const mirroredUpdates = [];
     const mirroredValues = [];
     if (req.body.reason !== undefined) {
@@ -1216,10 +1363,19 @@ app.patch("/api/violation-requests/:id", requireAuth, requireRole("admin", "supe
       mirroredValues.push(req.body.assignedOfficerId ? "pending" : "pending");
       mirroredUpdates.push(`status = $${mirroredValues.length}`);
     }
-    if (mirroredUpdates.length > 0) {
-      mirroredValues.push(req.params.id);
-      await db.query(`UPDATE check_requests SET ${mirroredUpdates.join(", ")} WHERE id = $${mirroredValues.length}`, mirroredValues);
-    }
+
+    const conn = await db.connect();
+    try {
+      await conn.query("BEGIN");
+      values.push(req.params.id);
+      await conn.query(`UPDATE violation_requests SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
+      if (mirroredUpdates.length > 0) {
+        mirroredValues.push(req.params.id);
+        await conn.query(`UPDATE check_requests SET ${mirroredUpdates.join(", ")} WHERE id = $${mirroredValues.length}`, mirroredValues);
+      }
+      await conn.query("COMMIT");
+    } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
+    finally { conn.release(); }
     const updated = (await listViolationRequestsInternal()).find((item) => item.id === req.params.id);
     if (!updated) return res.status(404).json({ message: "Violation request not found." });
     res.json({ request: updated });
@@ -1233,7 +1389,35 @@ app.get("/api/violations", requireAuth, requireRole("admin", "super_admin", "off
     // hidden by default; a true historical count (e.g. Analytics) needs to
     // opt back in explicitly, since archiving never deletes the row.
     const includeArchived = vendorId ? true : req.query.includeArchived === "true";
-    res.json({ violations: await listViolationsInternal(vendorId, { includeArchived }) });
+    const { limit, offset } = parsePagination(req);
+    if (limit == null) {
+      return res.json({ violations: await listViolationsInternal(vendorId, { includeArchived }) });
+    }
+    // Paginated path queries directly instead of the shared "fetch every
+    // row" internal helper (still used, unpaginated, by mutation responses
+    // that need to return one just-changed row).
+    const values = [];
+    const conditions = [];
+    if (vendorId) { values.push(vendorId); conditions.push(`v.vendor_id = $${values.length}`); }
+    if (!includeArchived) conditions.push("v.is_archived = false");
+    const whereSql = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
+    const total = Number((await db.query(`SELECT COUNT(*) FROM violations v${whereSql}`, values)).rows[0].count);
+    values.push(limit); const limitParam = values.length;
+    values.push(offset); const offsetParam = values.length;
+    const { rows } = await db.query(`
+      SELECT
+        v.id, v.stall_id, v.vendor_id, v.officer_id, v.category, v.description, v.status, v.remarks, v.created_at, v.resolved_at,
+        s.stall_name, vp.name AS vendor_name, op.name AS officer_name
+      FROM violations v
+      LEFT JOIN stalls s ON s.id = v.stall_id
+      LEFT JOIN profiles vp ON vp.id = v.vendor_id
+      LEFT JOIN profiles op ON op.id = v.officer_id
+      ${whereSql}
+      ORDER BY v.created_at DESC
+      LIMIT $${limitParam} OFFSET $${offsetParam}
+    `, values);
+    const evidenceMap = await getViolationEvidenceMap(rows.map((row) => row.id));
+    res.json({ violations: rows.map((row) => mapViolationRow(row, evidenceMap)), total });
   } catch (error) { next(error); }
 });
 
@@ -1267,16 +1451,22 @@ app.post("/api/violations", requireAuth, requireRole("admin", "super_admin", "of
     // that silently went missing.
     const storedEvidence = await storeAttachments("violations", id, evidence, req.auth.sub);
 
-    await db.query(
-      "INSERT INTO violations (id, stall_id, vendor_id, officer_id, category, description, status, remarks, created_at, resolved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-      [id, stallId, vendorId, officerId, category, description, status, remarks || null, createdAt, resolvedAt]
-    );
-    for (const file of storedEvidence) {
-      await db.query(
-        "INSERT INTO violation_evidence (id, violation_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        [crypto.randomUUID(), id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
+    const conn = await db.connect();
+    try {
+      await conn.query("BEGIN");
+      await conn.query(
+        "INSERT INTO violations (id, stall_id, vendor_id, officer_id, category, description, status, remarks, created_at, resolved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        [id, stallId, vendorId, officerId, category, description, status, remarks || null, createdAt, resolvedAt]
       );
-    }
+      for (const file of storedEvidence) {
+        await conn.query(
+          "INSERT INTO violation_evidence (id, violation_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+          [crypto.randomUUID(), id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
+        );
+      }
+      await conn.query("COMMIT");
+    } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
+    finally { conn.release(); }
     res.status(201).json({ violation: (await listViolationsInternal(null, { includeArchived: true })).find((item) => item.id === id) });
   } catch (error) { next(error); }
 });
@@ -1299,31 +1489,62 @@ app.patch("/api/violations/:id", requireAuth, requireRole("admin", "super_admin"
       updates.push(`resolved_at = $${values.length}`);
     }
     if (req.body.remarks !== undefined) { values.push(String(req.body.remarks || "").trim()); updates.push(`remarks = $${values.length}`); }
-    if (updates.length > 0) {
-      values.push(req.params.id);
-      await db.query(`UPDATE violations SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
-    }
+    // Uploaded to Storage before the transaction opens — a rejected/failed
+    // upload should never hold a DB connection open waiting on it.
+    let storedEvidence = [];
     if (Array.isArray(req.body.evidence) && req.body.evidence.length > 0) {
       // Files carrying an id are ones the client already had; re-inserting
       // them would duplicate the attachment list on every edit.
       const incoming = req.body.evidence.filter((file) => !file?.id);
-      const storedEvidence = await storeAttachments("violations", req.params.id, incoming, req.auth.sub);
+      storedEvidence = await storeAttachments("violations", req.params.id, incoming, req.auth.sub);
+    }
+    const conn = await db.connect();
+    try {
+      await conn.query("BEGIN");
+      if (updates.length > 0) {
+        values.push(req.params.id);
+        await conn.query(`UPDATE violations SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
+      }
       for (const file of storedEvidence) {
-        await db.query(
+        await conn.query(
           "INSERT INTO violation_evidence (id, violation_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
           [crypto.randomUUID(), req.params.id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
         );
       }
-    }
+      await conn.query("COMMIT");
+    } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
+    finally { conn.release(); }
     const updated = (await listViolationsInternal(null, { includeArchived: true })).find((item) => item.id === req.params.id);
     if (!updated) return res.status(404).json({ message: "Violation not found." });
     res.json({ violation: updated });
   } catch (error) { next(error); }
 });
 
-app.get("/api/termination-requests", requireAuth, requireRole("admin", "super_admin", "vendor"), async (_req, res, next) => {
+app.get("/api/termination-requests", requireAuth, requireRole("admin", "super_admin", "vendor"), async (req, res, next) => {
   try {
-    res.json({ requests: await listTerminationRequestsInternal() });
+    const { limit, offset } = parsePagination(req);
+    if (limit == null) {
+      return res.json({ requests: await listTerminationRequestsInternal() });
+    }
+    const total = Number((await db.query("SELECT COUNT(*) FROM termination_requests")).rows[0].count);
+    const { rows } = await db.query(`
+      SELECT
+        tr.id, tr.type, tr.vendor_id, tr.stall_id, tr.reason, tr.status, tr.created_at, tr.resolved_at,
+        vp.name AS vendor_name, vp.email AS vendor_email, s.stall_name,
+        active.stalls AS active_stalls
+      FROM termination_requests tr
+      LEFT JOIN profiles vp ON vp.id = tr.vendor_id
+      LEFT JOIN stalls s ON s.id = tr.stall_id
+      LEFT JOIN LATERAL (
+        SELECT json_agg(json_build_object('stallId', a.stall_id, 'stallName', st.stall_name, 'contractEnd', a.contract_end) ORDER BY a.contract_end) AS stalls
+        FROM applications a
+        JOIN stalls st ON st.id = a.stall_id
+        WHERE a.user_id = tr.vendor_id AND a.status = 'approved'
+      ) active ON tr.type = 'account'
+      ORDER BY tr.created_at DESC
+      LIMIT $1 OFFSET $2
+    `, [limit, offset]);
+    res.json({ requests: rows.map(mapTerminationRequestRow), total });
   } catch (error) { next(error); }
 });
 
@@ -1433,6 +1654,10 @@ app.get("/api/stalls", async (req, res, next) => {
       })),
       ...(total !== undefined ? { total } : {}),
     });
+    // Not ETag'd like map-facilities/perimeters: each stall's images carry a
+    // freshly-signed Storage URL (new expiry token) on every request, so the
+    // JSON body can never come out byte-identical twice — an ETag here would
+    // never actually match, just adding a wasted hash on every call.
   } catch (error) { next(error); }
 });
 
@@ -1507,6 +1732,47 @@ app.get("/api/stalls/management", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// Purposes match the folder prefixes storeAttachments already uses; role
+// checks mirror the existing write route for that resource. Only "stalls" is
+// actually wired to a signed-upload flow yet (see POST /api/stalls) — the
+// others are accepted here so future migrations don't need a new endpoint.
+const UPLOAD_PURPOSES = new Set(["stalls", "permits", "violations", "checks", "receipts"]);
+function canSignUploadFor(role, purpose) {
+  if (purpose === "stalls") return ["admin", "super_admin"].includes(role);
+  if (purpose === "permits") return ["vendor", "admin", "super_admin"].includes(role);
+  if (purpose === "violations") return ["admin", "super_admin", "officer", "vendor"].includes(role);
+  if (purpose === "checks") return ["admin", "super_admin", "officer"].includes(role);
+  if (purpose === "receipts") return ["vendor", "officer"].includes(role);
+  return false;
+}
+
+app.post("/api/uploads/sign", requireAuth, async (req, res, next) => {
+  try {
+    const purpose = String(req.body.purpose || "");
+    const fileName = String(req.body.fileName || "").trim();
+    const mimeType = String(req.body.mimeType || "").toLowerCase();
+    const fileSize = Number(req.body.fileSize) || 0;
+    if (!UPLOAD_PURPOSES.has(purpose)) return res.status(400).json({ message: "Invalid upload purpose." });
+    if (!canSignUploadFor(req.auth.role, purpose)) return res.status(403).json({ message: "You cannot upload this type of file." });
+    if (!fileName) return res.status(400).json({ message: "A file name is required." });
+    if (!ALLOWED_ATTACHMENT_MIME.has(mimeType)) {
+      return res.status(400).json({ message: `"${fileName}" is not an accepted file type. Upload a JPEG, PNG, WebP, HEIC image or a PDF.` });
+    }
+    if (fileSize <= 0 || fileSize > MAX_ATTACHMENT_BYTES) {
+      return res.status(400).json({ message: `"${fileName}" must be under ${humanSize(MAX_ATTACHMENT_BYTES)}.` });
+    }
+    if (!supabaseStorage) return res.status(500).json({ message: "File uploads are not configured." });
+
+    // User-scoped, not entity-scoped: at signing time the domain record this
+    // upload will belong to (a new stall, application, etc.) often doesn't
+    // exist yet, so there's no entity id to fold into the path.
+    const storagePath = `${purpose}/${req.auth.sub}/${crypto.randomUUID()}-${sanitizeFileName(fileName)}`;
+    const { data, error } = await supabaseStorage.storage.from(ATTACHMENTS_BUCKET).createSignedUploadUrl(storagePath);
+    if (error) return res.status(502).json({ message: `Could not prepare the upload: ${error.message}` });
+    res.json({ path: data.path, token: data.token, signedUrl: data.signedUrl });
+  } catch (error) { next(error); }
+});
+
 app.post("/api/stalls", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try {
     const { stall_name, business_type, section, floor, floor_area, notes, geometry } = req.body;
@@ -1515,16 +1781,42 @@ app.post("/api/stalls", requireAuth, requireRole("admin", "super_admin"), async 
     // A vacant stall with no photo is what this exists to prevent — the
     // server enforces it too, since a client-side check alone can be skipped.
     if (images.length === 0) return res.status(400).json({ message: "At least one stall photo is required." });
+    // Images arrive either pre-uploaded via POST /api/uploads/sign (has
+    // `.path`) or, for callers not yet migrated, as base64 (has `.base64`).
+    const preSignedImages = images.filter((img) => img?.path);
+    const legacyImages = images.filter((img) => !img?.path);
 
     const id = crypto.randomUUID();
-    const storedImages = await storeAttachments("stalls", id, images, req.auth.sub);
-    await db.query("INSERT INTO stalls (id, stall_name, status, business_type, section, floor, floor_area, notes, geometry) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)", [id, stall_name, "vacant", business_type, section, floor, floor_area || "", notes || "", JSON.stringify(geometry)]);
-    for (const file of storedImages) {
-      await db.query(
-        "INSERT INTO stall_images (id, stall_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        [crypto.randomUUID(), id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
-      );
+    let preSignedResolved = [];
+    let legacyResolved = [];
+    try {
+      preSignedResolved = await resolvePreSignedAttachments("stalls", req.auth.sub, preSignedImages);
+      legacyResolved = await storeAttachments("stalls", id, legacyImages, req.auth.sub);
+    } catch (error) {
+      await Promise.all([...preSignedResolved, ...legacyResolved].map((f) => removeAttachment(f.storagePath)));
+      throw error;
     }
+    const storedImages = [...preSignedResolved, ...legacyResolved];
+
+    const conn = await db.connect();
+    try {
+      await conn.query("BEGIN");
+      await conn.query("INSERT INTO stalls (id, stall_name, status, business_type, section, floor, floor_area, notes, geometry) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)", [id, stall_name, "vacant", business_type, section, floor, floor_area || "", notes || "", JSON.stringify(geometry)]);
+      for (const file of storedImages) {
+        await conn.query(
+          "INSERT INTO stall_images (id, stall_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+          [crypto.randomUUID(), id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
+        );
+      }
+      await conn.query("COMMIT");
+    } catch (innerError) {
+      await conn.query("ROLLBACK");
+      // The domain write failed after files were already confirmed real —
+      // don't leave them orphaned in Storage with nothing referencing them.
+      await Promise.all(storedImages.map((f) => removeAttachment(f.storagePath)));
+      throw innerError;
+    }
+    finally { conn.release(); }
     const savedImages = (await getStallImagesMap([id])).get(id) || [];
     res.status(201).json({ stall: { id, stall_name, status: "vacant", owner_id: null, business_type, section, floor, floor_area, notes, geometry, created_at: new Date().toISOString(), images: savedImages } });
   } catch (error) { next(error); }
@@ -1567,28 +1859,59 @@ app.patch("/api/stalls/:id", requireAuth, requireRole("admin", "super_admin"), a
       return res.status(400).json({ message: "At least one stall photo is required." });
     }
 
-    if (updates.length > 0) {
-      values.push(req.params.id);
-      await db.query(`UPDATE stalls SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
+    // Uploaded to Storage before the transaction opens — a rejected/failed
+    // upload should never hold a DB connection open waiting on it.
+    let existingRows = [];
+    let removed = [];
+    let storedImages = [];
+    if (images !== null) {
+      const { rows } = await db.query("SELECT id, storage_path FROM stall_images WHERE stall_id = $1", [req.params.id]);
+      existingRows = rows;
+      const keptIds = new Set(images.filter((img) => img?.id).map((img) => img.id));
+      removed = existingRows.filter((row) => !keptIds.has(row.id));
+      const newFiles = images.filter((img) => !img?.id);
+      // New images arrive either pre-uploaded via POST /api/uploads/sign
+      // (has `.path`) or, for callers not yet migrated, as base64.
+      const preSignedImages = newFiles.filter((img) => img?.path);
+      const legacyImages = newFiles.filter((img) => !img?.path);
+      let preSignedResolved = [];
+      let legacyResolved = [];
+      try {
+        preSignedResolved = await resolvePreSignedAttachments("stalls", req.auth.sub, preSignedImages);
+        legacyResolved = await storeAttachments("stalls", req.params.id, legacyImages, req.auth.sub);
+      } catch (error) {
+        await Promise.all([...preSignedResolved, ...legacyResolved].map((f) => removeAttachment(f.storagePath)));
+        throw error;
+      }
+      storedImages = [...preSignedResolved, ...legacyResolved];
     }
 
-    if (images !== null) {
-      const { rows: existingRows } = await db.query("SELECT id, storage_path FROM stall_images WHERE stall_id = $1", [req.params.id]);
-      const keptIds = new Set(images.filter((img) => img?.id).map((img) => img.id));
-      const removed = existingRows.filter((row) => !keptIds.has(row.id));
-      for (const row of removed) {
-        await db.query("DELETE FROM stall_images WHERE id = $1", [row.id]);
-        await removeAttachment(row.storage_path);
+    const conn = await db.connect();
+    try {
+      await conn.query("BEGIN");
+      if (updates.length > 0) {
+        values.push(req.params.id);
+        await conn.query(`UPDATE stalls SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
       }
-      const newFiles = images.filter((img) => !img?.id);
-      const storedImages = await storeAttachments("stalls", req.params.id, newFiles, req.auth.sub);
+      for (const row of removed) {
+        await conn.query("DELETE FROM stall_images WHERE id = $1", [row.id]);
+      }
       for (const file of storedImages) {
-        await db.query(
+        await conn.query(
           "INSERT INTO stall_images (id, stall_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
           [crypto.randomUUID(), req.params.id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
         );
       }
+      await conn.query("COMMIT");
+    } catch (innerError) {
+      await conn.query("ROLLBACK");
+      // The domain write failed after files were already confirmed real —
+      // don't leave them orphaned in Storage with nothing referencing them.
+      await Promise.all(storedImages.map((f) => removeAttachment(f.storagePath)));
+      throw innerError;
     }
+    finally { conn.release(); }
+    await Promise.all(removed.map((row) => removeAttachment(row.storage_path)));
 
     const { rows } = await db.query("SELECT id, stall_name, status, owner_id, business_type, section, floor, floor_area, notes, geometry, created_at FROM stalls WHERE id = $1", [req.params.id]);
     if (!rows[0]) return res.status(404).json({ message: "Stall not found." });
@@ -2043,9 +2366,17 @@ app.get("/api/receipts", requireAuth, requireRole("vendor", "officer", "admin", 
     const params = [];
     if (req.auth.role === "vendor") { params.push(req.auth.sub); where = `WHERE pr.vendor_id = $${params.length}`; }
     else if (req.auth.role === "officer") { params.push(req.auth.sub); where = `WHERE pr.submitted_by = $${params.length}`; }
-    const { rows } = await db.query(`${PAYMENT_RECEIPT_SELECT} ${where} ORDER BY pr.created_at DESC`, params);
+    let sql = `${PAYMENT_RECEIPT_SELECT} ${where} ORDER BY pr.created_at DESC`;
+    let total;
+    const { limit, offset } = parsePagination(req);
+    if (limit != null) {
+      total = Number((await db.query(`SELECT COUNT(*) FROM payment_receipts pr ${where}`, params)).rows[0].count);
+      params.push(limit); sql += ` LIMIT $${params.length}`;
+      params.push(offset); sql += ` OFFSET $${params.length}`;
+    }
+    const { rows } = await db.query(sql, params);
     const receipts = await Promise.all(rows.map(mapPaymentReceiptRow));
-    res.json({ receipts });
+    res.json({ receipts, ...(total !== undefined ? { total } : {}) });
   } catch (error) { next(error); }
 });
 
@@ -2141,10 +2472,19 @@ function mapArchiveRow(r) {
   };
 }
 
-app.get("/api/archive", requireAuth, requireRole("admin", "super_admin"), async (_req, res, next) => {
+app.get("/api/archive", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try {
-    const { rows } = await db.query(`${ARCHIVE_SELECT} ORDER BY a.archived_at DESC`);
-    res.json({ records: rows.map(mapArchiveRow) });
+    let sql = `${ARCHIVE_SELECT} ORDER BY a.archived_at DESC`;
+    let total;
+    const { limit, offset } = parsePagination(req);
+    const values = [];
+    if (limit != null) {
+      total = Number((await db.query("SELECT COUNT(*) FROM archive")).rows[0].count);
+      values.push(limit); sql += ` LIMIT $${values.length}`;
+      values.push(offset); sql += ` OFFSET $${values.length}`;
+    }
+    const { rows } = await db.query(sql, values);
+    res.json({ records: rows.map(mapArchiveRow), ...(total !== undefined ? { total } : {}) });
   } catch (error) { next(error); }
 });
 
@@ -2260,13 +2600,18 @@ app.get("/api/transfers", requireAuth, async (req, res, next) => {
   try {
     // Vendors only see transfers they sent or received; staff see everything.
     const isStaff = ["admin", "super_admin"].includes(req.auth.role);
-    const { rows } = isStaff
-      ? await db.query(`${TRANSFER_SELECT} ORDER BY t.created_at DESC`)
-      : await db.query(
-          `${TRANSFER_SELECT} WHERE t.from_user_id = $1 OR t.to_user_id = $1 ORDER BY t.created_at DESC`,
-          [req.auth.sub]
-        );
-    res.json({ transfers: rows.map(mapTransferRow) });
+    const where = isStaff ? "" : "WHERE t.from_user_id = $1 OR t.to_user_id = $1";
+    const values = isStaff ? [] : [req.auth.sub];
+    let sql = `${TRANSFER_SELECT} ${where} ORDER BY t.created_at DESC`;
+    let total;
+    const { limit, offset } = parsePagination(req);
+    if (limit != null) {
+      total = Number((await db.query(`SELECT COUNT(*) FROM transfers t ${where}`, values)).rows[0].count);
+      values.push(limit); sql += ` LIMIT $${values.length}`;
+      values.push(offset); sql += ` OFFSET $${values.length}`;
+    }
+    const { rows } = await db.query(sql, values);
+    res.json({ transfers: rows.map(mapTransferRow), ...(total !== undefined ? { total } : {}) });
   } catch (error) { next(error); }
 });
 
@@ -2373,7 +2718,7 @@ app.get("/api/map-facilities", async (req, res, next) => {
     if (floor && !FACILITY_FLOORS.has(floor)) return res.status(400).json({ message: "Floor must be 1 or 2." });
     const { rows } = await db.query("SELECT * FROM map_facilities ORDER BY type, name");
     const facilities = rows.map(mapFacilityRow).filter((item) => !floor || item.floor === floor || item.connectedFloors.includes(floor));
-    res.json({ facilities });
+    sendWithETag(req, res, { facilities });
   } catch (error) { next(error); }
 });
 
@@ -2451,7 +2796,7 @@ app.get("/api/perimeters", async (req, res, next) => {
       notes: row.notes || "",
       createdAt: row.created_at,
     }));
-    res.json({ perimeters });
+    sendWithETag(req, res, { perimeters });
   } catch (error) { next(error); }
 });
 

@@ -43,7 +43,7 @@ import {
 import { showToast } from "./Toast";
 import { AttachmentLink } from "./AttachmentLink";
 import { ImageViewerModal } from "./ImageViewerModal";
-import { readFileForUpload, describeFileProblem, MAX_ATTACHMENT_BYTES, formatFileSize } from "../services/fileUpload";
+import { uploadFileDirect, describeFileProblem, MAX_ATTACHMENT_BYTES, formatFileSize } from "../services/fileUpload";
 
 // Stall photos only — a PDF wouldn't make sense as a photo of the stall,
 // even though the shared attachment allowlist also accepts one.
@@ -624,9 +624,12 @@ function StallForm({ title, subtitle, initialValues, defaultFloor, onSave, onCan
   const [notes, setNotes] = useState(initialValues?.notes ?? "");
   const [images, setImages] = useState(initialValues?.images ?? []);
   const [saving, setSaving] = useState(false);
+  const [uploadingImages, setUploadingImages] = useState(false);
 
   // A new stall must show vendors what it actually looks like — the server
-  // enforces this too, so this is a UX gate, not the only guard.
+  // enforces this too, so this is a UX gate, not the only guard. Each file
+  // uploads straight to Storage via a signed URL as soon as it's picked,
+  // rather than waiting to be base64'd into the eventual save request.
   async function handleAddImages(e) {
     // Snapshot into a plain array before clearing the input — resetting
     // e.target.value empties the live FileList e.target.files still points
@@ -634,17 +637,22 @@ function StallForm({ title, subtitle, initialValues, defaultFloor, onSave, onCan
     const files = Array.from(e.target.files || []);
     e.target.value = "";
     if (files.length === 0) return;
-    const added = [];
-    for (const file of files) {
-      const problem = describeFileProblem(file);
-      if (problem) { showToast(problem, "error"); continue; }
-      try {
-        added.push(await readFileForUpload(file));
-      } catch (error) {
-        showToast(error.message, "error");
+    setUploadingImages(true);
+    try {
+      const added = [];
+      for (const file of files) {
+        const problem = describeFileProblem(file);
+        if (problem) { showToast(problem, "error"); continue; }
+        try {
+          added.push(await uploadFileDirect(file, "stalls"));
+        } catch (error) {
+          showToast(error.message, "error");
+        }
       }
+      if (added.length) setImages((prev) => [...prev, ...added]);
+    } finally {
+      setUploadingImages(false);
     }
-    if (added.length) setImages((prev) => [...prev, ...added]);
   }
 
   return (
@@ -796,11 +804,21 @@ function StallForm({ title, subtitle, initialValues, defaultFloor, onSave, onCan
             />
             <button
               type="button"
+              disabled={uploadingImages}
               onClick={() => document.getElementById("stall-images")?.click()}
-              className="w-full flex items-center justify-center gap-2 py-3 border-2 border-dashed border-teal-300 rounded-xl text-[#0d9488] text-sm font-medium hover:bg-teal-50 transition-colors"
+              className="w-full flex items-center justify-center gap-2 py-3 border-2 border-dashed border-teal-300 rounded-xl text-[#0d9488] text-sm font-medium hover:bg-teal-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <Upload className="w-4 h-4" />
-              {images.length > 0 ? "Add More Photos" : "Upload Photos"}
+              {uploadingImages ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                <>
+                  <Upload className="w-4 h-4" />
+                  {images.length > 0 ? "Add More Photos" : "Upload Photos"}
+                </>
+              )}
             </button>
             <p className="text-xs text-gray-500 mt-1.5">
               Required — vendors see this when browsing this stall.{" "}
@@ -811,7 +829,7 @@ function StallForm({ title, subtitle, initialValues, defaultFloor, onSave, onCan
                 {images.map((img, i) => (
                   <div key={img.id ?? i} className="relative aspect-square rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
                     <img
-                      src={img.url ?? `data:${img.type};base64,${img.base64}`}
+                      src={img.url ?? img.previewUrl ?? `data:${img.type};base64,${img.base64}`}
                       alt={img.name}
                       className="w-full h-full object-cover"
                     />
@@ -852,7 +870,7 @@ function StallForm({ title, subtitle, initialValues, defaultFloor, onSave, onCan
             </button>
             <button
               type="submit"
-              disabled={saving || !stallName.trim() || images.length === 0}
+              disabled={saving || uploadingImages || !stallName.trim() || images.length === 0}
               className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl text-sm font-medium hover:shadow-md hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {saving ? (

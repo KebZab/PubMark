@@ -16,7 +16,9 @@ import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import { readAssetForUpload, formatFileSize, DOCUMENT_PICKER_TYPES } from "../../services/fileUpload";
 import { useApiData } from "../../hooks/useApiData";
-import { createViolation, getApplications, getStalls, getViolations } from "../../services/api";
+import { useStalls } from "../../hooks/useStalls";
+import { useApplications } from "../../hooks/useApplications";
+import { createViolation, getViolations } from "../../services/api";
 import { Attachments, Card, EmptyState, ErrorState, LoadingState, OfficerHeader, buttonShadow, formatDate } from "../../components/ui";
 
 // Same eight categories the web officer dashboard offers.
@@ -50,8 +52,8 @@ function getActiveApp(stallId, applications) {
 
 export default function ViolationsScreen() {
   const { data, loading, error, refetch } = useApiData(getViolations);
-  const stallsQuery = useApiData(getStalls);
-  const applicationsQuery = useApiData(getApplications);
+  const stallsQuery = useStalls();
+  const applicationsQuery = useApplications();
   const [filter, setFilter] = useState("all");
   const [expandedId, setExpandedId] = useState(null);
 

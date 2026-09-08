@@ -100,6 +100,15 @@ export async function cancelPendingUser(id) {
   return apiFetch(`/pending-users/${id}`, { method: "DELETE" });
 }
 
+// Asks the server for a one-time upload link into private Storage. See
+// services/fileUpload.js's uploadFileDirect() for the full upload flow.
+export async function signUpload({ purpose, fileName, mimeType, fileSize }) {
+  return apiFetch("/uploads/sign", {
+    method: "POST",
+    body: JSON.stringify({ purpose, fileName, mimeType, fileSize }),
+  });
+}
+
 export async function updateUserApi(id, data) {
   const result = await apiFetch(`/users/${id}`, { method: "PATCH", body: JSON.stringify(data) });
   return result.user;

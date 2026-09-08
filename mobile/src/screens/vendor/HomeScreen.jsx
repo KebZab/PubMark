@@ -4,8 +4,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../context/AuthContext";
-import { useApiData } from "../../hooks/useApiData";
-import { getApplications, createTerminationRequest } from "../../services/api";
+import { useApplications } from "../../hooks/useApplications";
+import { createTerminationRequest } from "../../services/api";
 import { Card, ErrorState, LoadingState, StatusPill, formatDate } from "../../components/ui";
 import { getApplicationDisplayStatus } from "../../utils/permitDeadline";
 
@@ -20,7 +20,7 @@ function InfoRow({ label, value }) {
 
 export default function HomeScreen({ navigation }) {
   const { user, signOut } = useAuth();
-  const { data, loading, error, refetch } = useApiData(getApplications);
+  const { data, loading, error, refetch } = useApplications();
   const [showDropdown, setShowDropdown] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [terminateConfirm, setTerminateConfirm] = useState(false);

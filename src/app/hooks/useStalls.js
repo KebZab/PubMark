@@ -1,26 +1,30 @@
-import { useCallback, useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getStalls } from "../services/stallsApi";
 
+export const STALLS_QUERY_KEY = ["stalls"];
+
 export function useStalls() {
-  const [stalls, setStalls] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const queryClient = useQueryClient();
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: STALLS_QUERY_KEY,
+    queryFn: getStalls,
+    // Stall geometry/metadata rarely changes minute-to-minute.
+    staleTime: 5 * 60_000,
+  });
 
-  const refetch = useCallback(async () => {
-    setLoading(true);
-    try {
-      setStalls(await getStalls());
-      setError(null);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // Preserves the old useState-setter shape (including functional updaters)
+  // for callers that patch the cached list directly instead of refetching.
+  function setStalls(next) {
+    queryClient.setQueryData(STALLS_QUERY_KEY, (prev) =>
+      typeof next === "function" ? next(prev ?? []) : next,
+    );
+  }
 
-  useEffect(() => {
-    refetch();
-  }, [refetch]);
-
-  return { stalls, setStalls, loading, error, refetch };
+  return {
+    stalls: data ?? [],
+    setStalls,
+    loading: isLoading,
+    error: error?.message ?? null,
+    refetch,
+  };
 }

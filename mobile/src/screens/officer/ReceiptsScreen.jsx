@@ -16,7 +16,9 @@ import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import { readAssetForUpload, DOCUMENT_PICKER_TYPES } from "../../services/fileUpload";
 import { useApiData } from "../../hooks/useApiData";
-import { createReceipt, getApplications, getReceipts, getStalls } from "../../services/api";
+import { useStalls } from "../../hooks/useStalls";
+import { useApplications } from "../../hooks/useApplications";
+import { createReceipt, getReceipts } from "../../services/api";
 import { Card, EmptyState, ErrorState, LoadingState, OfficerHeader, buttonShadow, formatDate } from "../../components/ui";
 
 const STATUS_STYLE = {
@@ -43,8 +45,8 @@ function todayISO() {
 
 export default function ReceiptsScreen() {
   const { data, loading, error, refetch } = useApiData(getReceipts);
-  const stallsQuery = useApiData(getStalls);
-  const applicationsQuery = useApiData(getApplications);
+  const stallsQuery = useStalls();
+  const applicationsQuery = useApplications();
 
   const [expandedId, setExpandedId] = useState(null);
   const [formOpen, setFormOpen] = useState(false);

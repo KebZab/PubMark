@@ -5,7 +5,10 @@ import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../context/AuthContext";
 import { useApiData } from "../../hooks/useApiData";
-import { getApplications, getStallReservations, getStalls, getMapFacilities } from "../../services/api";
+import { useStalls } from "../../hooks/useStalls";
+import { useApplications } from "../../hooks/useApplications";
+import { useMapFacilities } from "../../hooks/useMapFacilities";
+import { getStallReservations } from "../../services/api";
 import { ErrorState, LoadingState } from "../../components/ui";
 import StallMap from "../../components/StallMap";
 import ImageViewerModal from "../../components/ImageViewerModal";
@@ -14,14 +17,14 @@ const FLOORS = ["1", "2"];
 
 export default function MapScreen({ navigation }) {
   const { user } = useAuth();
-  const stallsQuery = useApiData(getStalls);
-  const appsQuery = useApiData(getApplications);
+  const stallsQuery = useStalls();
+  const appsQuery = useApplications();
   // GET /applications only returns this vendor's own rows, so it can't say
   // whether some other stall is taken — occupied-stalls fills that gap with
   // no personal data attached. Without it, every stall approved for someone
   // else looked "Available" here even though it wasn't.
   const reservationsQuery = useApiData(getStallReservations);
-  const facilitiesQuery = useApiData(getMapFacilities);
+  const facilitiesQuery = useMapFacilities();
 
   // The tab navigator keeps this screen mounted when you leave it, so
   // submitting an application and coming back doesn't remount it — its data

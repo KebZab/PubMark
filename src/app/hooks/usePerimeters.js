@@ -1,26 +1,28 @@
-import { useCallback, useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getPerimeters } from "../services/perimeterApi";
 
+export const PERIMETERS_QUERY_KEY = ["perimeters"];
+
 export function usePerimeters() {
-  const [perimeters, setPerimeters] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const queryClient = useQueryClient();
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: PERIMETERS_QUERY_KEY,
+    queryFn: getPerimeters,
+    // The market boundary essentially never changes during normal use.
+    staleTime: 5 * 60_000,
+  });
 
-  const refetch = useCallback(async () => {
-    setLoading(true);
-    try {
-      setPerimeters(await getPerimeters());
-      setError(null);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  function setPerimeters(next) {
+    queryClient.setQueryData(PERIMETERS_QUERY_KEY, (prev) =>
+      typeof next === "function" ? next(prev ?? []) : next,
+    );
+  }
 
-  useEffect(() => {
-    refetch();
-  }, [refetch]);
-
-  return { perimeters, setPerimeters, loading, error, refetch };
+  return {
+    perimeters: data ?? [],
+    setPerimeters,
+    loading: isLoading,
+    error: error?.message ?? null,
+    refetch,
+  };
 }

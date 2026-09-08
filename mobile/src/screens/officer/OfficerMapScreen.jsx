@@ -5,7 +5,10 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import { useApiData } from "../../hooks/useApiData";
-import { getApplications, getStalls, getViolations, createViolation, getMapFacilities } from "../../services/api";
+import { useStalls } from "../../hooks/useStalls";
+import { useApplications } from "../../hooks/useApplications";
+import { useMapFacilities } from "../../hooks/useMapFacilities";
+import { getViolations, createViolation } from "../../services/api";
 import { readAssetForUpload, formatFileSize, DOCUMENT_PICKER_TYPES } from "../../services/fileUpload";
 import { Card, ErrorState, LoadingState, OfficerHeader, buttonShadow, iosShadow } from "../../components/ui";
 import StallMap from "../../components/StallMap";
@@ -51,10 +54,10 @@ function getActiveApp(stallId, applications) {
 // map, stall already picked — previously that only existed on the separate
 // Violations tab, which meant re-picking a stall you'd just tapped here.
 export default function OfficerMapScreen() {
-  const stallsQuery = useApiData(getStalls);
-  const applicationsQuery = useApiData(getApplications);
+  const stallsQuery = useStalls();
+  const applicationsQuery = useApplications();
   const violationsQuery = useApiData(getViolations);
-  const facilitiesQuery = useApiData(getMapFacilities);
+  const facilitiesQuery = useMapFacilities();
   const [floor, setFloor] = useState("1");
   const [selectedId, setSelectedId] = useState(null);
   const [viewer, setViewer] = useState(null);

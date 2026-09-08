@@ -1,6 +1,16 @@
 # Future Supabase Optimization Plan
 
-> Status: Future proposal only. None of the changes in this document are currently implemented.
+> Status (updated 2026-09-08): Phases 1–3 are implemented. Phase 4 has one
+> pilot flow implemented (stall photo uploads); the other 8 upload flows and
+> all of mobile still use the original base64 path by design, not omission.
+> Phase 5's cleanup items are implemented except retiring
+> `legacyRequestMigration.js`, deliberately left in place — see CLAUDE.md's
+> 2026-09-08 session log entry for exactly what changed and why each
+> deviation from this doc's original wording was made (e.g. offset-based
+> pagination instead of cursor-based, to match the pattern already shipped
+> for users/stalls/applications; no ETag on `/api/stalls` because signed
+> image URLs make it a no-op). Treat the plan below as the original design
+> intent, and CLAUDE.md as the source of truth for current reality.
 
 ## Summary
 
