@@ -43,6 +43,7 @@ export function buildPermitDeadlineRemarks(visibleRemarks, options = {}) {
 }
 
 export function getApplicationDisplayStatus(app) {
+  if (app.contractTerminatedAt) return "terminated";
   const meta = parsePermitDeadlineMeta(app.adminRemarks);
   if (meta.permitTerminatedAt) return "terminated";
   if (app.adminRemarks.toLowerCase().includes("contract terminated")) return "terminated";
@@ -53,6 +54,13 @@ export function getApplicationDisplayStatus(app) {
   )
     return "terminated";
   return app.status;
+}
+
+export function getRenewalDeadline(app) {
+  if (app?.renewalDeadlineAt) return new Date(app.renewalDeadlineAt);
+  const deadline = new Date(app?.contractEnd);
+  deadline.setDate(deadline.getDate() + 7);
+  return deadline;
 }
 
 export function formatPermitDeadline(dateString) {

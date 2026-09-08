@@ -15,6 +15,7 @@ import {
   AlertTriangle,
   Flag,
   CheckSquare,
+  Loader2,
 } from "lucide-react";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
@@ -24,6 +25,9 @@ import { saveViolation } from "../components/violationsStore";
 import { showToast } from "../components/Toast";
 import { FloorSwitcher } from "../components/FloorSwitcher";
 import { ImageViewerModal } from "../components/ImageViewerModal";
+import { useMapFacilities } from "../hooks/useMapFacilities";
+import { MapFacilitiesLayer, MapFacilitiesLegend } from "../components/MapFacilitiesLayer";
+import { registerMapFloater } from "../components/mapFloaterDeclutter";
 
 // ── CSS ──────────────────────────────────────────────────────────────────────
 const MAP_CSS = `
@@ -120,6 +124,7 @@ function DrawnStallsLayer({
 
   useEffect(() => {
     const layers = [];
+    const unregister = [];
 
     stalls.forEach((stall) => {
       const isSelected = multiSelectMode ? selectedIds.has(stall.id) : stall.id === selectedId;
@@ -132,16 +137,20 @@ function DrawnStallsLayer({
         { type: "Feature", properties: {}, geometry: stall.geometry },
         { style: { ...style, opacity: 0.95 } },
       );
-      layer.bindTooltip(stallTooltipLabel(stall, userApp, globalOccupied, globalPending), {
-        direction: "top",
+      layer.bindTooltip(`<span class="vendor-stall-floater-content"><span class="vendor-stall-status-dot" style="background:${style.fillColor}"></span>${stall.stall_name}</span>`, {
+        permanent: true,
+        direction: "center",
+        className: "vendor-stall-floater",
         opacity: 0.95,
       });
       layer.on("click", () => onSelect(stall));
       layer.addTo(map);
+      unregister.push(registerMapFloater(map, layer, { selected: isSelected }));
       layers.push(layer);
     });
 
     return () => {
+      unregister.forEach((remove) => remove());
       layers.forEach((l) => map.removeLayer(l));
     };
   }, [
@@ -189,6 +198,7 @@ export function UserMapDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [flyTarget, setFlyTarget] = useState(null);
   const [activeFloor, setActiveFloor] = useState("1");
+  const { facilities } = useMapFacilities(activeFloor);
   const [showReportModal, setShowReportModal] = useState(false);
   const [reportCategory, setReportCategory] = useState("Other");
   const [reportDescription, setReportDescription] = useState("");
@@ -231,8 +241,11 @@ export function UserMapDashboard() {
     (s) => !occupiedStallIds.has(s.id) && !isPendingToUser(s),
   ).length;
   const pendingCount = floorStalls.filter(isPendingToUser).length;
-  const occupiedCount = floorStalls.filter((s) =>
-    occupiedStallIds.has(s.id),
+  const yourStallCount = floorStalls.filter(
+    (s) => getActiveApp(s.id, userApplications)?.status === "approved",
+  ).length;
+  const occupiedCount = floorStalls.filter(
+    (s) => occupiedStallIds.has(s.id) && getActiveApp(s.id, userApplications)?.status !== "approved",
   ).length;
 
   const filteredStalls = searchQuery
@@ -351,8 +364,10 @@ export function UserMapDashboard() {
             onSelect={handleSelectStall}
           />
           <FlyTo position={flyTarget} />
+          <MapFacilitiesLayer facilities={facilities} />
         </MapContainer>
       </div>
+      <MapFacilitiesLegend showStallStatuses className="absolute bottom-5 left-5 z-[900] space-y-1 rounded-xl border bg-white/95 p-3 shadow-lg" />
 
       {/* ── Top bar ────────────────────────────────────── */}
       <div className="absolute top-0 left-0 right-0 z-[1000] pointer-events-none">
@@ -416,8 +431,14 @@ export function UserMapDashboard() {
           )}
           {occupiedCount > 0 && (
             <div className="bg-white/96 backdrop-blur-md rounded-xl px-3 py-1.5 shadow-md border border-gray-100/80 flex items-center gap-1.5">
+              <div className="w-2.5 h-2.5 rounded-full bg-gray-400" />
+              <span className="text-xs font-semibold text-gray-700">{occupiedCount} Occupied by vendor</span>
+            </div>
+          )}
+          {yourStallCount > 0 && (
+            <div className="bg-white/96 backdrop-blur-md rounded-xl px-3 py-1.5 shadow-md border border-gray-100/80 flex items-center gap-1.5">
               <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />
-              <span className="text-xs font-semibold text-gray-700">{occupiedCount} Occupied</span>
+              <span className="text-xs font-semibold text-gray-700">{yourStallCount} Your stall{yourStallCount === 1 ? "" : "s"}</span>
             </div>
           )}
           {searchQuery && (
@@ -429,6 +450,16 @@ export function UserMapDashboard() {
           )}
         </div>
       </div>
+
+      {/* ── Loading state ─────────────────────────────────── */}
+      {stallsLoading && (
+        <div className="absolute inset-0 z-[500] flex items-center justify-center bg-white/60 backdrop-blur-[1px]">
+          <div className="flex flex-col items-center gap-3">
+            <Loader2 className="w-7 h-7 text-teal-600 animate-spin" />
+            <p className="text-sm font-medium text-gray-600">Loading stalls…</p>
+          </div>
+        </div>
+      )}
 
       {/* ── Empty state ────────────────────────────────── */}
       {!stallsLoading && storedStalls.length === 0 && (

@@ -3,10 +3,14 @@ import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, Text, Te
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
 import { useApiData } from "../../hooks/useApiData";
-import { getApplications, getStalls, getViolations, createViolation } from "../../services/api";
-import { readAssetForUpload, formatFileSize } from "../../services/fileUpload";
-import { Card, ErrorState, LoadingState, OfficerHeader } from "../../components/ui";
+import { useStalls } from "../../hooks/useStalls";
+import { useApplications } from "../../hooks/useApplications";
+import { useMapFacilities } from "../../hooks/useMapFacilities";
+import { getViolations, createViolation } from "../../services/api";
+import { readAssetForUpload, formatFileSize, DOCUMENT_PICKER_TYPES } from "../../services/fileUpload";
+import { Card, ErrorState, LoadingState, OfficerHeader, buttonShadow, iosShadow } from "../../components/ui";
 import StallMap from "../../components/StallMap";
 import ImageViewerModal from "../../components/ImageViewerModal";
 
@@ -50,9 +54,10 @@ function getActiveApp(stallId, applications) {
 // map, stall already picked — previously that only existed on the separate
 // Violations tab, which meant re-picking a stall you'd just tapped here.
 export default function OfficerMapScreen() {
-  const stallsQuery = useApiData(getStalls);
-  const applicationsQuery = useApiData(getApplications);
+  const stallsQuery = useStalls();
+  const applicationsQuery = useApplications();
   const violationsQuery = useApiData(getViolations);
+  const facilitiesQuery = useMapFacilities();
   const [floor, setFloor] = useState("1");
   const [selectedId, setSelectedId] = useState(null);
   const [viewer, setViewer] = useState(null);
@@ -69,6 +74,7 @@ export default function OfficerMapScreen() {
   const violations = violationsQuery.data?.violations ?? [];
 
   const stalls = useMemo(() => allStalls.filter((s) => s.floor === floor), [allStalls, floor]);
+  const facilities = useMemo(() => (facilitiesQuery.data?.facilities ?? []).filter((item) => item.floor === floor || item.connectedFloors?.includes(floor)), [facilitiesQuery.data, floor]);
 
   // Still useful to an officer even though it no longer drives the map
   // colour — shown as a supplementary note when a stall is selected.
@@ -127,6 +133,26 @@ export default function OfficerMapScreen() {
         setEvidence((prev) => [...prev, { ...file, size: formatFileSize(file.size) }]);
       } catch (e) {
         Alert.alert("Cannot attach photo", e.message);
+      }
+    }
+  };
+
+  const pickFile = async () => {
+    // copyToCacheDirectory MUST stay false. With it on, Android copies the pick
+    // into a file:// path under Expo Go's own cache, which the sandboxed app
+    // then can't read ("Location ... isn't readable"). Left off, the picker
+    // returns the original content:// uri, which expo-file-system grants read
+    // access to unconditionally and opens via contentResolver.
+    const result = await DocumentPicker.getDocumentAsync({
+      type: DOCUMENT_PICKER_TYPES,
+      copyToCacheDirectory: false,
+    });
+    if (!result.canceled && result.assets?.[0]) {
+      try {
+        const file = await readAssetForUpload(result.assets[0]);
+        setEvidence((prev) => [...prev, { ...file, size: formatFileSize(file.size) }]);
+      } catch (e) {
+        Alert.alert("Cannot attach file", e.message);
       }
     }
   };
@@ -196,7 +222,7 @@ export default function OfficerMapScreen() {
         <LoadingState />
       ) : error ? (
         <ErrorState message={error} />
-      ) : stalls.length === 0 ? (
+      ) : stalls.length === 0 && facilities.length === 0 ? (
         <View className="flex-1 items-center justify-center px-8">
           <Text className="text-sm font-semibold text-gray-700">No stalls on {floor}F</Text>
           <Text className="mt-1.5 text-center text-xs leading-5 text-gray-400">Try the other floor.</Text>
@@ -204,6 +230,7 @@ export default function OfficerMapScreen() {
       ) : (
         <StallMap
           stalls={stalls}
+          facilities={facilities}
           selectedId={selectedId}
           onSelect={setSelectedId}
           styleInputs={styleInputs}
@@ -217,7 +244,10 @@ export default function OfficerMapScreen() {
       </View>
 
       {selected ? (
-        <View className="absolute inset-x-3 bottom-24 rounded-2xl border border-gray-200 bg-white p-4 shadow-lg">
+        <View
+          className="absolute inset-x-3 bottom-24 rounded-2xl border border-gray-200 bg-white p-4"
+          style={iosShadow("#0f172a", { offsetY: 8, opacity: 0.18, radius: 20 })}
+        >
           <View className="flex-row items-start justify-between">
             <View className="flex-1 pr-3">
               <Text className="text-base font-semibold text-gray-900">{selected.stall_name}</Text>
@@ -277,6 +307,7 @@ export default function OfficerMapScreen() {
           {selectedApp?.status === "approved" ? (
             <Pressable
               onPress={() => openReport(selected)}
+              style={buttonShadow("#f59e0b")}
               className="mt-2 flex-row items-center justify-center rounded-xl bg-amber-500 py-3"
             >
               <Ionicons name="alert-circle-outline" size={16} color="#ffffff" />
@@ -369,16 +400,24 @@ export default function OfficerMapScreen() {
                 </View>
               ) : null}
 
-              <Pressable
-                onPress={capturePhoto}
-                disabled={submitting}
-                className="flex-row items-center justify-center rounded-xl border border-gray-200 bg-white py-3"
-              >
-                <Ionicons name="camera-outline" size={18} color="#374151" />
-                <Text className="ml-2 text-xs font-semibold text-gray-700">
-                  {evidence.length > 0 ? "Add another photo" : "Take photo"}
-                </Text>
-              </Pressable>
+              <View className="flex-row gap-2">
+                <Pressable
+                  onPress={capturePhoto}
+                  disabled={submitting}
+                  className="flex-1 flex-row items-center justify-center rounded-xl border border-gray-200 bg-white py-3"
+                >
+                  <Ionicons name="camera-outline" size={18} color="#374151" />
+                  <Text className="ml-2 text-xs font-semibold text-gray-700">Take photo</Text>
+                </Pressable>
+                <Pressable
+                  onPress={pickFile}
+                  disabled={submitting}
+                  className="flex-1 flex-row items-center justify-center rounded-xl border border-gray-200 bg-white py-3"
+                >
+                  <Ionicons name="folder-outline" size={18} color="#374151" />
+                  <Text className="ml-2 text-xs font-semibold text-gray-700">Choose file</Text>
+                </Pressable>
+              </View>
             </Card>
 
             {formError ? (
@@ -390,6 +429,7 @@ export default function OfficerMapScreen() {
             <Pressable
               onPress={submitReport}
               disabled={submitting}
+              style={buttonShadow("#f59e0b")}
               className={`mt-6 items-center rounded-xl py-4 ${submitting ? "bg-amber-500/50" : "bg-amber-500"}`}
             >
               {submitting ? (

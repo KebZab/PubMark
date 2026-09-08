@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch src/index.js",
+    "dev": "node start-with-tunnel.js",
+    "dev:no-tunnel": "node --watch src/index.js",
     "start": "node src/index.js",
     "seed": "node seed-demo-users.js"
   },
@@ -14,6 +15,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^10.0.0",
     "pg": "^8.23.0"
   }
 }

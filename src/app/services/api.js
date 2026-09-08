@@ -1,3 +1,5 @@
+import { clearSession } from "../components/authStorage";
+
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "");
 // A configured URL pointing at "localhost" only works on the machine running
 // the backend. When the app is loaded from another device on the LAN (via
@@ -16,6 +18,15 @@ export class ApiConfigurationError extends Error {
   }
 }
 
+export class ApiError extends Error {
+  constructor(message, status, code) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
 async function apiFetch(path, init = {}) {
   if (!API_BASE_URL) throw new ApiConfigurationError();
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -25,7 +36,15 @@ async function apiFetch(path, init = {}) {
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.message || "Unable to complete the request.");
+    // The server flags EVERY authenticated request this way once an admin
+    // approves closing an account, not just login — so a vendor who's still
+    // signed in gets kicked out on their very next action instead of staying
+    // in until the session cookie's normal 8h expiry.
+    if (response.status === 401) {
+      clearSession();
+      if (typeof window !== "undefined") window.dispatchEvent(new Event("pubmark:unauthorized"));
+    }
+    throw new ApiError(error.message || "Unable to complete the request.", response.status, error.code);
   }
   return response.json();
 }
@@ -62,6 +81,7 @@ export async function listUsersPage(params) {
   const query = new URLSearchParams();
   if (params.role && params.role !== "all") query.set("role", params.role);
   if (params.search) query.set("search", params.search);
+  if (params.activeOnly) query.set("activeOnly", "true");
   if (params.sortField) query.set("sortField", params.sortField);
   if (params.sortDir) query.set("sortDir", params.sortDir);
   query.set("limit", String(params.pageSize));
@@ -70,8 +90,31 @@ export async function listUsersPage(params) {
 }
 
 export async function createUser(data) {
-  const result = await apiFetch("/users", { method: "POST", body: JSON.stringify(data) });
-  return result.user;
+  // The account doesn't exist yet — this only sends a confirmation email and
+  // creates a pending invitation. See getPendingUsers().
+  return apiFetch("/users", { method: "POST", body: JSON.stringify(data) });
+}
+
+export async function getPendingUsers() {
+  const result = await apiFetch("/pending-users");
+  return result.pendingUsers;
+}
+
+export async function resendPendingUser(id) {
+  return apiFetch(`/pending-users/${id}/resend`, { method: "POST" });
+}
+
+export async function cancelPendingUser(id) {
+  return apiFetch(`/pending-users/${id}`, { method: "DELETE" });
+}
+
+// Asks the server for a one-time upload link into private Storage. See
+// services/fileUpload.js's uploadFileDirect() for the full upload flow.
+export async function signUpload({ purpose, fileName, mimeType, fileSize }) {
+  return apiFetch("/uploads/sign", {
+    method: "POST",
+    body: JSON.stringify({ purpose, fileName, mimeType, fileSize }),
+  });
 }
 
 export async function updateUserApi(id, data) {

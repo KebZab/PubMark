@@ -2,7 +2,6 @@ import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router";
 import {
   Users,
-  ShieldCheck,
   Store,
   BarChart3,
   UserPlus,
@@ -13,9 +12,8 @@ import {
   X,
   AlertTriangle,
   Package,
-  UserCog,
-  TrendingUp,
   Activity,
+  Clock,
   Eye,
   EyeOff,
   RefreshCw,
@@ -26,9 +24,12 @@ import {
   ChevronsUpDown,
   MapPin,
   User,
-  Paperclip,
   FileText,
   Receipt as ReceiptIcon,
+  Send,
+  Archive,
+  Loader2,
+  Mail,
 } from "lucide-react";
 import { AdminMapView } from "../components/AdminMapView";
 import { getSession } from "../components/authStorage";
@@ -43,10 +44,13 @@ import {
   createUser,
   updateUserApi,
   deleteUserApi,
+  getPendingUsers,
+  resendPendingUser,
+  cancelPendingUser,
 } from "../services/api";
 import { TablePagination } from "../components/ui/TablePagination";
 import { migrateLegacyRequests } from "../services/legacyRequestMigration";
-import { getViolations, assignOfficer } from "../components/violationsStore";
+import { getViolations, updateViolationStatus } from "../components/violationsStore";
 import {
   getViolationRequests,
   createViolationRequest,
@@ -59,11 +63,15 @@ import {
   updateTerminationStatus,
 } from "../components/terminationRequestsStore";
 import { getReceipts, reviewReceipt } from "../services/receiptsApi";
+import { archiveRecord } from "../services/archiveApi";
 import { DashboardLayout } from "../components/DashboardLayout";
+import { PaymentReceiptsPanel } from "../components/PaymentReceiptsPanel";
+import { ContractRenewalsPanel } from "../components/ContractRenewalsPanel";
 import { SuperAdminMapEditor } from "../components/SuperAdminMapEditor";
 import { showToast } from "../components/Toast";
 import { buildPermitDeadlineRemarks, parsePermitDeadlineMeta } from "../components/permitDeadline";
 import { AttachmentLink } from "../components/AttachmentLink";
+import { FilePreviewLink } from "../components/FilePreviewLink";
 
 const ROLE_COLORS = {
   super_admin: "bg-purple-100 text-purple-700",
@@ -108,9 +116,10 @@ export function SuperAdminDashboard() {
     if (path.includes("/map")) return "map";
     if (path.includes("/stalls")) return "stalls";
     if (path.includes("/applications")) return "applications";
+    if (path.includes("/receipts")) return "receipts";
+    if (path.includes("/renewals")) return "renewals";
     if (path.includes("/violations")) return "violations";
     if (path.includes("/check-requests")) return "check-requests";
-    if (path.includes("/settings")) return "overview"; // Could add settings tab later
     return "overview";
   };
 
@@ -131,14 +140,24 @@ export function SuperAdminDashboard() {
   const [showPw, setShowPw] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [formErrors, setFormErrors] = useState({});
+  const [savingUser, setSavingUser] = useState(false);
+  const [userSaveError, setUserSaveError] = useState("");
   const [violationsList, setViolationsList] = useState([]);
-  const [assigningViolation, setAssigningViolation] = useState(null);
+
   const [checkRequests, setCheckRequests] = useState([]);
   const [mapRequests, setMapRequests] = useState([]);
   const [expandedMapReq, setExpandedMapReq] = useState(null);
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [requestReason, setRequestReason] = useState("");
   const [selectedStallForRequest, setSelectedStallForRequest] = useState(null);
+  // True when the modal was opened from a specific violation ("Send Req"),
+  // which already fixes the stall — the picker only makes sense for the
+  // general "New Request" flow, where the admin has to choose one.
+  const [requestStallLocked, setRequestStallLocked] = useState(false);
+  const [requestViolationCategory, setRequestViolationCategory] = useState("");
+  // The violation this request follows up on, so completing it can resolve
+  // that violation automatically.
+  const [requestViolationId, setRequestViolationId] = useState(null);
   const [assigningRequest, setAssigningRequest] = useState(null);
   const [editingStall, setEditingStall] = useState(null);
   const [editStallData, setEditStallData] = useState({ status: "", business_type: "" });
@@ -173,16 +192,28 @@ export function SuperAdminDashboard() {
   const [applicationsPageNum, setApplicationsPageNum] = useState(1);
   const [appStatusFilter, setAppStatusFilter] = useState("all");
 
-  const { stalls, refetch: refetchStalls } = useStalls();
-  const { applications, refetch: refetchApplications } = useApplications();
+  const { stalls, refetch: refetchStalls, loading: stallsLoading } = useStalls();
+  const { applications, refetch: refetchApplications, loading: applicationsLoading } = useApplications();
   const { perimeters } = usePerimeters();
   const [allViolations, setAllViolations] = useState([]);
+  const [usersLoading, setUsersLoading] = useState(true);
+  const [tableUsersLoading, setTableUsersLoading] = useState(true);
+  const [tableStallsLoading, setTableStallsLoading] = useState(true);
+  const [tableApplicationsLoading, setTableApplicationsLoading] = useState(true);
+  const [reportsLoading, setReportsLoading] = useState(true);
+  const [receiptsTabLoading, setReceiptsTabLoading] = useState(true);
+  const [requestDataLoading, setRequestDataLoading] = useState(true);
+  const [pendingInvitations, setPendingInvitations] = useState([]);
+  const [pendingInvitationsLoading, setPendingInvitationsLoading] = useState(true);
+  const [pendingActionIds, setPendingActionIds] = useState(new Set());
+  const [invitationSentEmail, setInvitationSentEmail] = useState(null);
 
   useEffect(() => {
     void loadUsers();
   }, []);
 
   async function loadUsers() {
+    setUsersLoading(true);
     try {
       const response = await listUsers();
       setUsers(
@@ -200,10 +231,13 @@ export function SuperAdminDashboard() {
       );
     } catch (error) {
       showToast(`Failed to load users: ${error.message}`, "error");
+    } finally {
+      setUsersLoading(false);
     }
   }
 
   async function loadUsersTable() {
+    setTableUsersLoading(true);
     try {
       const result = await listUsersPage({
         role: roleFilter,
@@ -217,10 +251,58 @@ export function SuperAdminDashboard() {
       setUsersTotal(result.total);
     } catch (error) {
       showToast(`Failed to load users: ${error.message}`, "error");
+    } finally {
+      setTableUsersLoading(false);
+    }
+  }
+
+  async function loadPendingInvitations() {
+    setPendingInvitationsLoading(true);
+    try {
+      setPendingInvitations(await getPendingUsers());
+    } catch (error) {
+      showToast(`Failed to load pending invitations: ${error.message}`, "error");
+    } finally {
+      setPendingInvitationsLoading(false);
+    }
+  }
+
+  function markPendingAction(id, isActive) {
+    setPendingActionIds((prev) => {
+      const next = new Set(prev);
+      if (isActive) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  async function handleResendInvitation(id) {
+    markPendingAction(id, true);
+    try {
+      await resendPendingUser(id);
+      showToast("Confirmation email resent.", "success");
+      await loadPendingInvitations();
+    } catch (error) {
+      showToast(`Failed to resend invitation: ${error.message}`, "error");
+    } finally {
+      markPendingAction(id, false);
+    }
+  }
+
+  async function handleCancelInvitation(id) {
+    markPendingAction(id, true);
+    try {
+      await cancelPendingUser(id);
+      setPendingInvitations((prev) => prev.filter((item) => item.id !== id));
+      showToast("Invitation cancelled.", "success");
+    } catch (error) {
+      showToast(`Failed to cancel invitation: ${error.message}`, "error");
+      markPendingAction(id, false);
     }
   }
 
   async function loadStallsTable() {
+    setTableStallsLoading(true);
     try {
       const result = await getStallsPage({
         search: debouncedStallSearch,
@@ -231,10 +313,13 @@ export function SuperAdminDashboard() {
       setStallsTotal(result.total);
     } catch (error) {
       showToast(`Failed to load stalls: ${error.message}`, "error");
+    } finally {
+      setTableStallsLoading(false);
     }
   }
 
   async function loadApplicationsTable() {
+    setTableApplicationsLoading(true);
     try {
       const result = await getApplicationsPage({
         status: appStatusFilter,
@@ -245,6 +330,8 @@ export function SuperAdminDashboard() {
       setApplicationsTotal(result.total);
     } catch (error) {
       showToast(`Failed to load applications: ${error.message}`, "error");
+    } finally {
+      setTableApplicationsLoading(false);
     }
   }
 
@@ -275,6 +362,10 @@ export function SuperAdminDashboard() {
   }, [tab, usersPageNum, debouncedUserSearch, roleFilter, sortField, sortAsc]);
 
   useEffect(() => {
+    if (tab === "users") void loadPendingInvitations();
+  }, [tab]);
+
+  useEffect(() => {
     if (tab === "stalls") void loadStallsTable();
   }, [tab, stallsPageNum, debouncedStallSearch]);
 
@@ -283,6 +374,7 @@ export function SuperAdminDashboard() {
   }, [tab, applicationsPageNum, appStatusFilter]);
 
   async function loadRequestData() {
+    setRequestDataLoading(true);
     const [violationRequestsResult, officerRequestsResult, officersResult, allUsersResult] =
       await Promise.allSettled([
         getViolationRequests(),
@@ -331,10 +423,12 @@ export function SuperAdminDashboard() {
         "error",
       );
     }
+    setRequestDataLoading(false);
   }
 
   useEffect(() => {
     if (tab === "violations") {
+      setReportsLoading(true);
       void (async () => {
         const [
           violationsResult,
@@ -401,13 +495,38 @@ export function SuperAdminDashboard() {
             "error",
           );
         }
+        setReportsLoading(false);
       })();
+    } else if (tab === "receipts") {
+      setReceiptsTabLoading(true);
+      void getReceipts()
+        .then(setReceiptsList)
+        .catch((error) => {
+          showToast(`Failed to load receipts: ${error.message}`, "error");
+        })
+        .finally(() => setReceiptsTabLoading(false));
     } else if (tab === "check-requests") {
       void loadRequestData();
     } else if (tab === "users") {
       void loadUsers();
     }
   }, [tab]);
+
+  // "Occupied" isn't a value an admin sets by hand — it's derived live from
+  // approved applications (same pattern AdminMapView.jsx and Analytics.jsx
+  // already use), since the stored stalls.status column is never updated
+  // when an application gets approved/rejected and would otherwise drift
+  // out of sync. `status === "unavailable"` is still the one real stored/
+  // manual flag (maintenance/closure), so that still wins.
+  const occupiedStallIds = new Set(
+    applications.filter((a) => a.status === "approved").map((a) => a.stallId),
+  );
+  const getStallDisplayStatus = (stall) =>
+    stall.status === "unavailable"
+      ? "unavailable"
+      : occupiedStallIds.has(stall.id)
+        ? "occupied"
+        : "vacant";
 
   const stats = {
     total: users.length,
@@ -416,13 +535,14 @@ export function SuperAdminDashboard() {
     admins: users.filter((u) => u.role === "admin" || u.role === "super_admin").length,
     openViolations: allViolations.filter((v) => v.status === "open").length,
     pendingApps: applications.filter((a) => a.status === "pending").length,
-    occupiedStalls: stalls.filter((s) => s.status === "occupied").length,
+    occupiedStalls: stalls.filter((s) => getStallDisplayStatus(s) === "occupied").length,
   };
 
   function openCreate() {
     setEditUser(null);
     setForm(EMPTY_FORM);
     setFormErrors({});
+    setUserSaveError("");
     setShowPw(false);
     setShowForm(true);
   }
@@ -439,6 +559,7 @@ export function SuperAdminDashboard() {
       department: u.department ?? "",
     });
     setFormErrors({});
+    setUserSaveError("");
     setShowPw(false);
     setShowForm(true);
   }
@@ -447,18 +568,22 @@ export function SuperAdminDashboard() {
     const errs = {};
     if (!form.name.trim()) errs.name = "Name is required.";
     if (!form.email.trim()) errs.email = "Email is required.";
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) errs.email = "Enter a valid email address.";
     if (!editUser && !form.password) errs.password = "Password is required for new users.";
     if (form.password && form.password.length < 6) errs.password = "At least 6 characters.";
     return errs;
   }
 
   async function handleSave() {
+    if (savingUser) return;
+    setUserSaveError("");
     const errs = validateForm();
     if (Object.keys(errs).length > 0) {
       setFormErrors(errs);
       return;
     }
 
+    setSavingUser(true);
     try {
       if (editUser) {
         await updateUserApi(editUser.id, {
@@ -472,20 +597,118 @@ export function SuperAdminDashboard() {
         showToast(`User "${form.name}" updated.`, "success");
       } else {
         await createUser({
-          name: form.name,
-          email: form.email,
+          name: form.name.trim(),
+          email: form.email.trim().toLowerCase(),
           password: form.password,
           role: form.role,
           phone: form.phone,
           address: form.address,
           department: form.department || undefined,
         });
-        showToast(`User "${form.name}" created.`, "success");
+        setInvitationSentEmail(form.email.trim());
+        await loadPendingInvitations();
       }
       setShowForm(false);
       await Promise.all([loadUsersTable(), loadUsers()]);
     } catch (error) {
+      setUserSaveError(error.message || "Unable to save the account. Please try again.");
       showToast(`Failed to save user: ${error.message}`, "error");
+    } finally {
+      setSavingUser(false);
+    }
+  }
+
+  // Expanding a violation's details is also how it gets marked seen — but
+  // only the first time: once status leaves "open" this guard stops it from
+  // re-firing on every subsequent expand/collapse of the same row.
+  async function handleExpandViolation(v) {
+    const willExpand = expandedViolation !== v.id;
+    setExpandedViolation(willExpand ? v.id : null);
+    if (!willExpand || v.status !== "open") return;
+    try {
+      const updated = await updateViolationStatus(v.id, "reviewed");
+      setViolationsList((prev) =>
+        prev.map((item) => (item.id === v.id ? updated : item)),
+      );
+    } catch (error) {
+      showToast(`Failed to mark violation as reviewed: ${error.message}`, "error");
+    }
+  }
+
+  // Archiving never deletes the row — it just flags it so it drops out of
+  // this list (the server enforces it's a decided/closed record first) while
+  // staying fully intact and catalogued on the Archive page.
+  // Tracked by id (not a single boolean) so archiving one row only spins
+  // that row's own button, not every Archive button on the page.
+  const [archivingIds, setArchivingIds] = useState(new Set());
+
+  function markArchiving(id, isArchiving) {
+    setArchivingIds((prev) => {
+      const next = new Set(prev);
+      if (isArchiving) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  async function handleArchiveApplication(app) {
+    markArchiving(app.id, true);
+    try {
+      await archiveRecord({
+        type: "application",
+        title: `${app.businessName} — ${app.stallName}`,
+        description: `Application by ${app.applicantName} for ${app.stallName}. Status: ${app.status}.`,
+        originalId: app.id,
+        originalData: app,
+        reason: app.adminRemarks || "",
+        canRestore: false,
+      });
+      showToast("Application archived.", "success");
+      await loadApplicationsTable();
+    } catch (error) {
+      showToast(`Failed to archive application: ${error.message}`, "error");
+    } finally {
+      markArchiving(app.id, false);
+    }
+  }
+
+  async function handleArchiveViolation(v) {
+    markArchiving(v.id, true);
+    try {
+      await archiveRecord({
+        type: "violation",
+        title: `${v.category} — ${v.stallName}`,
+        description: `Violation against ${v.vendorName} at ${v.stallName}. Status: ${v.status}.`,
+        originalId: v.id,
+        originalData: v,
+        reason: v.remarks || "",
+        canRestore: false,
+      });
+      showToast("Violation archived.", "success");
+      setViolationsList((prev) => prev.filter((item) => item.id !== v.id));
+    } catch (error) {
+      showToast(`Failed to archive violation: ${error.message}`, "error");
+      markArchiving(v.id, false);
+    }
+  }
+
+  async function handleArchiveCheckRequest(r) {
+    markArchiving(r.id, true);
+    try {
+      await archiveRecord({
+        type: "check_request",
+        title: `Inspection — ${r.stallName}`,
+        description: `Inspection at ${r.stallName}, requested by ${r.requestedByName}, completed by ${r.assignedToName ?? "—"}.`,
+        originalId: r.id,
+        originalData: r,
+        reason: r.completionSummary || "",
+        canRestore: false,
+      });
+      showToast("Inspection report archived.", "success");
+      setMapRequests((prev) => prev.filter((item) => item.id !== r.id));
+    } catch (error) {
+      showToast(`Failed to archive inspection report: ${error.message}`, "error");
+      markArchiving(r.id, false);
     }
   }
 
@@ -557,20 +780,11 @@ export function SuperAdminDashboard() {
     }
   }
 
-  async function handleAssignOfficer(violationId, officerId) {
-    const officer = users.find((u) => u.id === officerId);
-    if (!officer) return;
-    try {
-      await assignOfficer(violationId, officerId, officer.name);
-      const refreshed = await getViolations();
-      setViolationsList(refreshed);
-      setAllViolations(refreshed);
-      setAssigningViolation(null);
-      showToast(`Officer "${officer.name}" assigned to violation.`, "success");
-    } catch (error) {
-      showToast(`Failed to assign violation: ${error.message}`, "error");
-    }
-  }
+  useEffect(() => {
+    void getReceipts().then(setReceiptsList).catch(() => {
+      // The dedicated page reports load failures; elsewhere the badge may stay empty.
+    });
+  }, []);
 
   async function handleCreateRequest() {
     if (!selectedStallForRequest || !requestReason.trim()) {
@@ -586,11 +800,16 @@ export function SuperAdminDashboard() {
         requestedBy: session.userId,
         requestedByName: session.name,
         reason: requestReason,
+        category: requestViolationCategory || null,
+        violationId: requestViolationId,
       });
       await loadRequestData();
       setShowRequestModal(false);
       setSelectedStallForRequest(null);
       setRequestReason("");
+      setRequestStallLocked(false);
+      setRequestViolationCategory("");
+      setRequestViolationId(null);
       showToast("Check request created successfully.", "success");
     } catch (error) {
       showToast(`Failed to create request: ${error.message}`, "error");
@@ -646,6 +865,8 @@ export function SuperAdminDashboard() {
       map: "/super-admin/map",
       stalls: "/super-admin/stalls",
       applications: "/super-admin/applications",
+      receipts: "/super-admin/receipts",
+      renewals: "/super-admin/renewals",
       violations: "/super-admin/violations",
       "check-requests": "/super-admin/check-requests",
     };
@@ -671,6 +892,13 @@ export function SuperAdminDashboard() {
       badge: stats.pendingApps > 0 ? stats.pendingApps : undefined,
     },
     {
+      id: "receipts",
+      label: "Payment Receipts",
+      icon: ReceiptIcon,
+      badge: receiptsList.filter((receipt) => receipt.status === "pending").length || undefined,
+    },
+    { id: "renewals", label: "Contract Renewals", icon: Clock },
+    {
       id: "violations",
       label: "Reports & Requests",
       icon: AlertTriangle,
@@ -689,16 +917,20 @@ export function SuperAdminDashboard() {
       session={session}
       title="Super Admin"
       subtitle="System administration and user management"
+      navBadges={{
+        "/super-admin/receipts": receiptsList.filter((receipt) => receipt.status === "pending").length,
+      }}
       actions={
-        tab === "users" ? (
+        (
           <button
+            type="button"
             onClick={openCreate}
             className="flex items-center gap-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold px-3 py-2 rounded-lg transition-colors"
           >
             <UserPlus className="w-3.5 h-3.5" />
-            Add User
+            Create User Account
           </button>
-        ) : undefined
+        )
       }
     >
       {/* Tab bar */}
@@ -736,8 +968,34 @@ export function SuperAdminDashboard() {
       </div>
 
       <div className="p-6 space-y-6">
+        {tab === "receipts" && (
+          receiptsTabLoading ? (
+            <div className="bg-white rounded-2xl border border-gray-200 py-20 flex flex-col items-center gap-3">
+              <div className="w-8 h-8 border-2 border-gray-200 border-t-purple-600 rounded-full animate-spin" />
+              <p className="text-sm text-gray-400">Loading receipts…</p>
+            </div>
+          ) : (
+            <PaymentReceiptsPanel
+              receipts={receiptsList}
+              search={reportSearch}
+              onSearchChange={setReportSearch}
+              statusFilter={reportStatusFilter}
+              onStatusFilterChange={setReportStatusFilter}
+              onReview={handleReviewReceipt}
+              accent="purple"
+            />
+          )
+        )}
+        {tab === "renewals" && <ContractRenewalsPanel superAdmin />}
+
         {/* Overview */}
         {tab === "overview" && (
+          usersLoading || applicationsLoading || stallsLoading ? (
+            <div className="bg-white rounded-2xl border border-gray-200 py-20 flex flex-col items-center gap-3">
+              <div className="w-8 h-8 border-2 border-gray-200 border-t-purple-600 rounded-full animate-spin" />
+              <p className="text-sm text-gray-400">Loading overview…</p>
+            </div>
+          ) : (
           <>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               {[
@@ -925,6 +1183,7 @@ export function SuperAdminDashboard() {
               </div>
             </div>
           </>
+          )
         )}
 
         {/* Users tab */}
@@ -956,14 +1215,17 @@ export function SuperAdminDashboard() {
               </select>
             </div>
 
-            {/* Users table */}
+            {/* Users table — pending invitations are pinned at the top, page 1 only */}
             <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
               <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
                 <p className="text-xs text-gray-500">
                   {usersTotal} user{usersTotal !== 1 ? "s" : ""}
+                  {pendingInvitations.length > 0 && (
+                    <span className="text-amber-600"> · {pendingInvitations.length} pending invitation{pendingInvitations.length !== 1 ? "s" : ""}</span>
+                  )}
                 </p>
                 <button
-                  onClick={() => void loadUsersTable()}
+                  onClick={() => void Promise.all([loadUsersTable(), loadPendingInvitations()])}
                   className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
                 >
                   <RefreshCw className="w-3.5 h-3.5 text-gray-400" />
@@ -1022,7 +1284,73 @@ export function SuperAdminDashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {tableUsers.map((u) => (
+                    {usersPageNum === 1 && pendingInvitationsLoading && (
+                      <tr>
+                        <td colSpan={6} className="px-5 py-4 text-center bg-amber-50/40">
+                          <div className="w-5 h-5 border-2 border-amber-200 border-t-amber-500 rounded-full animate-spin mx-auto" />
+                        </td>
+                      </tr>
+                    )}
+                    {usersPageNum === 1 && !pendingInvitationsLoading && pendingInvitations.map((invite) => (
+                      <tr key={`pending-${invite.id}`} className="bg-amber-50/40 hover:bg-amber-50/70 transition-colors">
+                        <td className="px-5 py-3.5">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-7 h-7 bg-gradient-to-br from-amber-400 to-amber-300 rounded-lg flex items-center justify-center flex-shrink-0">
+                              <Mail className="w-3.5 h-3.5 text-white" />
+                            </div>
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="font-medium text-gray-900 truncate">{invite.name}</span>
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 flex-shrink-0">
+                                Pending
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3.5 text-gray-600">{invite.email}</td>
+                        <td className="px-5 py-3.5">
+                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${ROLE_COLORS[invite.role]}`}>
+                            {ROLE_LABELS[invite.role]}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3.5 text-gray-500">{invite.phone || "—"}</td>
+                        <td className="px-5 py-3.5 text-gray-500" title={`Expires ${formatDate(invite.expires_at)}`}>
+                          Invited {formatDate(invite.created_at)}
+                        </td>
+                        <td className="px-5 py-3.5">
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => void handleResendInvitation(invite.id)}
+                              disabled={pendingActionIds.has(invite.id)}
+                              className="p-1.5 rounded-lg hover:bg-purple-50 text-purple-600 transition-colors disabled:opacity-50"
+                              title="Resend confirmation email"
+                            >
+                              {pendingActionIds.has(invite.id) ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Send className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                            <button
+                              onClick={() => void handleCancelInvitation(invite.id)}
+                              disabled={pendingActionIds.has(invite.id)}
+                              className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition-colors disabled:opacity-50"
+                              title="Cancel invitation"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {tableUsersLoading && (
+                      <tr>
+                        <td colSpan={6} className="px-5 py-16 text-center">
+                          <div className="w-7 h-7 border-2 border-gray-200 border-t-purple-600 rounded-full animate-spin mx-auto mb-2" />
+                          <p className="text-sm text-gray-400">Loading users…</p>
+                        </td>
+                      </tr>
+                    )}
+                    {!tableUsersLoading && tableUsers.map((u) => (
                       <tr key={u.id} className="hover:bg-gray-50 transition-colors">
                         <td className="px-5 py-3.5">
                           <div className="flex items-center gap-2.5">
@@ -1068,7 +1396,7 @@ export function SuperAdminDashboard() {
                         </td>
                       </tr>
                     ))}
-                    {tableUsers.length === 0 && (
+                    {!tableUsersLoading && tableUsers.length === 0 && (
                       <tr>
                         <td colSpan={6} className="px-5 py-10 text-center text-sm text-gray-400">
                           No users match your search.
@@ -1170,7 +1498,15 @@ export function SuperAdminDashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {tableStalls.map((s) => (
+                    {tableStallsLoading && (
+                      <tr>
+                        <td colSpan={5} className="px-5 py-16 text-center">
+                          <div className="w-7 h-7 border-2 border-gray-200 border-t-purple-600 rounded-full animate-spin mx-auto mb-2" />
+                          <p className="text-sm text-gray-400">Loading stalls…</p>
+                        </td>
+                      </tr>
+                    )}
+                    {!tableStallsLoading && tableStalls.map((s) => (
                       <tr key={s.id} className="hover:bg-gray-50 transition-colors">
                         <td className="px-5 py-3">
                           <span className="font-semibold text-gray-900">{s.stall_name}</span>
@@ -1189,20 +1525,19 @@ export function SuperAdminDashboard() {
                               autoFocus
                             >
                               <option value="vacant">Vacant</option>
-                              <option value="occupied">Occupied</option>
                               <option value="unavailable">Unavailable</option>
                             </select>
                           ) : (
                             <span
                               className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                                s.status === "vacant"
+                                getStallDisplayStatus(s) === "vacant"
                                   ? "bg-green-100 text-green-700"
-                                  : s.status === "occupied"
-                                    ? "bg-red-100 text-red-700"
+                                  : getStallDisplayStatus(s) === "occupied"
+                                    ? "bg-gray-200 text-gray-800"
                                     : "bg-gray-100 text-gray-700"
                               }`}
                             >
-                              {s.status}
+                              {getStallDisplayStatus(s)}
                             </span>
                           )}
                         </td>
@@ -1274,7 +1609,7 @@ export function SuperAdminDashboard() {
                         </td>
                       </tr>
                     ))}
-                    {tableStalls.length === 0 && (
+                    {!tableStallsLoading && tableStalls.length === 0 && (
                       <tr>
                         <td colSpan={7} className="px-5 py-10 text-center text-sm text-gray-400">
                           No stalls found
@@ -1343,7 +1678,15 @@ export function SuperAdminDashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {tableApplications.map((app) => (
+                    {tableApplicationsLoading && (
+                      <tr>
+                        <td colSpan={5} className="px-5 py-16 text-center">
+                          <div className="w-7 h-7 border-2 border-gray-200 border-t-purple-600 rounded-full animate-spin mx-auto mb-2" />
+                          <p className="text-sm text-gray-400">Loading applications…</p>
+                        </td>
+                      </tr>
+                    )}
+                    {!tableApplicationsLoading && tableApplications.map((app) => (
                       <tr
                         key={app.id}
                         onClick={() => setSelectedApplication(app)}
@@ -1372,7 +1715,7 @@ export function SuperAdminDashboard() {
                         <td className="px-5 py-3 text-gray-500">{formatDate(app.dateApplied)}</td>
                       </tr>
                     ))}
-                    {tableApplications.length === 0 && (
+                    {!tableApplicationsLoading && tableApplications.length === 0 && (
                       <tr>
                         <td colSpan={5} className="px-5 py-10 text-center text-sm text-gray-400">
                           No applications found
@@ -1603,6 +1946,25 @@ export function SuperAdminDashboard() {
                     </button>
                   </div>
                 )}
+                {selectedApplication.status === "rejected" && (
+                  <div className="p-4 border-t border-gray-100 flex-shrink-0">
+                    <button
+                      onClick={async () => {
+                        await handleArchiveApplication(selectedApplication);
+                        setSelectedApplication(null);
+                      }}
+                      disabled={archivingIds.has(selectedApplication.id)}
+                      className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-60"
+                    >
+                      {archivingIds.has(selectedApplication.id) ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Archive className="w-4 h-4" />
+                      )}
+                      {archivingIds.has(selectedApplication.id) ? "Archiving…" : "Archive"}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1663,21 +2025,6 @@ export function SuperAdminDashboard() {
                   </span>
                 )}
               </button>
-              <button
-                onClick={() => {
-                  setReportSubTab("receipts");
-                  setReportSearch("");
-                  setReportStatusFilter("all");
-                }}
-                className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all relative ${reportSubTab === "receipts" ? "bg-white text-purple-700 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
-              >
-                Payment Receipts
-                {receiptsList.filter((r) => r.status === "pending").length > 0 && (
-                  <span className="ml-1 inline-flex items-center justify-center w-4 h-4 bg-red-500 text-white rounded-full text-[9px] font-bold">
-                    {receiptsList.filter((r) => r.status === "pending").length}
-                  </span>
-                )}
-              </button>
             </div>
 
             {/* Search + Filter bar */}
@@ -1700,6 +2047,7 @@ export function SuperAdminDashboard() {
                 >
                   <option value="all">All Status</option>
                   <option value="open">Open</option>
+                  <option value="reviewed">Reviewing</option>
                   <option value="resolved">Resolved</option>
                   <option value="dismissed">Dismissed</option>
                 </select>
@@ -1720,7 +2068,12 @@ export function SuperAdminDashboard() {
                     v.vendorName.toLowerCase().includes(reportSearch.toLowerCase());
                   return matchStatus && matchSearch;
                 });
-                return filtered.length === 0 ? (
+                return reportsLoading ? (
+                  <div className="bg-white rounded-2xl border border-gray-200 p-10 flex flex-col items-center gap-3">
+                    <div className="w-7 h-7 border-2 border-gray-200 border-t-purple-600 rounded-full animate-spin" />
+                    <p className="text-sm text-gray-400">Loading violation reports…</p>
+                  </div>
+                ) : filtered.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center">
                     <AlertTriangle className="w-10 h-10 text-gray-200 mx-auto mb-3" />
                     <p className="text-sm text-gray-400">No violation reports found</p>
@@ -1731,6 +2084,7 @@ export function SuperAdminDashboard() {
                       const isExpanded = expandedViolation === v.id;
                       const statusCfg = {
                         open: { label: "Open", cls: "bg-red-100 text-red-700" },
+                        reviewed: { label: "Reviewing", cls: "bg-amber-100 text-amber-700" },
                         resolved: { label: "Resolved", cls: "bg-green-100 text-green-700" },
                         dismissed: { label: "Dismissed", cls: "bg-gray-100 text-gray-600" },
                       }[v.status];
@@ -1741,10 +2095,10 @@ export function SuperAdminDashboard() {
                         >
                           <div
                             className="flex items-start gap-4 px-5 py-4 cursor-pointer hover:bg-gray-50 transition-colors"
-                            onClick={() => setExpandedViolation(isExpanded ? null : v.id)}
+                            onClick={() => handleExpandViolation(v)}
                           >
                             <div
-                              className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${v.status === "open" ? "bg-red-500" : v.status === "resolved" ? "bg-green-500" : "bg-gray-400"}`}
+                              className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${v.status === "open" ? "bg-red-500" : v.status === "reviewed" ? "bg-amber-500" : v.status === "resolved" ? "bg-green-500" : "bg-gray-400"}`}
                             />
                             <div className="flex-1 min-w-0">
                               <div className="flex items-start justify-between gap-3">
@@ -1782,13 +2136,34 @@ export function SuperAdminDashboard() {
                               <p className="text-xs text-gray-600 mt-1.5 truncate">
                                 {v.description}
                               </p>
+                              {(v.status === "resolved" || v.status === "dismissed") && (
+                                <div className="mt-2 flex justify-end">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleArchiveViolation(v);
+                                    }}
+                                    disabled={archivingIds.has(v.id)}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-semibold rounded-lg transition-colors disabled:opacity-60"
+                                    title="Archive"
+                                  >
+                                    {archivingIds.has(v.id) ? (
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    ) : (
+                                      <Archive className="w-3.5 h-3.5" />
+                                    )}
+                                    {archivingIds.has(v.id) ? "Archiving…" : "Archive"}
+                                  </button>
+                                </div>
+                              )}
                             </div>
                             <span className="text-gray-400 text-xs flex-shrink-0">
                               {isExpanded ? "▲" : "▼"}
                             </span>
                           </div>
                           {isExpanded && (
-                            <div className="border-t border-gray-100 bg-gray-50 px-5 py-4 grid grid-cols-1 md:grid-cols-2 gap-5">
+                            <div className="border-t border-gray-100 bg-gray-50">
+                            <div className="px-5 py-4 grid grid-cols-1 md:grid-cols-2 gap-5">
                               <div className="space-y-3">
                                 <div>
                                   <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
@@ -1836,6 +2211,24 @@ export function SuperAdminDashboard() {
                                 )}
                               </div>
                             </div>
+                            {v.status === "reviewed" && (
+                              <div className="px-5 pb-4 flex justify-end gap-2">
+                                <button
+                                  onClick={() => {
+                                    setSelectedStallForRequest(v.stallId);
+                                    setRequestViolationCategory(v.category);
+                                    setRequestViolationId(v.id);
+                                    setRequestStallLocked(true);
+                                    setShowRequestModal(true);
+                                  }}
+                                  className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold rounded-lg transition-colors"
+                                >
+                                  <Send className="w-3.5 h-3.5" />
+                                  Send Req
+                                </button>
+                              </div>
+                            )}
+                            </div>
                           )}
                         </div>
                       );
@@ -1856,7 +2249,12 @@ export function SuperAdminDashboard() {
                     r.reason.toLowerCase().includes(reportSearch.toLowerCase());
                   return hasReport && matchSearch;
                 });
-                return completedReqs.length === 0 ? (
+                return reportsLoading ? (
+                  <div className="bg-white rounded-2xl border border-gray-200 p-10 flex flex-col items-center gap-3">
+                    <div className="w-7 h-7 border-2 border-gray-200 border-t-purple-600 rounded-full animate-spin" />
+                    <p className="text-sm text-gray-400">Loading inspection reports…</p>
+                  </div>
+                ) : completedReqs.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center">
                     <FileText className="w-10 h-10 text-gray-200 mx-auto mb-3" />
                     <p className="text-sm text-gray-400">No completed inspection reports yet</p>
@@ -1924,6 +2322,24 @@ export function SuperAdminDashboard() {
                               <p className="text-xs text-gray-500 mt-1 truncate">
                                 <span className="font-medium">Reason:</span> {r.reason}
                               </p>
+                              <div className="mt-2 flex justify-end">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleArchiveCheckRequest(r);
+                                  }}
+                                  disabled={archivingIds.has(r.id)}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-semibold rounded-lg transition-colors disabled:opacity-60"
+                                  title="Archive"
+                                >
+                                  {archivingIds.has(r.id) ? (
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  ) : (
+                                    <Archive className="w-3.5 h-3.5" />
+                                  )}
+                                  {archivingIds.has(r.id) ? "Archiving…" : "Archive"}
+                                </button>
+                              </div>
                             </div>
                             <span className="text-gray-400 text-xs flex-shrink-0">
                               {isExpanded ? "▲" : "▼"}
@@ -1992,7 +2408,12 @@ export function SuperAdminDashboard() {
             {/* ── Termination Requests ── */}
             {reportSubTab === "terminations" && (
               <div className="space-y-3">
-                {terminationsList.length === 0 ? (
+                {reportsLoading ? (
+                  <div className="bg-white rounded-2xl border border-gray-200 p-10 flex flex-col items-center gap-3">
+                    <div className="w-7 h-7 border-2 border-gray-200 border-t-purple-600 rounded-full animate-spin" />
+                    <p className="text-sm text-gray-400">Loading termination requests…</p>
+                  </div>
+                ) : terminationsList.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center">
                     <AlertTriangle className="w-10 h-10 text-gray-200 mx-auto mb-3" />
                     <p className="text-sm text-gray-400">No termination requests submitted yet</p>
@@ -2053,9 +2474,22 @@ export function SuperAdminDashboard() {
                                 </span>
                               </div>
                             </div>
-                            {t.reason && (
+                            {t.type === "contract" && t.reason && (
                               <p className="text-xs text-gray-600 mt-2 bg-gray-50 rounded-lg px-3 py-2 leading-relaxed">
                                 <span className="font-medium">Reason:</span> {t.reason}
+                              </p>
+                            )}
+                            {t.type === "account" && t.activeStalls?.length > 0 && (
+                              <p className="text-xs text-amber-700 mt-2 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 leading-relaxed">
+                                <span className="font-medium">
+                                  Still holds {t.activeStalls.length > 1 ? `${t.activeStalls.length} stalls` : "a stall"}:
+                                </span>{" "}
+                                {t.activeStalls.map((s, i) => (
+                                  <span key={s.stallId}>
+                                    {i > 0 && ", "}
+                                    {s.stallName} (due {formatDate(s.contractEnd)})
+                                  </span>
+                                ))}
                               </p>
                             )}
                             {isPending && (
@@ -2107,7 +2541,12 @@ export function SuperAdminDashboard() {
                     r.vendorName.toLowerCase().includes(reportSearch.toLowerCase()) ||
                     r.submittedByName.toLowerCase().includes(reportSearch.toLowerCase()),
                 );
-                return filtered.length === 0 ? (
+                return reportsLoading ? (
+                  <div className="bg-white rounded-2xl border border-gray-200 p-10 flex flex-col items-center gap-3">
+                    <div className="w-7 h-7 border-2 border-gray-200 border-t-purple-600 rounded-full animate-spin" />
+                    <p className="text-sm text-gray-400">Loading receipts…</p>
+                  </div>
+                ) : filtered.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center">
                     <ReceiptIcon className="w-10 h-10 text-gray-200 mx-auto mb-3" />
                     <p className="text-sm text-gray-400">No payment receipts submitted yet</p>
@@ -2167,15 +2606,15 @@ export function SuperAdminDashboard() {
                               </p>
                             )}
                             {r.fileUrl && (
-                              <a
-                                href={r.fileUrl}
-                                target="_blank"
-                                rel="noreferrer"
+                              <FilePreviewLink
+                                url={r.fileUrl}
+                                name={r.fileName}
+                                mimeType={r.mimeType}
                                 className="inline-flex items-center gap-1 text-xs text-purple-700 font-medium mt-2 hover:underline"
                               >
                                 <FileText className="w-3.5 h-3.5" />
                                 View receipt file
-                              </a>
+                              </FilePreviewLink>
                             )}
                             {r.status === "pending" && (
                               <div className="flex gap-2 mt-3">
@@ -2214,7 +2653,12 @@ export function SuperAdminDashboard() {
                 </p>
               </div>
               <button
-                onClick={() => setShowRequestModal(true)}
+                onClick={() => {
+                  setRequestStallLocked(false);
+                  setRequestViolationCategory("");
+                  setRequestViolationId(null);
+                  setShowRequestModal(true);
+                }}
                 className="flex items-center gap-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold px-3 py-2 rounded-lg transition-colors"
               >
                 <CheckCircle className="w-3.5 h-3.5" />
@@ -2222,7 +2666,12 @@ export function SuperAdminDashboard() {
               </button>
             </div>
 
-            {checkRequests.length === 0 ? (
+            {requestDataLoading ? (
+              <div className="bg-white rounded-2xl border border-gray-200 p-8 flex flex-col items-center gap-3">
+                <div className="w-7 h-7 border-2 border-gray-200 border-t-purple-600 rounded-full animate-spin" />
+                <p className="text-sm text-gray-400">Loading requests…</p>
+              </div>
+            ) : checkRequests.length === 0 ? (
               <div className="bg-white rounded-2xl border border-gray-200 p-8 text-center">
                 <CheckCircle className="w-10 h-10 text-gray-300 mx-auto mb-3" />
                 <p className="text-sm text-gray-500">No requests sent yet</p>
@@ -2477,6 +2926,9 @@ export function SuperAdminDashboard() {
                   setShowRequestModal(false);
                   setSelectedStallForRequest(null);
                   setRequestReason("");
+                  setRequestStallLocked(false);
+                  setRequestViolationCategory("");
+                  setRequestViolationId(null);
                 }}
                 className="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center"
               >
@@ -2484,46 +2936,65 @@ export function SuperAdminDashboard() {
               </button>
             </div>
             <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1.5">
-                  Select Stall
-                </label>
-                <div className="border border-gray-200 rounded-xl max-h-48 overflow-y-auto">
-                  {stalls.map((s) => (
-                    <button
-                      key={s.id}
-                      onClick={() => setSelectedStallForRequest(s.id)}
-                      className={`w-full px-4 py-2.5 text-left text-sm hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-0 ${
-                        selectedStallForRequest === s.id ? "bg-purple-50" : ""
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium text-gray-900">{s.name}</span>
-                        <span
-                          className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
-                            s.status === "vacant"
-                              ? "bg-green-100 text-green-700"
-                              : s.status === "occupied"
-                                ? "bg-blue-100 text-blue-700"
-                                : "bg-gray-100 text-gray-700"
-                          }`}
-                        >
-                          {s.status}
-                        </span>
-                      </div>
-                    </button>
-                  ))}
+              {requestStallLocked ? (
+                <>
+                  <div className="px-3 py-2.5 bg-purple-50 border border-purple-100 rounded-xl">
+                    <p className="text-xs text-gray-500">Stall</p>
+                    <p className="text-sm font-medium text-gray-900">
+                      {stalls.find((s) => s.id === selectedStallForRequest)?.stall_name}
+                    </p>
+                  </div>
+                  {requestViolationCategory && (
+                    <div className="px-3 py-2.5 bg-purple-50 border border-purple-100 rounded-xl">
+                      <p className="text-xs text-gray-500">Category</p>
+                      <p className="text-sm font-medium text-gray-900">
+                        {requestViolationCategory}
+                      </p>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                    Select Stall
+                  </label>
+                  <div className="border border-gray-200 rounded-xl max-h-48 overflow-y-auto">
+                    {stalls.map((s) => (
+                      <button
+                        key={s.id}
+                        onClick={() => setSelectedStallForRequest(s.id)}
+                        className={`w-full px-4 py-2.5 text-left text-sm hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-0 ${
+                          selectedStallForRequest === s.id ? "bg-purple-50" : ""
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium text-gray-900">{s.stall_name}</span>
+                          <span
+                            className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
+                              getStallDisplayStatus(s) === "vacant"
+                                ? "bg-green-100 text-green-700"
+                                : getStallDisplayStatus(s) === "occupied"
+                                  ? "bg-gray-200 text-gray-800"
+                                  : "bg-gray-100 text-gray-700"
+                            }`}
+                          >
+                            {getStallDisplayStatus(s)}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1.5">
-                  Reason for Check
+                  Message
                 </label>
                 <textarea
                   value={requestReason}
                   onChange={(e) => setRequestReason(e.target.value)}
-                  placeholder="Describe why this stall needs to be checked..."
+                  placeholder="Input Message here"
                   rows={4}
                   className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none"
                 />
@@ -2535,6 +3006,9 @@ export function SuperAdminDashboard() {
                   setShowRequestModal(false);
                   setSelectedStallForRequest(null);
                   setRequestReason("");
+                  setRequestStallLocked(false);
+                  setRequestViolationCategory("");
+                  setRequestViolationId(null);
                 }}
                 className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
               >
@@ -2558,16 +3032,20 @@ export function SuperAdminDashboard() {
           <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden">
             <div className="bg-gradient-to-r from-purple-600 to-purple-500 px-6 py-4 flex items-center justify-between">
               <h2 className="text-white font-semibold">
-                {editUser ? "Edit User" : "Add New User"}
+                {editUser ? "Edit User" : "Create User Account"}
               </h2>
               <button
                 onClick={() => setShowForm(false)}
+                disabled={savingUser}
+                aria-label="Close user form"
                 className="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center"
               >
                 <X className="w-4 h-4 text-white" />
               </button>
             </div>
-            <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+            <fieldset disabled={savingUser} className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+              {!editUser && <p className="text-xs leading-5 text-gray-500">Create an account with a role and password — they'll get a confirmation email and won't be able to sign in until they click it.</p>}
+              {userSaveError && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{userSaveError}</p>}
               {[
                 { field: "name", label: "Full Name", placeholder: "Juan dela Cruz", type: "text" },
                 {
@@ -2591,17 +3069,30 @@ export function SuperAdminDashboard() {
                 },
               ].map(({ field, label, placeholder, type }) => (
                 <div key={field}>
-                  <label className="block text-xs font-medium text-gray-700 mb-1.5">{label}</label>
+                  <label htmlFor={`user-${field}`} className="block text-xs font-medium text-gray-700 mb-1.5">{label}</label>
                   <input
+                    id={`user-${field}`}
                     type={type}
                     value={form[field]}
-                    onChange={(e) => setForm((prev) => ({ ...prev, [field]: e.target.value }))}
+                    onChange={(e) => {
+                      // Same 11-digit rule as the vendor-facing registration
+                      // forms (web Register.jsx / mobile RegisterScreen.jsx).
+                      const value =
+                        field === "phone" ? e.target.value.replace(/[^\d]/g, "").slice(0, 11) : e.target.value;
+                      setForm((prev) => ({ ...prev, [field]: value }));
+                    }}
                     placeholder={placeholder}
                     disabled={field === "email" && !!editUser}
+                    maxLength={field === "phone" ? 11 : undefined}
                     className={`w-full px-3 py-2.5 bg-gray-50 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 ${
                       formErrors[field] ? "border-red-300" : "border-gray-200"
                     } ${field === "email" && editUser ? "opacity-60 cursor-not-allowed" : ""}`}
                   />
+                  {field === "phone" && (
+                    <p className={`text-[11px] mt-1 text-right ${form.phone.length === 11 ? "text-teal-500" : "text-gray-400"}`}>
+                      {form.phone.length}/11
+                    </p>
+                  )}
                   {formErrors[field] && (
                     <p className="text-red-500 text-xs mt-1">{formErrors[field]}</p>
                   )}
@@ -2651,20 +3142,23 @@ export function SuperAdminDashboard() {
                   <p className="text-red-500 text-xs mt-1">{formErrors.password}</p>
                 )}
               </div>
-            </div>
+            </fieldset>
             <div className="px-6 py-4 border-t border-gray-100 flex gap-3">
               <button
                 onClick={() => setShowForm(false)}
+                disabled={savingUser}
                 className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSave}
-                className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2"
+                disabled={savingUser}
+                aria-busy={savingUser}
+                className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2"
               >
                 <Check className="w-4 h-4" />
-                {editUser ? "Save Changes" : "Create User"}
+                {savingUser ? "Saving…" : editUser ? "Save Changes" : "Create User"}
               </button>
             </div>
           </div>
@@ -2691,7 +3185,9 @@ export function SuperAdminDashboard() {
             </h3>
             <p className="text-sm text-gray-500 text-center mb-6">
               {terminationActionConfirm.action === "approved"
-                ? `This will approve the termination request from ${terminationActionConfirm.name}. This action cannot be undone.`
+                ? terminationActionConfirm.type === "account"
+                  ? `This will archive ${terminationActionConfirm.name}'s account and close out their stall applications.`
+                  : `This will approve the termination request from ${terminationActionConfirm.name}. This action cannot be undone.`
                 : `The termination request from ${terminationActionConfirm.name} will be rejected.`}
             </p>
             <div className="flex gap-3">
@@ -2708,6 +3204,27 @@ export function SuperAdminDashboard() {
                 {terminationActionConfirm.action === "approved" ? "Yes, Approve" : "Yes, Reject"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Invitation sent modal */}
+      {invitationSentEmail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6">
+            <div className="w-12 h-12 bg-purple-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <Mail className="w-6 h-6 text-purple-600" />
+            </div>
+            <h3 className="text-base font-semibold text-gray-900 text-center mb-1">Confirmation Email Sent</h3>
+            <p className="text-sm text-gray-500 text-center mb-6">
+              A confirmation link was sent to <span className="font-medium text-gray-700">{invitationSentEmail}</span>. The account will be created once they confirm it.
+            </p>
+            <button
+              onClick={() => setInvitationSentEmail(null)}
+              className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-medium transition-colors"
+            >
+              Close
+            </button>
           </div>
         </div>
       )}

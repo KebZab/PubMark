@@ -22,6 +22,30 @@ and every domain endpoint under `/api` (stalls, applications, violations, check
 requests, termination requests, announcements, perimeters, payment receipts) —
 all backed by Postgres via the `pg` package.
 
+## Contract renewals (one-time setup)
+
+Run `server/migrations/2026-09-06-contract-renewals.sql` once in every
+Supabase project. It adds renewal deadline and termination fields to
+`applications`, the `contract_renewal_requests` queue, and the audited
+`renewal_deadline_extensions` table.
+
+Also run `server/migrations/2026-09-07-map-facilities.sql` once in every
+Supabase project before using entrance, comfort-room, and stair map overlays.
+Existing installations must then run `2026-09-07-map-facilities-office.sql`
+to add offices and normalize facility labels.
+
+The default renewal deadline is seven days after `contract_end`. Vendors may
+request renewal until that deadline, and a pending request prevents automatic
+termination. Admin and Super Admin may approve or reject requests. Only Super
+Admin may extend the renewal deadline, and an extension reason is required.
+Extending this deadline does not extend the contract itself.
+
+Renewal routes:
+
+- `GET/POST /api/contract-renewals`
+- `PATCH /api/contract-renewals/:id`
+- `PATCH /api/applications/:id/renewal-deadline`
+
 ## Payment receipts (one-time setup)
 
 The `/api/receipts` routes upload the actual receipt file to Supabase Storage

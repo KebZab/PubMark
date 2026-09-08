@@ -2,13 +2,16 @@ import { useState, useEffect, useCallback } from "react";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { X, AlertTriangle, Camera, Upload, Paperclip, Store, User } from "lucide-react";
+import { X, AlertTriangle, Upload, Paperclip, Store, User, Loader2 } from "lucide-react";
 import { FloorSwitcher } from "./FloorSwitcher";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
 import { saveViolation } from "./violationsStore";
 import { showToast } from "./Toast";
 import { ImageViewerModal } from "./ImageViewerModal";
+import { useMapFacilities } from "../hooks/useMapFacilities";
+import { MapFacilitiesLayer, MapFacilitiesLegend, stallFloaterHtml } from "./MapFacilitiesLayer";
+import { registerMapFloater } from "./mapFloaterDeclutter";
 import {
   describeFileProblem,
   readFileForUpload,
@@ -46,6 +49,7 @@ function StallMarkers({ stalls, applications, currentFloor, selectedStallId, onS
 
   useEffect(() => {
     const layersMap = new Map();
+    const unregister = [];
 
     function stallColor(stallId) {
       const app = getActiveApp(stallId, applications);
@@ -85,15 +89,17 @@ function StallMarkers({ stalls, applications, currentFloor, selectedStallId, onS
         const path = l;
         path._stallId = stall.id;
         path._stallName = stall.stall_name;
-        path.bindTooltip(stallTooltip(stall), { direction: "top", opacity: 0.95 });
+        path.bindTooltip(stallFloaterHtml(stall.stall_name, color), { permanent: true, direction: "center", className: "vendor-stall-floater", opacity: 0.95 });
         path.on("click", () => onSelectStall(stall.id));
         path.addTo(map);
+        unregister.push(registerMapFloater(map, path, { selected: isSelected }));
         paths.push(path);
       });
       layersMap.set(stall.id, paths);
     });
 
     return () => {
+      unregister.forEach((remove) => remove());
       layersMap.forEach((paths) => {
         paths.forEach((p) => p.remove());
       });
@@ -105,9 +111,10 @@ function StallMarkers({ stalls, applications, currentFloor, selectedStallId, onS
 }
 
 export function OfficerMapView({ officerId, officerName }) {
-  const { stalls } = useStalls();
+  const { stalls, loading: stallsLoading } = useStalls();
   const { applications } = useApplications();
   const [currentFloor, setCurrentFloor] = useState("1");
+  const { facilities } = useMapFacilities(currentFloor);
   const [selectedStallId, setSelectedStallId] = useState(null);
   const [viewer, setViewer] = useState(null);
   const [showReportModal, setShowReportModal] = useState(false);
@@ -199,6 +206,15 @@ export function OfficerMapView({ officerId, officerName }) {
         .leaflet-top, .leaflet-bottom { z-index: 1000; }
       `}</style>
 
+      {stallsLoading && (
+        <div className="absolute inset-0 z-[1100] flex items-center justify-center rounded-2xl bg-white/70 backdrop-blur-[1px]">
+          <div className="flex flex-col items-center gap-3">
+            <Loader2 className="w-7 h-7 text-amber-600 animate-spin" />
+            <p className="text-sm font-medium text-gray-600">Loading stalls…</p>
+          </div>
+        </div>
+      )}
+
       <MapContainer
         center={[10.6054, 123.0413]}
         zoom={18}
@@ -220,7 +236,9 @@ export function OfficerMapView({ officerId, officerName }) {
           selectedStallId={selectedStallId}
           onSelectStall={handleSelectStall}
         />
+        <MapFacilitiesLayer facilities={facilities} />
       </MapContainer>
+      <MapFacilitiesLegend className="absolute bottom-4 left-4 z-[900] space-y-1 rounded-xl border bg-white/95 p-3 shadow-lg" />
 
       {/* Floor switcher */}
       <div className="absolute top-4 left-4 z-[1001]">

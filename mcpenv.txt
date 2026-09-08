@@ -11,11 +11,32 @@ JWT_SECRET=use-a-new-long-random-secret
 # MYSQL_DATABASE=pubmark
 # MYSQL_USER=root
 # MYSQL_PASSWORD=Publicmarket123
+# MYSQL_PASSWORD=Publicmarket123
 
 # Supabase Storage (server-side only — the service role key must NEVER reach
 # the browser). Both are in the Supabase dashboard under Settings -> API.
 SUPABASE_URL=https://mkdkcrjtndqguambmduh.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1rZGtjcmp0bmRxZ3VhbWJtZHVoIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4Njk2Mjc1MiwiZXhwIjoyMTAyNTM4NzUyfQ.cmxW_q95Q7q0QXrgYl-sMvPrTnInywE9A5aVN0y56eo
+
+# Gmail SMTP for outgoing account-confirmation emails (super-admin-created
+# accounts). Leave blank in local dev — the confirmation link is printed to
+# the server console instead of emailed. To send real email: enable 2FA on
+# the sending Gmail account and generate an App Password for GMAIL_APP_PASSWORD.
+# Unlike a free-tier transactional email API, this can send to ANY recipient
+# immediately — no domain verification needed.
+GMAIL_USER=pubmark214@gmail.com
+GMAIL_APP_PASSWORD=oikijxzuarvegiev
+# Base URL used to build the confirmation link in the email. Defaults to
+# http://localhost:<PORT> when unset. Currently a temporary ngrok tunnel —
+# this URL changes every time ngrok restarts, so update it here whenever
+# that happens.
+API_PUBLIC_URL=https://delay-hammock-unaired.ngrok-free.dev
+
+
+
+
+
+
 
 
 

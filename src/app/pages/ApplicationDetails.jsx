@@ -19,11 +19,10 @@ import {
   Upload,
   Loader,
   Receipt as ReceiptIcon,
+  FileX,
 } from "lucide-react";
 import { useApplications } from "../hooks/useApplications";
 import { deleteApplication, updateApplicationPermit } from "../services/applicationsApi";
-import { findUserByEmail } from "../services/api";
-import { getStalls } from "../services/stallsApi";
 import { formatFileSize } from "../components/applicationsStorage";
 import { getSession } from "../components/authStorage";
 import { getTransfersByFromUserId, createTransferRequest } from "../services/transfersApi";
@@ -34,9 +33,12 @@ import {
   formatPermitDeadline,
   getApplicationDisplayStatus,
   getContractEndStatus,
+  getRenewalDeadline,
   parsePermitDeadlineMeta,
 } from "../components/permitDeadline";
 import { getReceipts, submitReceipt } from "../services/receiptsApi";
+import { getContractRenewals, requestContractRenewal } from "../services/contractRenewalsApi";
+import { saveTerminationRequest } from "../components/terminationRequestsStore";
 
 const STATUS_CONFIG = {
   pending: {
@@ -108,6 +110,9 @@ export function ApplicationDetails() {
   const [uploading, setUploading] = useState(false);
 
   const [showTransferModal, setShowTransferModal] = useState(false);
+  const [showContractActionModal, setShowContractActionModal] = useState(false);
+  const [showTerminationModal, setShowTerminationModal] = useState(false);
+  const [terminationReason, setTerminationReason] = useState("");
   const [transferEmail, setTransferEmail] = useState("");
   const [transferError, setTransferError] = useState("");
 
@@ -118,6 +123,8 @@ export function ApplicationDetails() {
   const [receiptDate, setReceiptDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [receiptNotes, setReceiptNotes] = useState("");
   const [submittingReceipt, setSubmittingReceipt] = useState(false);
+  const [renewal, setRenewal] = useState(null);
+  const [requestingRenewal, setRequestingRenewal] = useState(false);
 
   useEffect(() => {
     if (!app) return;
@@ -127,6 +134,21 @@ export function ApplicationDetails() {
         /* history is a nice-to-have, ignore failures here */
       });
   }, [app?.stallId]);
+
+  useEffect(() => {
+    if (!app) return;
+    getContractRenewals().then((items) => setRenewal(items.find((item) => item.applicationId === app.id) || null)).catch(() => {});
+  }, [app?.id]);
+
+  async function handleRequestRenewal() {
+    setRequestingRenewal(true);
+    try {
+      const saved = await requestContractRenewal(app.id, app.contractTermMonths);
+      setRenewal(saved);
+      showToast("Renewal request submitted.", "success");
+    } catch (error) { showToast(error.message, "error"); }
+    finally { setRequestingRenewal(false); }
+  }
 
   async function handleSubmitReceipt() {
     if (!app || !receiptFile) return;
@@ -200,6 +222,26 @@ export function ApplicationDetails() {
       showToast(`Transfer offer sent to ${transfer.toUserName}!`, "success");
     } catch (e) {
       setTransferError(`Failed to initiate transfer: ${e.message}`);
+    }
+  }
+
+  async function handleTerminationSubmit() {
+    if (!session || !app) return;
+    try {
+      await saveTerminationRequest({
+        type: "contract",
+        vendorId: session.userId,
+        vendorName: session.name,
+        vendorEmail: session.email,
+        stallId: app.stallId,
+        stallName: app.stallName,
+        reason: terminationReason.trim() || "No reason provided",
+      });
+      setShowTerminationModal(false);
+      setTerminationReason("");
+      showToast("Contract termination request submitted.", "success");
+    } catch (error) {
+      showToast(`Failed to submit termination request: ${error.message}`, "error");
     }
   }
 
@@ -359,9 +401,18 @@ export function ApplicationDetails() {
                     className={`text-xs mt-1 leading-snug ${isUrgent ? "text-red-700" : "text-amber-700"}`}
                   >
                     {contractStatus.urgency === "expired"
-                      ? `Your contract ended ${new Date(app.contractEnd).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}. Contact the admin to renew.`
+                      ? `Your contract ended ${new Date(app.contractEnd).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}. Request renewal by ${getRenewalDeadline(app).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}.`
                       : `Your contract ends in ${contractStatus.daysRemaining} day${contractStatus.daysRemaining === 1 ? "" : "s"}, on ${new Date(app.contractEnd).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}.`}
                   </p>
+                  {renewal?.status === "pending" ? (
+                    <p className="mt-3 text-xs font-semibold text-blue-700">Renewal pending admin review.</p>
+                  ) : renewal?.status === "rejected" ? (
+                    <p className="mt-3 text-xs font-semibold text-red-700">Renewal rejected{renewal.remarks ? `: ${renewal.remarks}` : "."}</p>
+                  ) : (
+                    <button onClick={handleRequestRenewal} disabled={requestingRenewal} className="mt-3 rounded-lg bg-[#0d9488] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">
+                      {requestingRenewal ? "Submitting…" : `Request ${app.contractTermMonths}-month renewal`}
+                    </button>
+                  )}
                 </div>
               );
             })()}
@@ -634,7 +685,7 @@ export function ApplicationDetails() {
                   <div className="flex-1 text-left">
                     <p className="text-sm font-semibold text-gray-700">Submit Payment Receipt</p>
                     <p className="text-xs text-gray-400 mt-0.5">
-                      Upload proof that you paid the treasurer
+                      Upload the payment receipt issued by the treasurer
                     </p>
                   </div>
                   <ChevronRight className="w-4 h-4 flex-shrink-0 text-gray-300" />
@@ -683,31 +734,19 @@ export function ApplicationDetails() {
             )}
           </div>
 
-          {/* Transfer Ownership — only for approved apps */}
-          {app.status === "approved" &&
-            (hasPendingTransfer ? (
-              <div className="w-full flex items-center gap-3 bg-purple-50 border border-purple-200 rounded-2xl p-4">
-                <div className="w-9 h-9 bg-purple-100 rounded-xl flex items-center justify-center flex-shrink-0">
-                  <ArrowRightLeft className="w-4 h-4 text-purple-600" />
-                </div>
-                <p className="flex-1 text-sm font-medium text-purple-700 text-left">
-                  Transfer offer sent — awaiting response
-                </p>
+          {/* Contract actions are intentionally available only inside stall details. */}
+          {app.status === "approved" && (
+            <button
+              onClick={() => setShowContractActionModal(true)}
+              className="w-full flex items-center gap-3 bg-white border border-red-200 rounded-2xl p-4 shadow-sm hover:shadow-md hover:border-red-300 transition-all"
+            >
+              <div className="w-9 h-9 bg-red-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                <FileX className="w-4 h-4 text-red-600" />
               </div>
-            ) : (
-              <button
-                onClick={() => setShowTransferModal(true)}
-                className="w-full flex items-center gap-3 bg-white border border-purple-200 rounded-2xl p-4 shadow-sm hover:shadow-md hover:border-purple-300 transition-all"
-              >
-                <div className="w-9 h-9 bg-purple-50 rounded-xl flex items-center justify-center flex-shrink-0">
-                  <ArrowRightLeft className="w-4 h-4 text-purple-600" />
-                </div>
-                <p className="flex-1 text-sm font-medium text-gray-800 text-left">
-                  Transfer Ownership
-                </p>
-                <ChevronRight className="w-4 h-4 text-gray-400" />
-              </button>
-            ))}
+              <p className="flex-1 text-sm font-medium text-gray-800 text-left">Termination</p>
+              <ChevronRight className="w-4 h-4 text-gray-400" />
+            </button>
+          )}
 
           {/* Back to dashboard row */}
           <button
@@ -733,6 +772,63 @@ export function ApplicationDetails() {
           )}
         </div>
       </div>
+
+      {showContractActionModal && (
+        <div className="absolute inset-0 z-[2000] flex items-center justify-center bg-black/50 backdrop-blur-sm px-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+            <div className="bg-gradient-to-r from-slate-700 to-slate-800 px-5 py-4 flex items-center justify-between">
+              <div>
+                <p className="text-white font-semibold text-sm">Contract Request</p>
+                <p className="text-slate-200 text-xs">{app.stallName}</p>
+              </div>
+              <button onClick={() => setShowContractActionModal(false)} className="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center">
+                <X className="w-4 h-4 text-white" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <p className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs text-gray-700 leading-relaxed">
+                Choose whether to transfer this contract or apply for its termination.
+              </p>
+              {hasPendingTransfer ? (
+                <p className="bg-purple-50 border border-purple-200 rounded-xl p-3 text-xs text-purple-700">
+                  A transfer offer is already pending. You may still apply for termination.
+                </p>
+              ) : (
+                <button onClick={() => { setShowContractActionModal(false); setShowTransferModal(true); }} className="w-full flex items-center gap-3 bg-purple-50 border border-purple-200 rounded-xl p-4 text-left hover:bg-purple-100">
+                  <div className="w-9 h-9 bg-purple-100 rounded-xl flex items-center justify-center"><ArrowRightLeft className="w-4 h-4 text-purple-600" /></div>
+                  <div><p className="text-sm font-semibold text-gray-900">Transfer Contract</p><p className="text-xs text-gray-500">Send this contract to another registered user.</p></div>
+                </button>
+              )}
+              <button onClick={() => { setShowContractActionModal(false); setShowTerminationModal(true); }} className="w-full flex items-center gap-3 bg-red-50 border border-red-200 rounded-xl p-4 text-left hover:bg-red-100">
+                <div className="w-9 h-9 bg-red-100 rounded-xl flex items-center justify-center"><FileX className="w-4 h-4 text-red-600" /></div>
+                <div><p className="text-sm font-semibold text-gray-900">Apply for Termination</p><p className="text-xs text-gray-500">Send a request to the admin for review.</p></div>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showTerminationModal && (
+        <div className="absolute inset-0 z-[2000] flex items-center justify-center bg-black/50 backdrop-blur-sm px-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+            <div className="bg-gradient-to-r from-red-500 to-red-600 px-5 py-4 flex items-center justify-between">
+              <div><p className="text-white font-semibold text-sm">Terminate Contract</p><p className="text-red-100 text-xs">{app.stallName}</p></div>
+              <button onClick={() => setShowTerminationModal(false)} className="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center"><X className="w-4 h-4 text-white" /></button>
+            </div>
+            <div className="p-5 space-y-4">
+              <p className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">The admin will review your contract termination request.</p>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1.5">Reason for Termination</label>
+                <textarea rows={3} value={terminationReason} onChange={(event) => setTerminationReason(event.target.value)} placeholder="Please state your reason..." className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none" />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setShowTerminationModal(false)} className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-600">Cancel</button>
+                <button onClick={handleTerminationSubmit} className="flex-1 py-2.5 bg-red-500 text-white rounded-xl text-sm font-semibold hover:bg-red-600">Submit Request</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Transfer Ownership Modal */}
       {showTransferModal && (

@@ -92,7 +92,6 @@ export function ContractModal({ contract, onClose }) {
     window.print();
   };
 
-  const approvedDate = formatLongDate(contract.approvedDate);
   const startDate = formatMediumDate(contract.startDate);
   const endDate = formatMediumDate(contract.endDate);
   const businessType = toTitleCase(contract.businessType || "business");

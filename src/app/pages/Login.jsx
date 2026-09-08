@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useNavigate, useSearchParams, Link } from "react-router";
 import { MapPin, LogIn, Search, Eye, EyeOff } from "lucide-react";
-import { setSession } from "../components/authStorage";
 import { login } from "../services/api";
+import { useAuth } from "../context/AuthContext";
 
 const ROLE_ROUTES = {
   super_admin: "/super-admin",
@@ -12,6 +12,7 @@ const ROLE_ROUTES = {
 };
 
 export function Login() {
+  const { signIn } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const stallId = searchParams.get("stallId");
@@ -35,12 +36,7 @@ export function Login() {
     try {
       const { profile: user } = await login(email, password);
       setLoading(false);
-      setSession({
-        userId: user.id,
-        role: user.role,
-        name: user.name,
-        email: user.email,
-      });
+      signIn(user);
       localStorage.setItem(
         "pubmark_pending_toast",
         JSON.stringify({

@@ -14,6 +14,7 @@ import { OfficerDashboard } from "./pages/OfficerDashboard";
 import { Analytics } from "./pages/Analytics";
 import { ArchiveManagement } from "./pages/ArchiveManagement";
 import { CheckRequests } from "./pages/CheckRequests";
+import { WalkInApplication } from "./pages/WalkInApplication";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 
 export const router = createBrowserRouter([
@@ -134,6 +135,14 @@ export const router = createBrowserRouter([
     ),
   },
   {
+    path: "/admin/walk-in",
+    element: (
+      <ProtectedRoute role="admin">
+        <WalkInApplication />
+      </ProtectedRoute>
+    ),
+  },
+  {
     path: "/admin/announcements",
     element: (
       <ProtectedRoute role="admin">
@@ -165,6 +174,15 @@ export const router = createBrowserRouter([
       </ProtectedRoute>
     ),
   },
+  {
+    path: "/admin/receipts",
+    element: (
+      <ProtectedRoute role="admin">
+        <AdminDashboard />
+      </ProtectedRoute>
+    ),
+  },
+  { path: "/admin/renewals", element: <ProtectedRoute role="admin"><AdminDashboard /></ProtectedRoute> },
   {
     path: "/admin/check-requests",
     element: (
@@ -200,14 +218,6 @@ export const router = createBrowserRouter([
     ),
   },
   {
-    path: "/super-admin/settings",
-    element: (
-      <ProtectedRoute role="super_admin">
-        <SuperAdminDashboard />
-      </ProtectedRoute>
-    ),
-  },
-  {
     path: "/super-admin/violations",
     element: (
       <ProtectedRoute role="super_admin">
@@ -215,6 +225,15 @@ export const router = createBrowserRouter([
       </ProtectedRoute>
     ),
   },
+  {
+    path: "/super-admin/receipts",
+    element: (
+      <ProtectedRoute role="super_admin">
+        <SuperAdminDashboard />
+      </ProtectedRoute>
+    ),
+  },
+  { path: "/super-admin/renewals", element: <ProtectedRoute role="super_admin"><SuperAdminDashboard /></ProtectedRoute> },
   {
     path: "/super-admin/check-requests",
     element: (

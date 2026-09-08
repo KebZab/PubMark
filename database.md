@@ -11,6 +11,7 @@
 2. [Role Summary](#role-summary)
 3. [System Flow](#system-flow)
 4. [Session Progress - August 13, 2026](#session-progress---august-13-2026)
+   - [Session Progress - September 6, 2026](#session-progress---september-6-2026)
 5. [Data Stores (localStorage → Supabase)](#data-stores)
    - [users](#1-users)
    - [sessions](#2-sessions)
@@ -198,6 +199,51 @@ This section summarizes the major implementation work completed during the curre
 - The core reports data is now confirmed to exist in the database.
 - Remaining issues are now mostly frontend integration issues rather than missing backend persistence.
 - If another page still breaks after the storage migration, check first for any old synchronous store usage that now needs `await` and state loading.
+
+---
+
+## Session Progress - September 6, 2026
+
+### Payment Receipt Workflow
+
+- Payment receipts use `GET/POST /api/receipts` and `PATCH /api/receipts/:id`.
+- Vendors upload treasurer-issued receipts from approved application details on web and mobile; officers may record receipts on a vendor's behalf.
+- JPEG, PNG, WebP, HEIC, and PDF files up to 5 MB are stored in the private Supabase Storage `receipts` bucket and exposed through short-lived signed URLs.
+- Vendors only see their receipts, officers see receipts they submitted, and Admin/Super Admin can review all receipts.
+- Dedicated `/admin/receipts` and `/super-admin/receipts` pages provide pending badges, search, status filters, file viewing, and Verify/Reject actions.
+- Vendor web/mobile show receipt history, review status, remarks, unavailable-file states, and immediate pending state after submission.
+
+### Contract Renewal Workflow
+
+- Approved contracts display vendor warnings beginning 30 days before expiration, with an urgent state during the final 7 days.
+- Vendors may request renewal before expiration or during the default seven-day grace period afterward. Only one pending request is allowed per application.
+- A pending request prevents automatic termination while Admin or Super Admin reviews it.
+- Approval extends `contract_end` by 6, 12, 24, or 36 months from the later of the old end date or approval date. Rejection records the decision without changing contract dates.
+- Contracts without a pending request are automatically terminated after their effective renewal deadline.
+- Super Admin may extend the renewal-request deadline for contracts expiring within 30 days or in grace. A future date and reason are mandatory. This does not extend the contract itself.
+- `/admin/renewals` and `/super-admin/renewals` contain the review queue; only Super Admin sees deadline-extension controls.
+
+### Renewal Database Objects
+
+Migration: `server/migrations/2026-09-06-contract-renewals.sql`
+
+| Object | Purpose |
+|---|---|
+| `applications.renewal_deadline_at` | Optional override for the default contract-end-plus-seven-days deadline |
+| `applications.contract_terminated_at` | Timestamp of automatic termination after the final deadline |
+| `contract_renewal_requests` | Requested term, status, reviewer, remarks, and timestamps |
+| `renewal_deadline_extensions` | Audit history containing old/new deadlines, reason, Super Admin, and timestamp |
+
+The migration has been applied to the configured shared Supabase database. Every new environment must apply it before starting the updated API.
+
+### Renewal API Permissions
+
+| Endpoint | Roles | Behavior |
+|---|---|---|
+| `GET /api/contract-renewals` | Vendor, Admin, Super Admin | Vendor receives their records; administrators receive all records |
+| `POST /api/contract-renewals` | Vendor | Creates an eligible request within the effective deadline |
+| `PATCH /api/contract-renewals/:id` | Admin, Super Admin | Approves or rejects a pending request |
+| `PATCH /api/applications/:id/renewal-deadline` | Super Admin | Extends the request deadline and creates an audit record |
 
 ---
 
@@ -1239,6 +1285,8 @@ CREATE TABLE IF NOT EXISTS public.violation_requests (
   requested_by         uuid                       NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
   assigned_officer_id  uuid                       REFERENCES public.profiles(id) ON DELETE SET NULL,
   reason               text                       NOT NULL DEFAULT '',
+  category             text,
+  violation_id         uuid                       REFERENCES public.violations(id) ON DELETE SET NULL,
   status               violation_request_status   NOT NULL DEFAULT 'pending',
   created_at           timestamptz                NOT NULL DEFAULT now(),
   completed_at         timestamptz,
@@ -1249,6 +1297,7 @@ CREATE INDEX IF NOT EXISTS idx_violation_requests_stall_id            ON public.
 CREATE INDEX IF NOT EXISTS idx_violation_requests_requested_by        ON public.violation_requests(requested_by);
 CREATE INDEX IF NOT EXISTS idx_violation_requests_assigned_officer_id ON public.violation_requests(assigned_officer_id);
 CREATE INDEX IF NOT EXISTS idx_violation_requests_status              ON public.violation_requests(status);
+CREATE INDEX IF NOT EXISTS idx_violation_requests_violation_id        ON public.violation_requests(violation_id);
 
 CREATE TRIGGER trg_violation_requests_updated_at
   BEFORE UPDATE ON public.violation_requests
@@ -1289,6 +1338,7 @@ CREATE TABLE IF NOT EXISTS public.check_requests (
   assigned_to         uuid                  REFERENCES public.profiles(id) ON DELETE SET NULL,
   priority            check_priority        NOT NULL DEFAULT 'normal',
   reason              text                  NOT NULL DEFAULT '',
+  category            text,
   notes               text                  NOT NULL DEFAULT '',
   status              check_request_status  NOT NULL DEFAULT 'pending',
   completion_notes    text                  NOT NULL DEFAULT '',

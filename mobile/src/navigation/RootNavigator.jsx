@@ -1,9 +1,12 @@
+import { useEffect, useRef } from "react";
 import { ActivityIndicator, View } from "react-native";
+import GuestMapScreen from "../screens/GuestMapScreen";
 import { Ionicons } from "@expo/vector-icons";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { useAuth } from "../context/AuthContext";
+import { useNoticesBadge } from "../hooks/useNoticesBadge";
 import LoginScreen from "../screens/LoginScreen";
 import RegisterScreen from "../screens/RegisterScreen";
 import VendorHomeScreen from "../screens/vendor/HomeScreen";
@@ -18,6 +21,7 @@ import OfficerViolationsScreen from "../screens/officer/ViolationsScreen";
 import OfficerChecksScreen from "../screens/officer/ChecksScreen";
 import OfficerMapScreen from "../screens/officer/OfficerMapScreen";
 import OfficerReceiptsScreen from "../screens/officer/ReceiptsScreen";
+import OfficerNoticesScreen from "../screens/officer/NoticesScreen";
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -33,6 +37,7 @@ const tabScreenOptions = {
   tabBarInactiveTintColor: "#9ca3af",
   tabBarStyle: { borderTopColor: "#e5e7eb" },
   tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
+  tabBarBadgeStyle: { backgroundColor: "#ef4444" },
 };
 
 // The web app gives officers an amber accent rather than the vendor teal, so
@@ -40,6 +45,13 @@ const tabScreenOptions = {
 const officerTabScreenOptions = {
   ...tabScreenOptions,
   tabBarActiveTintColor: "#f59e0b",
+  // "shift" (slide+fade) is bottom-tabs' closest match to the slide
+  // transition the login/auth stack uses by default, so switching officer
+  // tabs feels like the same kind of screen change as signing in does.
+  // (Previously swapped to "fade" because Android `elevation` shadows used
+  // to detach into a floating box under this slide — now that those shadows
+  // are iOS-only (see ui.jsx), "shift" is safe again on Android too.)
+  animation: "shift",
 };
 
 // Each tab needs an explicit icon; without one the tab bar renders an empty box.
@@ -49,6 +61,7 @@ function tabIcon(name) {
 
 // Vendor tabs mirror the web vendor dashboard: home / applications / notices / map
 function VendorTabs() {
+  const { unreadCount } = useNoticesBadge();
   return (
     <Tab.Navigator screenOptions={tabScreenOptions}>
       <Tab.Screen
@@ -69,7 +82,7 @@ function VendorTabs() {
       <Tab.Screen
         name="Notices"
         component={VendorNoticesScreen}
-        options={{ tabBarIcon: tabIcon("megaphone-outline") }}
+        options={{ tabBarIcon: tabIcon("megaphone-outline"), tabBarBadge: unreadCount > 0 ? unreadCount : undefined }}
       />
       <Tab.Screen name="Map" component={VendorMapScreen} options={{ tabBarIcon: tabIcon("map-outline") }} />
     </Tab.Navigator>
@@ -78,26 +91,45 @@ function VendorTabs() {
 
 // The tabs sit inside a stack so screens like the application form can be
 // pushed over them with a back button, instead of becoming another tab.
-function VendorNavigator() {
+function VendorEntry({ navigation, pendingApplication }) {
+  useEffect(() => {
+    const stalls = pendingApplication.current;
+    if (!stalls?.length) return;
+    // This screen and its Stack.Navigator mount in the same commit as this
+    // effect fires, so navigating immediately can land before
+    // react-navigation's own state is attached and get silently dropped (a
+    // known timing hazard). Deferring one tick lets the navigator finish
+    // mounting first. Deliberately NOT clearing pendingApplication.current
+    // here — ApplicationFormScreen clears it once it has actually consumed
+    // the stalls, so a dropped attempt leaves the selection recoverable
+    // instead of silently destroying it up front.
+    const timer = setTimeout(() => navigation.navigate("ApplyForStall", { stalls }), 0);
+    return () => clearTimeout(timer);
+  }, [navigation, pendingApplication]);
+  return <VendorTabs />;
+}
+
+function VendorNavigator({ pendingApplication }) {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="Tabs" component={VendorTabs} />
+      <Stack.Screen name="Tabs">
+        {(props) => <VendorEntry {...props} pendingApplication={pendingApplication} />}
+      </Stack.Screen>
       <Stack.Screen
         name="ApplicationDetail"
         component={ApplicationDetailScreen}
         options={{ animation: "slide_from_right" }}
       />
-      <Stack.Screen
-        name="ApplyForStall"
-        component={ApplicationFormScreen}
-        options={{ presentation: "card", animation: "slide_from_right" }}
-      />
+      <Stack.Screen name="ApplyForStall" options={{ presentation: "card", animation: "slide_from_right" }}>
+        {(props) => <ApplicationFormScreen {...props} pendingApplication={pendingApplication} />}
+      </Stack.Screen>
     </Stack.Navigator>
   );
 }
 
-// Officer tabs mirror the web officer dashboard: violations / checks / log / receipts
+// Officer tabs mirror the web officer dashboard: violations / checks / map / receipts / notices
 function OfficerTabs() {
+  const { unreadCount } = useNoticesBadge();
   return (
     <Tab.Navigator screenOptions={officerTabScreenOptions}>
       <Tab.Screen
@@ -116,6 +148,11 @@ function OfficerTabs() {
         component={OfficerReceiptsScreen}
         options={{ tabBarIcon: tabIcon("receipt-outline") }}
       />
+      <Tab.Screen
+        name="Notices"
+        component={OfficerNoticesScreen}
+        options={{ tabBarIcon: tabIcon("megaphone-outline"), tabBarBadge: unreadCount > 0 ? unreadCount : undefined }}
+      />
     </Tab.Navigator>
   );
 }
@@ -123,17 +160,24 @@ function OfficerTabs() {
 // Signed-out flow. A stack rather than a bare screen so vendors can reach
 // registration and come back. On success the session appears and RootNavigator
 // swaps this whole stack out for the role's tabs.
-function AuthNavigator() {
+function AuthNavigator({ pendingApplication }) {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Login" component={LoginScreen} />
       <Stack.Screen name="Register" component={RegisterScreen} />
+      <Stack.Screen name="GuestMap">
+        {(props) => <GuestMapScreen {...props} pendingApplication={pendingApplication} />}
+      </Stack.Screen>
     </Stack.Navigator>
   );
 }
 
 export default function RootNavigator() {
   const { user, loading } = useAuth();
+  const pendingApplication = useRef(null);
+  useEffect(() => {
+    if (user && user.role !== "vendor") pendingApplication.current = null;
+  }, [user]);
 
   // Restoring a saved session — avoid flashing the login screen at someone
   // who is already signed in.
@@ -147,7 +191,7 @@ export default function RootNavigator() {
 
   return (
     <NavigationContainer>
-      {!user ? <AuthNavigator /> : user.role === "officer" ? <OfficerTabs /> : <VendorNavigator />}
+      {!user ? <AuthNavigator pendingApplication={pendingApplication} /> : user.role === "officer" ? <OfficerTabs /> : <VendorNavigator pendingApplication={pendingApplication} />}
     </NavigationContainer>
   );
 }

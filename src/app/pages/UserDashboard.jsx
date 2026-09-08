@@ -9,7 +9,6 @@ import {
   Upload,
   MapPin,
   Bell,
-  Home,
   Megaphone,
   AlertTriangle,
   Info,
@@ -27,20 +26,24 @@ import {
   X,
   Mail,
   Layers,
-  ArrowUpDown,
   ShieldOff,
   FileX,
+  Loader2,
 } from "lucide-react";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { getAnnouncements } from "../services/announcementsApi";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
-import { getSession, clearSession } from "../components/authStorage";
-import { findUserByEmail } from "../services/api";
+import { useAnnouncements } from "../hooks/useAnnouncements";
+import { useMapFacilities } from "../hooks/useMapFacilities";
+import { MapFacilitiesLayer, stallFloaterHtml } from "../components/MapFacilitiesLayer";
+import { registerMapFloater } from "../components/mapFloaterDeclutter";
+import { getSession } from "../components/authStorage";
+import { useAuth } from "../context/AuthContext";
+
 import { showToast } from "../components/Toast";
-import { FloorSwitcher } from "../components/FloorSwitcher";
+
 import {
   getTransfersByToEmail,
   getTransfersByFromUserId,
@@ -72,6 +75,7 @@ function MiniDrawnStallsLayer({ stalls, applications }) {
   const map = useMap();
   useEffect(() => {
     const layers = [];
+    const unregister = [];
     stalls.forEach((stall) => {
       const app = getActiveApp(stall.id, applications);
       const color =
@@ -80,10 +84,18 @@ function MiniDrawnStallsLayer({ stalls, applications }) {
         { type: "Feature", properties: {}, geometry: stall.geometry },
         { style: { color, weight: 1.5, opacity: 0.9, fillColor: color, fillOpacity: 0.25 } },
       );
+      layer.bindTooltip(stallFloaterHtml(stall.stall_name, color), {
+        permanent: true,
+        direction: "center",
+        className: "vendor-stall-floater",
+        opacity: 0.95,
+      });
       layer.addTo(map);
+      unregister.push(registerMapFloater(map, layer));
       layers.push(layer);
     });
     return () => {
+      unregister.forEach((remove) => remove());
       layers.forEach((l) => map.removeLayer(l));
     };
   }, [stalls, applications, map]);
@@ -133,9 +145,10 @@ const typeConfig = {
 };
 
 function MapTabContent({ navigate }) {
-  const { stalls: storedStalls } = useStalls();
+  const { stalls: storedStalls, loading: stallsLoading } = useStalls();
   const { applications } = useApplications();
   const [activeFloor, setActiveFloor] = useState("1");
+  const { facilities } = useMapFacilities(activeFloor);
 
   const floorStalls = storedStalls.filter((s) => s.floor === activeFloor);
   const floorCounts = {
@@ -223,9 +236,19 @@ function MapTabContent({ navigate }) {
             maxZoom={22}
           />
           <MiniDrawnStallsLayer stalls={floorStalls} applications={applications} />
+          <MapFacilitiesLayer facilities={facilities} />
         </MapContainer>
 
-        {storedStalls.length === 0 && (
+        {stallsLoading && (
+          <div className="absolute inset-0 z-[500] flex items-center justify-center bg-white/60 backdrop-blur-[1px]">
+            <div className="flex flex-col items-center gap-2">
+              <Loader2 className="w-5 h-5 text-teal-600 animate-spin" />
+              <p className="text-[11px] font-medium text-gray-600">Loading stalls…</p>
+            </div>
+          </div>
+        )}
+
+        {!stallsLoading && storedStalls.length === 0 && (
           <div className="absolute inset-0 z-[500] flex items-center justify-center pointer-events-none">
             <div className="bg-white/90 backdrop-blur-sm rounded-xl px-4 py-3 shadow border border-gray-100 text-center">
               <p className="text-xs font-semibold text-gray-600">No stalls mapped yet</p>
@@ -257,12 +280,13 @@ function MapTabContent({ navigate }) {
 }
 
 export function UserDashboard() {
+  const { signOut } = useAuth();
   const navigate = useNavigate();
   const [session, setSession] = useState(null);
   const [activeTab, setActiveTab] = useState("home");
-  const [announcements, setAnnouncements] = useState([]);
+  const { announcements } = useAnnouncements();
   const { applications } = useApplications();
-  const { stalls } = useStalls();
+  useStalls();
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef(null);
   const [appSortField, setAppSortField] = useState("date");
@@ -281,15 +305,6 @@ export function UserDashboard() {
   const [transferEmail, setTransferEmail] = useState("");
   const [transferError, setTransferError] = useState("");
   const [transferSubmitting, setTransferSubmitting] = useState(false);
-
-  useEffect(() => {
-    const s = getSession();
-    if (!s || (s.role !== "vendor" && s.role !== "user")) {
-      navigate("/", { replace: true });
-      return;
-    }
-    setSession(s);
-  }, [navigate]);
 
   useEffect(() => {
     const s = getSession();
@@ -317,25 +332,6 @@ export function UserDashboard() {
       cancelled = true;
     };
   }, [activeTab]);
-
-  useEffect(() => {
-    if (!session) return;
-
-    let cancelled = false;
-    async function loadAnnouncements() {
-      try {
-        const nextAnnouncements = await getAnnouncements();
-        if (!cancelled) setAnnouncements(nextAnnouncements);
-      } catch (error) {
-        if (!cancelled) showToast(`Failed to load announcements: ${error.message}`, "error");
-      }
-    }
-
-    void loadAnnouncements();
-    return () => {
-      cancelled = true;
-    };
-  }, [session, activeTab]);
 
   useEffect(() => {
     function handleClickOutside(e) {
@@ -503,8 +499,8 @@ export function UserDashboard() {
                   Profile Settings
                 </button>
                 <button
-                  onClick={() => {
-                    clearSession();
+                  onClick={async () => {
+                    await signOut();
                     showToast("You've been logged out.", "success");
                     navigate("/");
                   }}
@@ -1000,20 +996,6 @@ export function UserDashboard() {
                             Upload Permit
                           </button>
                         )}
-                        {app.status === "approved" && (
-                          <button
-                            onClick={() => {
-                              setContractActionModal(app);
-                              setTerminateReason("");
-                              setTransferError("");
-                              setTransferEmail("");
-                            }}
-                            className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-red-50 text-red-600 border border-red-200 rounded-lg text-xs font-medium hover:bg-red-100 transition-colors"
-                          >
-                            <FileX className="w-3.5 h-3.5" />
-                            Terminate
-                          </button>
-                        )}
                       </div>
                     </div>
                   );
@@ -1325,7 +1307,7 @@ export function UserDashboard() {
                   <FileX className="w-4 h-4 text-red-600" />
                 </div>
                 <div className="flex-1">
-                  <p className="text-sm font-semibold text-gray-900">Terminate Contract</p>
+                  <p className="text-sm font-semibold text-gray-900">Apply for Termination</p>
                   <p className="text-xs text-gray-500 mt-0.5">
                     Send a termination request to the admin for review.
                   </p>

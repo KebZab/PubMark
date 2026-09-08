@@ -7,7 +7,6 @@ import {
   FileText,
   BarChart3,
   Archive,
-  Settings,
   Bell,
   LogOut,
   Menu,
@@ -15,7 +14,6 @@ import {
   Store,
   ShieldCheck,
   ClipboardList,
-  Package,
   AlertTriangle,
   ChevronRight,
   Megaphone,
@@ -23,8 +21,9 @@ import {
   UserCog,
   Inbox,
   Receipt,
+  UserPlus,
 } from "lucide-react";
-import { clearSession } from "./authStorage";
+import { useAuth } from "../context/AuthContext";
 import { showToast } from "./Toast";
 
 function getNavItems(role) {
@@ -36,11 +35,12 @@ function getNavItems(role) {
         { label: "User Management", icon: Users, path: "/super-admin/users" },
         { label: "Stall Management", icon: Store, path: "/super-admin/stalls" },
         { label: "Applications", icon: FileText, path: "/super-admin/applications" },
+        { label: "Payment Receipts", icon: Receipt, path: "/super-admin/receipts" },
+        { label: "Contract Renewals", icon: ClipboardList, path: "/super-admin/renewals" },
         { label: "Reports & Requests", icon: Inbox, path: "/super-admin/violations" },
         { label: "Send Request", icon: ClipboardList, path: "/super-admin/check-requests" },
         { label: "Analytics", icon: BarChart3, path: "/analytics" },
         { label: "Archive", icon: Archive, path: "/archive" },
-        { label: "Settings", icon: Settings, path: "/super-admin/settings" },
       ];
     case "admin":
       return [
@@ -48,6 +48,9 @@ function getNavItems(role) {
         { label: "Stall Map", icon: MapPin, path: "/admin/map" },
         { label: "Applications", icon: FileText, path: "/admin/applications" },
         { label: "Vendors", icon: Users, path: "/admin/vendors" },
+        { label: "Walk-in Application", icon: UserPlus, path: "/admin/walk-in" },
+        { label: "Payment Receipts", icon: Receipt, path: "/admin/receipts" },
+        { label: "Contract Renewals", icon: ClipboardList, path: "/admin/renewals" },
         { label: "Reports & Requests", icon: Inbox, path: "/admin/violations" },
         { label: "Send Request", icon: ClipboardList, path: "/admin/check-requests" },
         { label: "Analytics", icon: BarChart3, path: "/analytics" },
@@ -111,17 +114,21 @@ function getRoleIcon(role) {
   }
 }
 
-export function DashboardLayout({ session, children, title, subtitle, actions }) {
+export function DashboardLayout({ session, children, title, subtitle, actions, navBadges = {} }) {
+  const { signOut } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const role = session.role;
-  const navItems = getNavItems(role);
+  const navItems = getNavItems(role).map((item) => ({
+    ...item,
+    badge: navBadges[item.path] ?? item.badge,
+  }));
   const RoleIcon = getRoleIcon(role);
 
-  function handleLogout() {
-    clearSession();
+  async function handleLogout() {
+    await signOut();
     showToast("Logged out successfully.", "success");
     navigate("/");
   }
@@ -162,8 +169,10 @@ export function DashboardLayout({ session, children, title, subtitle, actions })
       <nav className="sidebar-scroll flex-1 px-3 py-3 space-y-0.5 overflow-y-auto min-h-0">
         {navItems.map((item) => {
           const Icon = item.icon;
+          const isRoleRoot = item.path === "/admin" || item.path === "/super-admin";
           const active =
-            location.pathname === item.path || location.pathname.startsWith(item.path + "/");
+            location.pathname === item.path ||
+            (!isRoleRoot && location.pathname.startsWith(item.path + "/"));
           return (
             <button
               key={item.path}
@@ -241,13 +250,15 @@ export function DashboardLayout({ session, children, title, subtitle, actions })
             {subtitle && <p className="text-xs text-gray-500 truncate">{subtitle}</p>}
           </div>
           {actions && <div className="flex items-center gap-2 flex-shrink-0">{actions}</div>}
-          <button
-            onClick={handleLogout}
-            className="hidden lg:flex items-center gap-1.5 text-xs text-gray-500 hover:text-red-600 transition-colors flex-shrink-0"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            Logout
-          </button>
+          {role !== "admin" && role !== "super_admin" && (
+            <button
+              onClick={handleLogout}
+              className="hidden lg:flex items-center gap-1.5 text-xs text-gray-500 hover:text-red-600 transition-colors flex-shrink-0"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Logout
+            </button>
+          )}
         </header>
 
         {/* Page content */}

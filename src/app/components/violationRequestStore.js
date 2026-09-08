@@ -11,6 +11,8 @@ export async function createViolationRequest(data) {
     body: JSON.stringify({
       stallId: data.stallId,
       reason: data.reason,
+      category: data.category ?? null,
+      violationId: data.violationId ?? null,
     }),
   });
   return response.request;

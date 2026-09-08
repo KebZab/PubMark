@@ -4,6 +4,9 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { X, ChevronRight } from "lucide-react";
 import { FloorSwitcher } from "./FloorSwitcher";
+import { useMapFacilities } from "../hooks/useMapFacilities";
+import { MapFacilitiesLayer, stallFloaterHtml } from "./MapFacilitiesLayer";
+import { registerMapFloater } from "./mapFloaterDeclutter";
 
 function getApprovedApp(stallId, apps) {
   return apps.find((a) => a.stallId === stallId && a.status === "approved") ?? null;
@@ -13,6 +16,7 @@ function PickerStallsLayer({ stalls, applications, disabledIds, stagedIds, onTog
   const map = useMap();
   useEffect(() => {
     const layers = [];
+    const unregister = [];
     stalls.forEach((stall) => {
       const occupied = !!getApprovedApp(stall.id, applications);
       const alreadyPicked = disabledIds.has(stall.id);
@@ -33,15 +37,19 @@ function PickerStallsLayer({ stalls, applications, disabledIds, stagedIds, onTog
           : isStaged
             ? "Selected"
             : "Available";
-      layer.bindTooltip(`<strong>${stall.stall_name}</strong> · ${status}`, {
-        direction: "top",
+      layer.bindTooltip(stallFloaterHtml(stall.stall_name, color), {
+        permanent: true,
+        direction: "center",
+        className: "vendor-stall-floater",
         opacity: 0.95,
       });
       if (!disabled) layer.on("click", () => onToggle(stall));
       layer.addTo(map);
+      unregister.push(registerMapFloater(map, layer, { selected: isStaged }));
       layers.push(layer);
     });
     return () => {
+      unregister.forEach((remove) => remove());
       layers.forEach((l) => map.removeLayer(l));
     };
   }, [stalls, applications, disabledIds, stagedIds, map, onToggle]);
@@ -50,6 +58,7 @@ function PickerStallsLayer({ stalls, applications, disabledIds, stagedIds, onTog
 
 export function AddStallMapPicker({ stalls, applications, alreadyPickedIds, onConfirm, onClose }) {
   const [activeFloor, setActiveFloor] = useState("1");
+  const { facilities } = useMapFacilities(activeFloor);
   const [stagedIds, setStagedIds] = useState(new Set());
 
   const disabledIds = new Set(alreadyPickedIds);
@@ -106,6 +115,7 @@ export function AddStallMapPicker({ stalls, applications, alreadyPickedIds, onCo
               stagedIds={stagedIds}
               onToggle={toggleStall}
             />
+            <MapFacilitiesLayer facilities={facilities} />
           </MapContainer>
 
           <div className="absolute top-3 left-3 z-[1000]">

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -71,7 +71,7 @@ function makeStallEntry(stall) {
   };
 }
 
-export default function ApplicationFormScreen({ route, navigation }) {
+export default function ApplicationFormScreen({ route, navigation, pendingApplication }) {
   // Always an array — one stall or several, from the map's single tap or its
   // "Select Multiple" mode. Each stall gets its own business name/type,
   // address and contract dates, since a vendor applying to several stalls at
@@ -80,6 +80,14 @@ export default function ApplicationFormScreen({ route, navigation }) {
   // every application in the batch.
   const { stalls: targetStalls } = route.params;
   const isMulti = targetStalls.length > 1;
+
+  // Consumed — clear the pending-selection ref so a stale value can't get
+  // re-navigated to later. No-op when this screen was reached from the
+  // vendor's own map while already signed in (pendingApplication is only
+  // ever passed on the guest-signed-in redirect path).
+  useEffect(() => {
+    if (pendingApplication) pendingApplication.current = null;
+  }, [pendingApplication]);
 
   const [entries, setEntries] = useState(() => targetStalls.map(makeStallEntry));
   const [notes, setNotes] = useState("");

@@ -4,15 +4,13 @@ import {
   RotateCcw,
   Trash2,
   Search,
-  Filter,
-  X,
-  Check,
   FileText,
   Users,
   Store,
   AlertTriangle,
   Calendar,
   User,
+  CheckCircle,
 } from "lucide-react";
 import {
   getArchivedRecords,
@@ -28,6 +26,7 @@ const TYPE_CONFIG = {
   vendor: { label: "Vendor", icon: Users, color: "bg-teal-100 text-teal-700" },
   stall: { label: "Stall", icon: Store, color: "bg-purple-100 text-purple-700" },
   violation: { label: "Violation", icon: AlertTriangle, color: "bg-amber-100 text-amber-700" },
+  check_request: { label: "Inspection", icon: CheckCircle, color: "bg-green-100 text-green-700" },
 };
 
 function formatDate(iso) {
@@ -43,17 +42,17 @@ function formatDate(iso) {
 export function ArchiveManagement() {
   const session = getSession();
   const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [selectedRecord, setSelectedRecord] = useState(null);
   const [restoreConfirm, setRestoreConfirm] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
-  const [loading, setLoading] = useState(true);
-
   // Archive records come from the API now, so this loads asynchronously.
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
     getArchivedRecords()
       .then((r) => {
         if (!cancelled) setRecords(r);
@@ -112,6 +111,7 @@ export function ArchiveManagement() {
     vendor: records.filter((r) => r.type === "vendor").length,
     stall: records.filter((r) => r.type === "stall").length,
     violation: records.filter((r) => r.type === "violation").length,
+    check_request: records.filter((r) => r.type === "check_request").length,
   };
 
   return (
@@ -122,8 +122,8 @@ export function ArchiveManagement() {
     >
       <div className="p-6 space-y-5">
         {/* Summary cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {["application", "vendor", "stall", "violation"].map((t) => {
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+          {["application", "vendor", "stall", "violation", "check_request"].map((t) => {
             const cfg = TYPE_CONFIG[t];
             const Icon = cfg.icon;
             return (
@@ -172,12 +172,19 @@ export function ArchiveManagement() {
             <option value="vendor">Vendors</option>
             <option value="stall">Stalls</option>
             <option value="violation">Violations</option>
+            <option value="check_request">Inspections</option>
           </select>
         </div>
 
         {/* Records list */}
         <div className="space-y-3">
-          {filtered.map((r) => {
+          {loading && (
+            <div className="bg-white rounded-2xl border border-gray-200 py-16 flex flex-col items-center gap-3">
+              <div className="w-7 h-7 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+              <p className="text-sm text-gray-400">Loading archive…</p>
+            </div>
+          )}
+          {!loading && filtered.map((r) => {
             const cfg = TYPE_CONFIG[r.type];
             const Icon = cfg.icon;
             const isSelected = selectedRecord?.id === r.id;
@@ -260,7 +267,7 @@ export function ArchiveManagement() {
             );
           })}
 
-          {filtered.length === 0 && (
+          {!loading && filtered.length === 0 && (
             <div className="bg-white rounded-2xl border border-gray-200 py-16 text-center">
               <Archive className="w-10 h-10 text-gray-300 mx-auto mb-3" />
               <p className="text-sm font-medium text-gray-500">No archived records found.</p>

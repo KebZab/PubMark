@@ -5,7 +5,10 @@ import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../context/AuthContext";
 import { useApiData } from "../../hooks/useApiData";
-import { getApplications, getStallReservations, getStalls } from "../../services/api";
+import { useStalls } from "../../hooks/useStalls";
+import { useApplications } from "../../hooks/useApplications";
+import { useMapFacilities } from "../../hooks/useMapFacilities";
+import { getStallReservations } from "../../services/api";
 import { ErrorState, LoadingState } from "../../components/ui";
 import StallMap from "../../components/StallMap";
 import ImageViewerModal from "../../components/ImageViewerModal";
@@ -14,13 +17,14 @@ const FLOORS = ["1", "2"];
 
 export default function MapScreen({ navigation }) {
   const { user } = useAuth();
-  const stallsQuery = useApiData(getStalls);
-  const appsQuery = useApiData(getApplications);
+  const stallsQuery = useStalls();
+  const appsQuery = useApplications();
   // GET /applications only returns this vendor's own rows, so it can't say
   // whether some other stall is taken — occupied-stalls fills that gap with
   // no personal data attached. Without it, every stall approved for someone
   // else looked "Available" here even though it wasn't.
   const reservationsQuery = useApiData(getStallReservations);
+  const facilitiesQuery = useMapFacilities();
 
   // The tab navigator keeps this screen mounted when you leave it, so
   // submitting an application and coming back doesn't remount it — its data
@@ -54,6 +58,7 @@ export default function MapScreen({ navigation }) {
   );
 
   const stalls = useMemo(() => allStalls.filter((s) => s.floor === floor), [allStalls, floor]);
+  const facilities = useMemo(() => (facilitiesQuery.data?.facilities ?? []).filter((item) => item.floor === floor || item.connectedFloors?.includes(floor)), [facilitiesQuery.data, floor]);
 
   // Colour each stall the way the web vendor map does: your own approved
   // stall, your pending application, someone else's approved/pending
@@ -179,7 +184,7 @@ export default function MapScreen({ navigation }) {
         <LoadingState />
       ) : error ? (
         <ErrorState message={error} />
-      ) : stalls.length === 0 ? (
+      ) : stalls.length === 0 && facilities.length === 0 ? (
         <View className="flex-1 items-center justify-center px-8">
           <Text className="text-sm font-semibold text-gray-700">No stalls on {floor}F</Text>
           <Text className="mt-1.5 text-center text-xs leading-5 text-gray-400">
@@ -189,6 +194,7 @@ export default function MapScreen({ navigation }) {
       ) : (
         <StallMap
           stalls={stalls}
+          facilities={facilities}
           selectedId={selectedId}
           selectedIds={selectedIds}
           multiSelectMode={multiSelectMode}
@@ -200,13 +206,6 @@ export default function MapScreen({ navigation }) {
       {/* Legend — same states as the web vendor map. Amber covers both "your
           application is pending" and "someone else's is" — the map can't
           tell those apart at a glance, only the detail sheet spells out which. */}
-      <View className="flex-row flex-wrap gap-x-4 gap-y-1 border-t border-gray-200 bg-white px-4 py-2.5">
-        <Legend color="#14B8A6" label="Available" />
-        <Legend color="#f59e0b" label="Pending" />
-        <Legend color="#6366f1" label="Yours" />
-        <Legend color="#ef4444" label="Occupied" />
-      </View>
-
       {/* Multi-select action bar */}
       {multiSelectMode && selectedIds.size > 0 ? (
         <View className="absolute inset-x-3 bottom-24 flex-row items-center gap-2.5 rounded-2xl border border-gray-200 bg-white p-3 shadow-lg">
@@ -290,15 +289,6 @@ export default function MapScreen({ navigation }) {
         onClose={() => setViewer(null)}
       />
     </SafeAreaView>
-  );
-}
-
-function Legend({ color, label }) {
-  return (
-    <View className="flex-row items-center gap-1.5">
-      <View style={{ backgroundColor: color }} className="h-2.5 w-2.5 rounded-full" />
-      <Text className="text-[11px] text-gray-500">{label}</Text>
-    </View>
   );
 }
 

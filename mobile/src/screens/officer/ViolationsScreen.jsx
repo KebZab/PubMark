@@ -13,10 +13,13 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import { readAssetForUpload, formatFileSize } from "../../services/fileUpload";
+import * as DocumentPicker from "expo-document-picker";
+import { readAssetForUpload, formatFileSize, DOCUMENT_PICKER_TYPES } from "../../services/fileUpload";
 import { useApiData } from "../../hooks/useApiData";
-import { createViolation, getStalls, getViolations, updateViolation } from "../../services/api";
-import { Attachments, Card, EmptyState, ErrorState, LoadingState, OfficerHeader, formatDate } from "../../components/ui";
+import { useStalls } from "../../hooks/useStalls";
+import { useApplications } from "../../hooks/useApplications";
+import { createViolation, getViolations } from "../../services/api";
+import { Attachments, Card, EmptyState, ErrorState, LoadingState, OfficerHeader, buttonShadow, formatDate } from "../../components/ui";
 
 // Same eight categories the web officer dashboard offers.
 const CATEGORIES = [
@@ -31,19 +34,34 @@ const CATEGORIES = [
 ];
 
 const STATUS_STYLE = {
-  open: { bg: "bg-red-100", text: "text-red-700", label: "Open" },
+  open: { bg: "bg-red-100", text: "text-red-700", label: "Pending Action" },
+  reviewed: { bg: "bg-amber-100", text: "text-amber-700", label: "Reviewing" },
   resolved: { bg: "bg-green-100", text: "text-green-700", label: "Resolved" },
   dismissed: { bg: "bg-gray-100", text: "text-gray-600", label: "Dismissed" },
 };
 
+// The one application that represents a stall's current state: the approved
+// tenant, if there is one. GET /applications is unscoped for officers, so
+// this can read every application directly with no extra endpoint.
+function getActiveApp(stallId, applications) {
+  return applications
+    .filter((a) => a.stallId === stallId && a.status !== "rejected")
+    .sort((a, b) => new Date(a.dateApplied).getTime() - new Date(b.dateApplied).getTime())
+    .find((a) => a.status === "approved") ?? null;
+}
+
 export default function ViolationsScreen() {
   const { data, loading, error, refetch } = useApiData(getViolations);
-  const stallsQuery = useApiData(getStalls);
+  const stallsQuery = useStalls();
+  const applicationsQuery = useApplications();
   const [filter, setFilter] = useState("all");
-  const [busyId, setBusyId] = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
 
   const [reportOpen, setReportOpen] = useState(false);
   const [stallId, setStallId] = useState("");
+  const [stallSearch, setStallSearch] = useState("");
+  const STALL_PAGE_SIZE = 5;
+  const [stallPage, setStallPage] = useState(1);
   const [category, setCategory] = useState("Health Violation");
   const [description, setDescription] = useState("");
   const [evidence, setEvidence] = useState([]);
@@ -51,7 +69,31 @@ export default function ViolationsScreen() {
   const [formError, setFormError] = useState("");
 
   const violations = data?.violations ?? [];
-  const stalls = stallsQuery.data?.stalls ?? [];
+  const allStalls = stallsQuery.data?.stalls ?? [];
+  const applications = applicationsQuery.data?.applications ?? [];
+
+  // A violation only makes sense against a stall that's actually occupied —
+  // vacant and pending-only stalls have no tenant to report.
+  const stalls = useMemo(
+    () => allStalls.filter((s) => getActiveApp(s.id, applications)?.status === "approved"),
+    [allStalls, applications],
+  );
+
+  // Rendering every stall as its own row got noticeably laggy once the
+  // market had a lot of them — filter first, then only render one page at a
+  // time, same Prev/Next-by-page pattern as the web admin tables.
+  const filteredStalls = useMemo(() => {
+    const q = stallSearch.trim().toLowerCase();
+    if (!q) return stalls;
+    return stalls.filter((s) => s.stall_name.toLowerCase().includes(q));
+  }, [stalls, stallSearch]);
+  const stallTotalPages = Math.max(1, Math.ceil(filteredStalls.length / STALL_PAGE_SIZE));
+  // Clamped rather than reset elsewhere — a shrinking search result can
+  // leave `stallPage` past the new last page without this.
+  const clampedStallPage = Math.min(stallPage, stallTotalPages);
+  const stallPageFrom = filteredStalls.length === 0 ? 0 : (clampedStallPage - 1) * STALL_PAGE_SIZE + 1;
+  const stallPageTo = Math.min(clampedStallPage * STALL_PAGE_SIZE, filteredStalls.length);
+  const visibleStalls = filteredStalls.slice((clampedStallPage - 1) * STALL_PAGE_SIZE, clampedStallPage * STALL_PAGE_SIZE);
 
   const shown = useMemo(
     () => (filter === "all" ? violations : violations.filter((v) => v.status === filter)),
@@ -84,8 +126,30 @@ export default function ViolationsScreen() {
     }
   };
 
+  const pickFile = async () => {
+    // copyToCacheDirectory MUST stay false. With it on, Android copies the pick
+    // into a file:// path under Expo Go's own cache, which the sandboxed app
+    // then can't read ("Location ... isn't readable"). Left off, the picker
+    // returns the original content:// uri, which expo-file-system grants read
+    // access to unconditionally and opens via contentResolver.
+    const result = await DocumentPicker.getDocumentAsync({
+      type: DOCUMENT_PICKER_TYPES,
+      copyToCacheDirectory: false,
+    });
+    if (!result.canceled && result.assets?.[0]) {
+      try {
+        const file = await readAssetForUpload(result.assets[0]);
+        setEvidence((prev) => [...prev, { ...file, size: formatFileSize(file.size) }]);
+      } catch (error) {
+        Alert.alert("Cannot attach file", error.message);
+      }
+    }
+  };
+
   const resetForm = () => {
     setStallId("");
+    setStallSearch("");
+    setStallPage(1);
     setCategory("Health Violation");
     setDescription("");
     setEvidence([]);
@@ -122,30 +186,6 @@ export default function ViolationsScreen() {
     }
   };
 
-  const resolve = (v, status) => {
-    Alert.alert(
-      status === "resolved" ? "Mark resolved?" : "Dismiss violation?",
-      `${v.category} at ${v.stallName ?? "this stall"}.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: status === "resolved" ? "Resolve" : "Dismiss",
-          onPress: async () => {
-            setBusyId(v.id);
-            try {
-              await updateViolation(v.id, { status });
-              await refetch();
-            } catch (e) {
-              Alert.alert("Failed", e instanceof Error ? e.message : "Try again.");
-            } finally {
-              setBusyId(null);
-            }
-          },
-        },
-      ],
-    );
-  };
-
   return (
     <SafeAreaView className="flex-1 bg-gray-50" edges={["top"]}>
       <OfficerHeader
@@ -164,8 +204,10 @@ export default function ViolationsScreen() {
 
       <View className="border-b border-gray-200 bg-white px-5 pb-3">
         <View className="flex-row gap-2">
-          {["all", "open", "resolved", "dismissed"].map((f) => {
+          {["all", "open", "reviewed", "resolved", "dismissed"].map((f) => {
             const active = filter === f;
+            const label =
+              f === "open" ? "Pending Action" : f === "reviewed" ? "Reviewing" : f === "all" ? "All" : f;
             return (
               <Pressable
                 key={f}
@@ -175,7 +217,7 @@ export default function ViolationsScreen() {
                 <Text
                   className={`text-xs font-semibold capitalize ${active ? "text-white" : "text-gray-600"}`}
                 >
-                  {f}
+                  {label}
                 </Text>
               </Pressable>
             );
@@ -201,50 +243,43 @@ export default function ViolationsScreen() {
           <View className="gap-3 px-4 pt-4">
             {shown.map((v) => {
               const s = STATUS_STYLE[v.status];
+              const expanded = expandedId === v.id;
               return (
                 <Card key={v.id} className="p-4">
-                  <View className="flex-row items-start justify-between">
+                  <Pressable
+                    onPress={() => setExpandedId((id) => (id === v.id ? null : v.id))}
+                    className="flex-row items-start justify-between"
+                  >
                     <View className="flex-1 pr-3">
                       <Text className="text-sm font-semibold text-gray-900">{v.stallName ?? "Stall"}</Text>
                       <Text className="mt-0.5 text-xs text-gray-500">{v.category}</Text>
                     </View>
-                    <View className={`self-start rounded-full px-2.5 py-1 ${s.bg}`}>
-                      <Text className={`text-[10px] font-semibold ${s.text}`}>{s.label}</Text>
+                    <View className="flex-row items-center gap-2">
+                      <View className={`self-start rounded-full px-2.5 py-1 ${s.bg}`}>
+                        <Text className={`text-[10px] font-semibold ${s.text}`}>{s.label}</Text>
+                      </View>
+                      <Ionicons
+                        name={expanded ? "chevron-up" : "chevron-down"}
+                        size={16}
+                        color="#9ca3af"
+                      />
                     </View>
-                  </View>
+                  </Pressable>
 
-                  <Text className="mt-3 text-xs leading-5 text-gray-600">{v.description}</Text>
+                  {expanded ? (
+                    <>
+                      <Text className="mt-3 text-xs leading-5 text-gray-600">{v.description}</Text>
 
-                  <Attachments files={v.evidence} />
+                      <Attachments files={v.evidence} />
 
-                  <Text className="mt-3 text-[11px] text-gray-400">
-                    {v.officerName ? `By ${v.officerName} · ` : ""}
-                    {formatDate(v.createdAt)}
-                    {v.resolvedAt ? ` · closed ${formatDate(v.resolvedAt)}` : ""}
-                  </Text>
-
-                  {v.status === "open" ? (
-                    <View className="mt-3 flex-row gap-2 border-t border-gray-100 pt-3">
-                      <Pressable
-                        onPress={() => resolve(v, "dismissed")}
-                        disabled={busyId === v.id}
-                        className="flex-1 items-center rounded-xl bg-gray-100 py-2.5"
-                      >
-                        <Text className="text-xs font-semibold text-gray-700">Dismiss</Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => resolve(v, "resolved")}
-                        disabled={busyId === v.id}
-                        className="flex-1 items-center rounded-xl bg-emerald-500 py-2.5"
-                      >
-                        {busyId === v.id ? (
-                          <ActivityIndicator size="small" color="#ffffff" />
-                        ) : (
-                          <Text className="text-xs font-semibold text-white">Resolve</Text>
-                        )}
-                      </Pressable>
-                    </View>
+                      <Text className="mt-3 text-[11px] text-gray-400">
+                        {v.officerName ? `By ${v.officerName} · ` : ""}
+                        {formatDate(v.createdAt)}
+                        {v.resolvedAt ? ` · closed ${formatDate(v.resolvedAt)}` : ""}
+                      </Text>
+                    </>
                   ) : null}
+
                 </Card>
               );
             })}
@@ -278,33 +313,93 @@ export default function ViolationsScreen() {
                 Stall <Text className="text-red-500">*</Text>
               </Text>
               {stalls.length === 0 ? (
-                <Text className="text-xs text-gray-400">No stalls available.</Text>
+                <Text className="text-xs text-gray-400">
+                  No occupied stalls to report on — only stalls with an approved tenant can be reported.
+                </Text>
               ) : (
-                <View className="gap-2">
-                  {stalls.map((s) => {
-                    const active = stallId === s.id;
-                    return (
-                      <Pressable
-                        key={s.id}
-                        onPress={() => {
-                          setStallId(s.id);
-                          setFormError("");
-                        }}
-                        className={`flex-row items-center rounded-xl border px-3 py-3 ${
-                          active ? "border-amber-500 bg-amber-50" : "border-gray-200 bg-white"
-                        }`}
-                      >
-                        <Ionicons
-                          name={active ? "radio-button-on" : "radio-button-off"}
-                          size={16}
-                          color={active ? "#f59e0b" : "#9ca3af"}
-                        />
-                        <Text className="ml-2 flex-1 text-xs font-medium text-gray-800">{s.stall_name}</Text>
-                        <Text className="text-[10px] text-gray-400">Sec {s.section}</Text>
+                <>
+                  <View className="mb-2 flex-row items-center rounded-xl border border-gray-200 bg-gray-50 px-3">
+                    <Ionicons name="search-outline" size={14} color="#9ca3af" />
+                    <TextInput
+                      className="ml-2 flex-1 py-2.5 text-xs text-gray-800"
+                      placeholder="Search stall name"
+                      placeholderTextColor="#9ca3af"
+                      value={stallSearch}
+                      onChangeText={(v) => {
+                        setStallSearch(v);
+                        setStallPage(1);
+                      }}
+                    />
+                    {stallSearch ? (
+                      <Pressable onPress={() => setStallSearch("")} hitSlop={8}>
+                        <Ionicons name="close-circle" size={14} color="#9ca3af" />
                       </Pressable>
-                    );
-                  })}
-                </View>
+                    ) : null}
+                  </View>
+
+                  {filteredStalls.length === 0 ? (
+                    <Text className="text-xs text-gray-400">No stalls match "{stallSearch}".</Text>
+                  ) : (
+                    <View className="gap-2">
+                      {visibleStalls.map((s) => {
+                        const active = stallId === s.id;
+                        return (
+                          <Pressable
+                            key={s.id}
+                            onPress={() => {
+                              setStallId(s.id);
+                              setFormError("");
+                            }}
+                            className={`flex-row items-center rounded-xl border px-3 py-3 ${
+                              active ? "border-amber-500 bg-amber-50" : "border-gray-200 bg-white"
+                            }`}
+                          >
+                            <Ionicons
+                              name={active ? "radio-button-on" : "radio-button-off"}
+                              size={16}
+                              color={active ? "#f59e0b" : "#9ca3af"}
+                            />
+                            <Text className="ml-2 flex-1 text-xs font-medium text-gray-800">{s.stall_name}</Text>
+                            <Text className="text-[10px] text-gray-400">Sec {s.section}</Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  )}
+
+                  {filteredStalls.length > 0 ? (
+                    <View className="mt-3 flex-row items-center justify-between border-t border-gray-100 pt-3">
+                      <Text className="text-[11px] text-gray-400">
+                        {`Showing ${stallPageFrom}–${stallPageTo} of ${filteredStalls.length}`}
+                      </Text>
+                      <View className="flex-row items-center gap-2">
+                        <Pressable
+                          onPress={() => setStallPage((p) => Math.max(1, p - 1))}
+                          disabled={clampedStallPage <= 1}
+                          className={`flex-row items-center gap-0.5 rounded-lg border border-gray-200 px-2.5 py-1.5 ${
+                            clampedStallPage <= 1 ? "opacity-40" : ""
+                          }`}
+                        >
+                          <Ionicons name="chevron-back" size={12} color="#374151" />
+                          <Text className="text-[11px] font-medium text-gray-700">Prev</Text>
+                        </Pressable>
+                        <Text className="text-[11px] text-gray-400">
+                          Page {clampedStallPage} of {stallTotalPages}
+                        </Text>
+                        <Pressable
+                          onPress={() => setStallPage((p) => Math.min(stallTotalPages, p + 1))}
+                          disabled={clampedStallPage >= stallTotalPages}
+                          className={`flex-row items-center gap-0.5 rounded-lg border border-gray-200 px-2.5 py-1.5 ${
+                            clampedStallPage >= stallTotalPages ? "opacity-40" : ""
+                          }`}
+                        >
+                          <Text className="text-[11px] font-medium text-gray-700">Next</Text>
+                          <Ionicons name="chevron-forward" size={12} color="#374151" />
+                        </Pressable>
+                      </View>
+                    </View>
+                  ) : null}
+                </>
               )}
             </Card>
 
@@ -372,16 +467,24 @@ export default function ViolationsScreen() {
                 </View>
               ) : null}
 
-              <Pressable
-                onPress={capturePhoto}
-                disabled={submitting}
-                className="flex-row items-center justify-center rounded-xl border border-gray-200 bg-white py-3"
-              >
-                <Ionicons name="camera-outline" size={18} color="#374151" />
-                <Text className="ml-2 text-xs font-semibold text-gray-700">
-                  {evidence.length > 0 ? "Add another photo" : "Take photo"}
-                </Text>
-              </Pressable>
+              <View className="flex-row gap-2">
+                <Pressable
+                  onPress={capturePhoto}
+                  disabled={submitting}
+                  className="flex-1 flex-row items-center justify-center rounded-xl border border-gray-200 bg-white py-3"
+                >
+                  <Ionicons name="camera-outline" size={18} color="#374151" />
+                  <Text className="ml-2 text-xs font-semibold text-gray-700">Take photo</Text>
+                </Pressable>
+                <Pressable
+                  onPress={pickFile}
+                  disabled={submitting}
+                  className="flex-1 flex-row items-center justify-center rounded-xl border border-gray-200 bg-white py-3"
+                >
+                  <Ionicons name="folder-outline" size={18} color="#374151" />
+                  <Text className="ml-2 text-xs font-semibold text-gray-700">Choose file</Text>
+                </Pressable>
+              </View>
             </Card>
 
             {formError ? (
@@ -393,6 +496,7 @@ export default function ViolationsScreen() {
             <Pressable
               onPress={submitReport}
               disabled={submitting}
+              style={buttonShadow("#f59e0b")}
               className={`mt-6 items-center rounded-xl py-4 ${submitting ? "bg-amber-500/50" : "bg-amber-500"}`}
             >
               {submitting ? (

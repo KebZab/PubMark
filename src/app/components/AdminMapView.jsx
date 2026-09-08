@@ -30,6 +30,9 @@ import { FloorSwitcher } from "./FloorSwitcher";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
 import { usePerimeters } from "../hooks/usePerimeters";
+import { useMapFacilities } from "../hooks/useMapFacilities";
+import { MapFacilitiesLayer, MapFacilitiesLegend, stallFloaterHtml } from "./MapFacilitiesLayer";
+import { registerMapFloater } from "./mapFloaterDeclutter";
 import {
   createStall,
   updateStall,
@@ -40,7 +43,7 @@ import {
 import { showToast } from "./Toast";
 import { AttachmentLink } from "./AttachmentLink";
 import { ImageViewerModal } from "./ImageViewerModal";
-import { readFileForUpload, describeFileProblem, MAX_ATTACHMENT_BYTES, formatFileSize } from "../services/fileUpload";
+import { uploadFileDirect, describeFileProblem, MAX_ATTACHMENT_BYTES, formatFileSize } from "../services/fileUpload";
 
 // Stall photos only — a PDF wouldn't make sense as a photo of the stall,
 // even though the shared attachment allowlist also accepts one.
@@ -69,8 +72,7 @@ function calculatePolygonArea(geometry) {
   for (let i = 0; i < coords.length - 1; i++) {
     const p1 = L.latLng(coords[i][1], coords[i][0]);
     const p2 = L.latLng(coords[i + 1][1], coords[i + 1][0]);
-    const dx = p2.lng - p1.lng;
-    const dy = p2.lat - p1.lat;
+
     area += p1.lng * p2.lat - p2.lng * p1.lat;
   }
   return (Math.abs(area) * 40075000 * 40075000) / (360 * 360) / 2; // sq meters
@@ -187,6 +189,7 @@ function DrawControl({
     map.addLayer(fg);
 
     const layersMap = new Map();
+    const unregisterFloaters = [];
     let mainControl = null;
     // toolbarForDraw = control was opened via "Create New Stall"
     let toolbarForDraw = false;
@@ -266,9 +269,12 @@ function DrawControl({
         const path = l;
         path._stallId = stall.id;
         path._stallName = stall.stall_name;
-        path.bindTooltip(stallTooltip(stall), { direction: "top", opacity: 0.95 });
+        path.bindTooltip(stallFloaterHtml(stall.stall_name, color), { permanent: true, direction: "center", className: "vendor-stall-floater", opacity: 0.95 });
         path.on("click", () => cbRef.current.onSelectStall(stall.id));
         fg.addLayer(path);
+        const floaterRegistration = registerMapFloater(map, path);
+        path._setFloaterSelected = floaterRegistration.setSelected;
+        unregisterFloaters.push(floaterRegistration);
         paths.push(path);
       });
       layersMap.set(stall.id, paths);
@@ -291,14 +297,15 @@ function DrawControl({
         layersMap.forEach((paths, stallId) => {
           const sel = stallId === id;
           const baseColor = stallColor(stallId);
-          paths.forEach((p) =>
+          paths.forEach((p) => {
+            p._setFloaterSelected?.(sel);
             p.setStyle({
               color: sel ? "#1d4ed8" : baseColor,
               fillColor: sel ? "#1d4ed8" : baseColor,
               fillOpacity: sel ? 0.35 : 0.2,
               weight: sel ? 3 : 2,
-            }),
-          );
+            });
+          });
         });
       },
       enableEditMode: () => {
@@ -352,6 +359,7 @@ function DrawControl({
     map.on("draw:deletestop", onEditStop);
 
     return () => {
+      unregisterFloaters.forEach((remove) => remove());
       map.off(L.Draw.Event.CREATED, onDrawCreated);
       map.off(L.Draw.Event.EDITED, onDrawEdited);
       map.off(L.Draw.Event.DELETED, onDrawDeleted);
@@ -593,21 +601,6 @@ function FlyTo({ target }) {
   return null;
 }
 
-// ── InfoRow ──────────────────────────────────────────────────────────────────
-function InfoRow({ icon: Icon, label, value }) {
-  return (
-    <div className="flex items-start gap-3 py-2.5 border-b border-gray-100 last:border-0">
-      <div className="w-7 h-7 bg-gray-50 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
-        <Icon className="w-3.5 h-3.5 text-gray-500" />
-      </div>
-      <div>
-        <p className="text-xs font-medium text-gray-400 uppercase tracking-wide">{label}</p>
-        <p className="text-sm font-medium text-gray-800 mt-0.5">{value}</p>
-      </div>
-    </div>
-  );
-}
-
 // ── Stall form ────────────────────────────────────────────────────────────────
 const BUSINESS_TYPES = [
   "Food & Beverage",
@@ -631,9 +624,12 @@ function StallForm({ title, subtitle, initialValues, defaultFloor, onSave, onCan
   const [notes, setNotes] = useState(initialValues?.notes ?? "");
   const [images, setImages] = useState(initialValues?.images ?? []);
   const [saving, setSaving] = useState(false);
+  const [uploadingImages, setUploadingImages] = useState(false);
 
   // A new stall must show vendors what it actually looks like — the server
-  // enforces this too, so this is a UX gate, not the only guard.
+  // enforces this too, so this is a UX gate, not the only guard. Each file
+  // uploads straight to Storage via a signed URL as soon as it's picked,
+  // rather than waiting to be base64'd into the eventual save request.
   async function handleAddImages(e) {
     // Snapshot into a plain array before clearing the input — resetting
     // e.target.value empties the live FileList e.target.files still points
@@ -641,17 +637,22 @@ function StallForm({ title, subtitle, initialValues, defaultFloor, onSave, onCan
     const files = Array.from(e.target.files || []);
     e.target.value = "";
     if (files.length === 0) return;
-    const added = [];
-    for (const file of files) {
-      const problem = describeFileProblem(file);
-      if (problem) { showToast(problem, "error"); continue; }
-      try {
-        added.push(await readFileForUpload(file));
-      } catch (error) {
-        showToast(error.message, "error");
+    setUploadingImages(true);
+    try {
+      const added = [];
+      for (const file of files) {
+        const problem = describeFileProblem(file);
+        if (problem) { showToast(problem, "error"); continue; }
+        try {
+          added.push(await uploadFileDirect(file, "stalls"));
+        } catch (error) {
+          showToast(error.message, "error");
+        }
       }
+      if (added.length) setImages((prev) => [...prev, ...added]);
+    } finally {
+      setUploadingImages(false);
     }
-    if (added.length) setImages((prev) => [...prev, ...added]);
   }
 
   return (
@@ -803,11 +804,21 @@ function StallForm({ title, subtitle, initialValues, defaultFloor, onSave, onCan
             />
             <button
               type="button"
+              disabled={uploadingImages}
               onClick={() => document.getElementById("stall-images")?.click()}
-              className="w-full flex items-center justify-center gap-2 py-3 border-2 border-dashed border-teal-300 rounded-xl text-[#0d9488] text-sm font-medium hover:bg-teal-50 transition-colors"
+              className="w-full flex items-center justify-center gap-2 py-3 border-2 border-dashed border-teal-300 rounded-xl text-[#0d9488] text-sm font-medium hover:bg-teal-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <Upload className="w-4 h-4" />
-              {images.length > 0 ? "Add More Photos" : "Upload Photos"}
+              {uploadingImages ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                <>
+                  <Upload className="w-4 h-4" />
+                  {images.length > 0 ? "Add More Photos" : "Upload Photos"}
+                </>
+              )}
             </button>
             <p className="text-xs text-gray-500 mt-1.5">
               Required — vendors see this when browsing this stall.{" "}
@@ -818,7 +829,7 @@ function StallForm({ title, subtitle, initialValues, defaultFloor, onSave, onCan
                 {images.map((img, i) => (
                   <div key={img.id ?? i} className="relative aspect-square rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
                     <img
-                      src={img.url ?? `data:${img.type};base64,${img.base64}`}
+                      src={img.url ?? img.previewUrl ?? `data:${img.type};base64,${img.base64}`}
                       alt={img.name}
                       className="w-full h-full object-cover"
                     />
@@ -859,7 +870,7 @@ function StallForm({ title, subtitle, initialValues, defaultFloor, onSave, onCan
             </button>
             <button
               type="submit"
-              disabled={saving || !stallName.trim() || images.length === 0}
+              disabled={saving || uploadingImages || !stallName.trim() || images.length === 0}
               className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl text-sm font-medium hover:shadow-md hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {saving ? (
@@ -905,9 +916,10 @@ function PerimeterLayer({ geometry }) {
 
 // ── Main Component ───────────────────────────────────────────────────────────
 export function AdminMapView() {
-  const { perimeters } = usePerimeters();
-  const { stalls: storedStalls, refetch } = useStalls();
+  const { perimeters, loading: perimetersLoading } = usePerimeters();
+  const { stalls: storedStalls, refetch, loading: stallsLoading } = useStalls();
   const { applications } = useApplications();
+  const mapDataLoading = stallsLoading || perimetersLoading;
   const [contractModal, setContractModal] = useState(null);
   const [selectedStallId, setSelectedStallId] = useState(null);
   const [pendingLayer, setPendingLayer] = useState(null);
@@ -917,6 +929,7 @@ export function AdminMapView() {
   const [isEditMode, setIsEditMode] = useState(false);
   const [isToolbarVisible, setIsToolbarVisible] = useState(false);
   const [activeFloor, setActiveFloor] = useState("1");
+  const { facilities } = useMapFacilities(activeFloor);
 
   const drawApiRef = useRef(null);
   const floorStalls = useMemo(
@@ -1194,6 +1207,14 @@ export function AdminMapView() {
 
       {/* ── Map (full area) ──────────────────────────── */}
       <div className="flex-1 relative">
+        {mapDataLoading && (
+          <div className="absolute inset-0 z-[1100] flex items-center justify-center bg-white/70 backdrop-blur-[1px]">
+            <div className="flex flex-col items-center gap-3">
+              <Loader2 className="w-7 h-7 text-teal-600 animate-spin" />
+              <p className="text-sm font-medium text-gray-600">Loading stalls…</p>
+            </div>
+          </div>
+        )}
         <MapContainer
           center={[10.6054, 123.0413]}
           zoom={18}
@@ -1224,6 +1245,7 @@ export function AdminMapView() {
             <PerimeterLayer key={zone.id} geometry={zone.geometry} />
           ))}
           <FlyTo target={flyToTarget} />
+          <MapFacilitiesLayer facilities={facilities} />
         </MapContainer>
 
         {/* ── Top-center: Floor Switcher ── */}
@@ -1248,6 +1270,7 @@ export function AdminMapView() {
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
               Legend
             </p>
+            <MapFacilitiesLegend className="mb-2 space-y-1 border-b pb-2" />
             <div className="flex items-center gap-2.5">
               <div className="w-7 h-4 rounded border-2 border-green-500 bg-green-500/20" />
               <span className="text-xs font-medium text-gray-700">Vacant</span>

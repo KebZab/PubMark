@@ -4,6 +4,8 @@ import cors from "cors";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import pg from "pg";
+import crypto from "node:crypto";
+import nodemailer from "nodemailer";
 import { createClient } from "@supabase/supabase-js";
 
 const app = express();
@@ -11,7 +13,18 @@ const port = Number(process.env.PORT || 4000);
 const jwtSecret = process.env.JWT_SECRET;
 if (!jwtSecret) throw new Error("JWT_SECRET is required.");
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required. Copy server/.env.example to server/.env and fill in real values.");
-const db = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+const db = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+  // Safe defaults for Supabase's connection pooler: cap how many clients we
+  // hold open, fail fast on a stuck connection attempt instead of hanging
+  // the request forever, and bound how long any single query can run.
+  max: 10,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 10_000,
+  statement_timeout: 15_000,
+  query_timeout: 15_000,
+});
 
 // ── Attachments (Supabase Storage) ──────────────────────────────────────────
 // One private bucket holds every attachment, separated by prefix:
@@ -33,6 +46,44 @@ const VIRTUAL_PATH_PREFIX = "virtual://";
 const supabaseStorage = process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
   ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
   : null;
+
+// ── Account confirmation email (super-admin-created accounts) ──────────────
+// Nothing is written to `profiles` when a super-admin submits the "Create
+// User" form — a `pending_user_creations` row is created instead and this
+// mailer sends the new person a confirmation link over Gmail SMTP. Without
+// real Gmail credentials configured, the link is logged instead of emailed,
+// so local dev works with no SMTP setup. Unlike a free-tier transactional
+// email API (Resend, SendGrid, etc.), a real Gmail account can send to any
+// recipient immediately — no domain verification required — which is why
+// this app uses it instead, despite the one-time App Password setup cost.
+const mailer = process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD
+  ? nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD },
+    })
+  : null;
+
+function apiPublicUrl() {
+  return process.env.API_PUBLIC_URL || `http://localhost:${port}`;
+}
+
+function confirmUserSignupUrl(token) {
+  return `${apiPublicUrl()}/api/auth/confirm-user?token=${token}`;
+}
+
+async function sendUserConfirmationEmail(email, token) {
+  const url = confirmUserSignupUrl(token);
+  if (!mailer) {
+    console.log(`[pending user confirmation] ${email}: ${url}`);
+    return;
+  }
+  await mailer.sendMail({
+    from: process.env.GMAIL_USER,
+    to: email,
+    subject: "Confirm your PubMark account",
+    html: `<p>An administrator created a PubMark account for you.</p><p>Click the link below to confirm your email and activate the account:</p><p><a href="${url}">${url}</a></p><p>This link expires in 24 hours. If you weren't expecting this, you can ignore this email.</p>`,
+  });
+}
 
 class AttachmentError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -100,6 +151,19 @@ async function removeAttachment(storagePath) {
   await supabaseStorage.storage.from(ATTACHMENTS_BUCKET).remove([storagePath]).catch(() => {});
 }
 
+// Confirms a client-reported upload is real before the server ever trusts it
+// as a database reference: the path must be under the folder this specific
+// user was signed to upload into, and the object must actually exist there
+// (a client could otherwise claim any path with no file behind it).
+async function verifyUploadedObject(storagePath, expectedPrefix) {
+  if (!supabaseStorage || !storagePath || !storagePath.startsWith(expectedPrefix)) return false;
+  const lastSlash = storagePath.lastIndexOf("/");
+  const folder = storagePath.slice(0, lastSlash);
+  const fileName = storagePath.slice(lastSlash + 1);
+  const { data } = await supabaseStorage.storage.from(ATTACHMENTS_BUCKET).list(folder, { search: fileName });
+  return Array.isArray(data) && data.some((f) => f.name === fileName);
+}
+
 /**
  * Uploads a list of attachments for one owning record and returns the rows to
  * insert. If any file is rejected, everything already uploaded in this batch
@@ -128,6 +192,41 @@ async function storeAttachments(prefix, ownerId, files, uploadedBy) {
     throw error;
   }
   return stored;
+}
+
+/**
+ * Resolves attachments the client already uploaded directly to Storage via a
+ * signed URL from POST /api/uploads/sign — verifies each one is real and
+ * actually belongs to this user before the caller ever writes its path into
+ * the database. If any entry fails verification, every entry already
+ * confirmed in this same batch is removed, so a rejected upload doesn't leave
+ * its siblings orphaned in Storage with no database row pointing at them.
+ */
+async function resolvePreSignedAttachments(prefix, userId, entries) {
+  const list = (Array.isArray(entries) ? entries : []).filter(Boolean);
+  const expectedPrefix = `${prefix}/${userId}/`;
+  const resolved = [];
+  try {
+    for (const entry of list) {
+      const storagePath = String(entry.path || "");
+      const ok = await verifyUploadedObject(storagePath, expectedPrefix);
+      if (!ok) {
+        throw new AttachmentError(
+          `"${entry.fileName || "The attachment"}" could not be verified. Please upload it again.`
+        );
+      }
+      resolved.push({
+        storagePath,
+        fileName: String(entry.fileName || "attachment"),
+        mimeType: String(entry.mimeType || "application/octet-stream"),
+        fileSize: Number(entry.fileSize) || 0,
+      });
+    }
+  } catch (error) {
+    await Promise.all(resolved.map((f) => removeAttachment(f.storagePath)));
+    throw error;
+  }
+  return resolved;
 }
 const configuredOrigins = (process.env.CLIENT_ORIGIN || "").split(",").map((origin) => origin.trim()).filter(Boolean);
 const allowedOrigins = new Set(configuredOrigins);
@@ -166,11 +265,35 @@ function setSession(res, profile) {
 }
 // Accepts either an Authorization: Bearer token (mobile) or the session cookie
 // (web). React Native does not persist cookies reliably, hence the header path.
-function requireAuth(req, res, next) {
+//
+// Also checks `is_archived` on every request (not just at login) — a vendor
+// whose account gets terminated while they're still signed in is cut off on
+// their very next action instead of staying logged in until their token's
+// natural 8h expiry. `code: "account_terminated"` lets the client tell this
+// apart from an ordinary expired/invalid session and force a clean logout.
+async function requireAuth(req, res, next) {
   const bearerToken = req.headers.authorization?.match(/^Bearer (.+)$/i)?.[1];
   const cookieToken = req.headers.cookie?.match(/(?:^|; )pubmark_session=([^;]+)/)?.[1];
-  try { req.auth = jwt.verify(bearerToken || cookieToken || "", jwtSecret); next(); }
-  catch { res.status(401).json({ message: "Sign in is required." }); }
+  let auth;
+  try { auth = jwt.verify(bearerToken || cookieToken || "", jwtSecret); }
+  catch {
+    res.clearCookie("pubmark_session", cookieOptions());
+    return res.status(401).json({ message: "Sign in is required.", code: "session_invalid" });
+  }
+  try {
+    const { rows } = await db.query("SELECT role, is_archived FROM profiles WHERE id = $1", [auth.sub]);
+    if (!rows[0]) {
+      res.clearCookie("pubmark_session", cookieOptions());
+      return res.status(401).json({ message: "Sign in is required.", code: "session_invalid" });
+    }
+    if (rows[0].is_archived) {
+      res.clearCookie("pubmark_session", cookieOptions());
+      return res.status(401).json({ message: "This account has been terminated.", code: "account_terminated" });
+    }
+    auth.role = rows[0].role;
+  } catch (error) { return next(error); }
+  req.auth = auth;
+  next();
 }
 function profile(row) { return { id: row.id, email: row.email, name: row.name, role: row.role, address: row.address, phone: row.phone, department: row.department, createdAt: row.created_at }; }
 function requireRole(...roles) { return (req, res, next) => { if (!roles.includes(req.auth?.role)) return res.status(403).json({ message: "Access denied." }); next(); }; }
@@ -181,12 +304,25 @@ function parsePagination(req, maxLimit = 100) {
   return { limit, offset };
 }
 
+// For stable, frequently-repeated public reads (stalls/facilities/perimeters
+// on map screens) — sends a strong ETag over the exact JSON body and answers
+// with a bodyless 304 when the caller's cached copy is still current, so
+// polling a screen that hasn't changed doesn't re-send the full payload.
+function sendWithETag(req, res, payload) {
+  const body = JSON.stringify(payload);
+  const etag = `"${crypto.createHash("sha1").update(body).digest("hex")}"`;
+  res.set("ETag", etag);
+  if (req.headers["if-none-match"] === etag) return res.status(304).end();
+  res.type("application/json").send(body);
+}
+
 function mapAnnouncementRow(row) {
   return {
     id: row.id,
     title: row.title,
     message: row.message,
     type: row.type,
+    category: row.category || null,
     createdAt: row.created_at,
     author: row.author_name || "Admin",
     authorId: row.author_id,
@@ -240,10 +376,12 @@ async function getCheckRequestFilesMap(requestIds) {
     `SELECT id, check_request_id, storage_path, file_name, mime_type, file_size FROM check_request_files WHERE check_request_id IN (${placeholders}) ORDER BY created_at ASC`,
     requestIds
   );
-  const filesMap = new Map();
-  for (const row of rows) {
-    const existing = filesMap.get(row.check_request_id) || [];
-    existing.push({
+  // Signed URLs are generated in parallel, not one at a time — this runs on
+  // GET /api/check-requests, so a sequential await per file across every
+  // request turned a page with several inspections into a slow wait.
+  const entries = await Promise.all(rows.map(async (row) => ({
+    checkRequestId: row.check_request_id,
+    file: {
       // `id` lets a client hand an existing file back on update without
       // re-uploading it; `url` is null for rows recorded before real uploads.
       id: row.id,
@@ -251,8 +389,13 @@ async function getCheckRequestFilesMap(requestIds) {
       type: mapCompletionFileType(row.mime_type),
       size: formatBytes(row.file_size),
       url: await signedUrlFor(row.storage_path),
-    });
-    filesMap.set(row.check_request_id, existing);
+    },
+  })));
+  const filesMap = new Map();
+  for (const { checkRequestId, file } of entries) {
+    const existing = filesMap.get(checkRequestId) || [];
+    existing.push(file);
+    filesMap.set(checkRequestId, existing);
   }
   return filesMap;
 }
@@ -268,6 +411,10 @@ function mapCheckRequestRow(row, filesMap = new Map()) {
     assignedToName: row.assigned_to_name,
     priority: row.priority,
     reason: row.reason,
+    // Set only when this request was generated from a violation report's
+    // "Send Req" — lets the UI show it as a followup instead of a generic
+    // priority-based check request.
+    category: row.category || null,
     notes: row.notes || "",
     status: row.status,
     createdAt: row.created_at,
@@ -286,6 +433,7 @@ function mapViolationRequestRow(row) {
     requestedBy: row.requested_by,
     requestedByName: row.requested_by_name,
     reason: row.reason,
+    category: row.category || null,
     status: row.status,
     assignedOfficerId: row.assigned_officer_id,
     assignedOfficerName: row.assigned_officer_name,
@@ -294,10 +442,15 @@ function mapViolationRequestRow(row) {
   };
 }
 
-async function listCheckRequestsInternal() {
+async function listCheckRequestsInternal(officerId = null, { includeArchived = false } = {}) {
+  const params = [];
+  const conditions = [];
+  if (officerId) { params.push(officerId); conditions.push(`(cr.assigned_to = $${params.length} OR cr.assigned_to IS NULL)`); }
+  if (!includeArchived) conditions.push("cr.is_archived = false");
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const { rows } = await db.query(`
     SELECT
-      cr.id, cr.stall_id, cr.requested_by, cr.assigned_to, cr.priority, cr.reason, cr.notes,
+      cr.id, cr.stall_id, cr.requested_by, cr.assigned_to, cr.priority, cr.reason, cr.category, cr.notes,
       cr.status, cr.created_at, cr.completed_at, cr.completion_notes, cr.completion_summary,
       s.stall_name,
       rp.name AS requested_by_name,
@@ -306,8 +459,9 @@ async function listCheckRequestsInternal() {
     LEFT JOIN stalls s ON s.id = cr.stall_id
     LEFT JOIN profiles rp ON rp.id = cr.requested_by
     LEFT JOIN profiles ap ON ap.id = cr.assigned_to
+    ${where}
     ORDER BY cr.created_at DESC
-  `);
+  `, params);
   const filesMap = await getCheckRequestFilesMap(rows.map((row) => row.id));
   return rows.map((row) => mapCheckRequestRow(row, filesMap));
 }
@@ -315,7 +469,7 @@ async function listCheckRequestsInternal() {
 async function listViolationRequestsInternal() {
   const { rows } = await db.query(`
     SELECT
-      vr.id, vr.stall_id, vr.requested_by, vr.reason, vr.status, vr.assigned_officer_id,
+      vr.id, vr.stall_id, vr.requested_by, vr.reason, vr.category, vr.status, vr.assigned_officer_id,
       vr.created_at, vr.completed_at,
       s.stall_name,
       rp.name AS requested_by_name,
@@ -332,7 +486,7 @@ async function listViolationRequestsInternal() {
 async function syncViolationRequestsToCheckRequests() {
   const { rows } = await db.query(`
     SELECT
-      vr.id, vr.stall_id, vr.requested_by, vr.assigned_officer_id, vr.reason, vr.status,
+      vr.id, vr.stall_id, vr.requested_by, vr.assigned_officer_id, vr.reason, vr.category, vr.status,
       vr.created_at, vr.completed_at
     FROM violation_requests vr
     LEFT JOIN check_requests cr ON cr.id = vr.id
@@ -341,7 +495,7 @@ async function syncViolationRequestsToCheckRequests() {
 
   for (const row of rows) {
     await db.query(
-      "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+      "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, category, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
       [
         row.id,
         row.stall_id,
@@ -349,6 +503,7 @@ async function syncViolationRequestsToCheckRequests() {
         row.assigned_officer_id,
         "normal",
         row.reason,
+        row.category,
         "Generated from violation request.",
         row.status === "completed" ? "completed" : "pending",
         row.created_at,
@@ -448,6 +603,10 @@ function mapTerminationRequestRow(row) {
     status: row.status,
     createdAt: row.created_at,
     resolvedAt: row.resolved_at,
+    // Only populated for type "account" — the stall(s), if any, the vendor
+    // still actively holds at the moment of the request, so an admin can see
+    // this before approving (which will end all of them as a side effect).
+    activeStalls: row.active_stalls ?? [],
   };
 }
 
@@ -456,11 +615,17 @@ function mapTerminationRequestRow(row) {
  *   vendor's own violations. Evidence photos are only signed for rows that
  *   come back, so this filter is what keeps one vendor from opening another
  *   vendor's evidence.
+ * @param {{includeArchived?: boolean}} [options] Staff views (vendorId null)
+ *   exclude archived violations by default, so an admin archiving a closed-
+ *   out violation makes it disappear from the working list; a vendor still
+ *   sees their own full history regardless.
  */
-async function listViolationsInternal(vendorId = null) {
+async function listViolationsInternal(vendorId = null, { includeArchived = !!vendorId } = {}) {
   const params = [];
-  let where = "";
-  if (vendorId) { params.push(vendorId); where = `WHERE v.vendor_id = $${params.length}`; }
+  const conditions = [];
+  if (vendorId) { params.push(vendorId); conditions.push(`v.vendor_id = $${params.length}`); }
+  if (!includeArchived) conditions.push("v.is_archived = false");
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const { rows } = await db.query(`
     SELECT
       v.id, v.stall_id, v.vendor_id, v.officer_id, v.category, v.description, v.status, v.remarks, v.created_at, v.resolved_at,
@@ -484,10 +649,17 @@ async function listTerminationRequestsInternal() {
       tr.id, tr.type, tr.vendor_id, tr.stall_id, tr.reason, tr.status, tr.created_at, tr.resolved_at,
       vp.name AS vendor_name,
       vp.email AS vendor_email,
-      s.stall_name
+      s.stall_name,
+      active.stalls AS active_stalls
     FROM termination_requests tr
     LEFT JOIN profiles vp ON vp.id = tr.vendor_id
     LEFT JOIN stalls s ON s.id = tr.stall_id
+    LEFT JOIN LATERAL (
+      SELECT json_agg(json_build_object('stallId', a.stall_id, 'stallName', st.stall_name, 'contractEnd', a.contract_end) ORDER BY a.contract_end) AS stalls
+      FROM applications a
+      JOIN stalls st ON st.id = a.stall_id
+      WHERE a.user_id = tr.vendor_id AND a.status = 'approved'
+    ) active ON tr.type = 'account'
     ORDER BY tr.created_at DESC
   `);
   return rows.map(mapTerminationRequestRow);
@@ -499,6 +671,24 @@ function displayFileName(storagePath) {
   if (!storagePath) return null;
   const base = String(storagePath).split("/").pop() || "";
   return base.replace(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-/i, "") || null;
+}
+
+// Keeps the stored stalls.status column truthful whenever an application's
+// approval state changes, so a direct look at the stalls table (Supabase
+// dashboard, a raw query, etc.) shows the same thing the app already
+// computes live everywhere else (AdminMapView, Analytics, SuperAdminDashboard).
+// "unavailable" is a real manual admin flag (maintenance/closure) and always
+// wins — this never overwrites it, matching the same precedence the UI uses.
+async function syncStallOccupancy(stallId, client = db) {
+  if (!stallId) return;
+  const { rows } = await client.query(
+    "SELECT 1 FROM applications WHERE stall_id = $1 AND status = 'approved' LIMIT 1",
+    [stallId]
+  );
+  await client.query(
+    "UPDATE stalls SET status = $1 WHERE id = $2 AND status <> 'unavailable'",
+    [rows.length > 0 ? "occupied" : "vacant", stallId]
+  );
 }
 
 async function mapApplicationRow(r) {
@@ -531,14 +721,35 @@ async function mapApplicationRow(r) {
     status: r.status,
     adminRemarks: r.admin_remarks || "",
     dateApplied: r.date_applied,
+    approvedAt: r.approved_at,
+    rejectedAt: r.rejected_at,
+    permitUploadedAt: r.permit_uploaded_at,
     permitDeadlineAt: permitMeta.permitDeadlineAt,
     permitDeadlineUpdatedAt: permitMeta.permitDeadlineUpdatedAt,
     permitTerminatedAt: permitMeta.permitTerminatedAt,
+    renewalDeadlineAt: r.renewal_deadline_at,
+    contractTerminatedAt: r.contract_terminated_at,
   };
 }
 
+async function autoTerminateExpiredContracts() {
+  const { rows } = await db.query(`
+    UPDATE applications
+    SET status = 'rejected', contract_terminated_at = NOW()
+    WHERE status = 'approved'
+      AND contract_terminated_at IS NULL
+      AND COALESCE(renewal_deadline_at, contract_end + INTERVAL '7 days') < NOW()
+      AND NOT EXISTS (
+        SELECT 1 FROM contract_renewal_requests rr
+        WHERE rr.application_id = applications.id AND rr.status = 'pending'
+      )
+    RETURNING stall_id
+  `);
+  for (const row of rows) await syncStallOccupancy(row.stall_id);
+}
+
 async function autoTerminateExpiredPermitDeadlines() {
-  const { rows } = await db.query("SELECT id, permit_path, status, admin_remarks FROM applications WHERE status = 'approved'");
+  const { rows } = await db.query("SELECT id, stall_id, permit_path, status, admin_remarks FROM applications WHERE status = 'approved'");
   const now = Date.now();
 
   for (const row of rows) {
@@ -571,14 +782,40 @@ async function autoTerminateExpiredPermitDeadlines() {
         row.id,
       ]
     );
+    await syncStallOccupancy(row.stall_id);
   }
 }
 
 app.post("/api/auth/login", async (req, res, next) => {
   try {
-    const { rows } = await db.query("SELECT * FROM profiles WHERE email = $1 LIMIT 1", [String(req.body.email || "").toLowerCase()]);
+    const email = String(req.body.email || "").toLowerCase();
+    const password = String(req.body.password || "");
+    const { rows } = await db.query("SELECT * FROM profiles WHERE email = $1 LIMIT 1", [email]);
     const user = rows[0];
-    if (!user || !(await bcrypt.compare(String(req.body.password || ""), user.password_hash))) return res.status(401).json({ message: "Invalid email or password." });
+    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+      // A super-admin-created account isn't in `profiles` yet if it's still
+      // waiting on its confirmation email — give that a clearer message than
+      // "invalid email or password". Only shown when the password actually
+      // matches the pending invite, so a wrong-password guess still can't
+      // reveal whether a pending invite exists for this email.
+      if (!user) {
+        const { rows: pendingRows } = await db.query(
+          "SELECT password_hash FROM pending_user_creations WHERE email = $1 AND expires_at > now()",
+          [email]
+        );
+        const pending = pendingRows[0];
+        if (pending && (await bcrypt.compare(password, pending.password_hash))) {
+          return res.status(403).json({
+            message: "Please confirm your email before signing in.",
+            code: "pending_confirmation",
+          });
+        }
+      }
+      return res.status(401).json({ message: "Invalid email or password." });
+    }
+    // Checked only after the password is confirmed correct, so a wrong
+    // guess never reveals whether an account was terminated.
+    if (user.is_archived) return res.status(403).json({ message: "This account has been terminated.", code: "account_terminated" });
     const result = profile(user); const token = setSession(res, result); res.json({ profile: result, token });
   } catch (error) { next(error); }
 });
@@ -597,6 +834,37 @@ app.post("/api/auth/register", async (req, res, next) => {
 app.get("/api/auth/me", requireAuth, async (req, res, next) => {
   try { const { rows } = await db.query("SELECT id, email, name, role, address, phone, department FROM profiles WHERE id = $1", [req.auth.sub]); if (!rows[0]) return res.status(401).json({ message: "Account not found." }); res.json({ profile: profile(rows[0]) }); } catch (error) { next(error); }
 });
+
+// Per-account "last seen" watermarks for notification badges (mobile
+// Notices tab, and any future badge type — keyed generically by
+// `tracker_key` rather than one column per notification type). Any
+// authenticated role reads/writes only its own row, scoped by req.auth.sub.
+app.get("/api/notification-read-state", requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      "SELECT tracker_key, last_seen_at FROM notification_read_state WHERE user_id = $1",
+      [req.auth.sub]
+    );
+    const state = {};
+    for (const row of rows) state[row.tracker_key] = row.last_seen_at;
+    res.json({ state });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/notification-read-state/:trackerKey", requireAuth, async (req, res, next) => {
+  try {
+    const trackerKey = String(req.params.trackerKey || "").trim();
+    if (!trackerKey) return res.status(400).json({ message: "A tracker key is required." });
+    const { rows } = await db.query(
+      `INSERT INTO notification_read_state (user_id, tracker_key, last_seen_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (user_id, tracker_key) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at
+       RETURNING last_seen_at`,
+      [req.auth.sub, trackerKey]
+    );
+    res.json({ trackerKey, lastSeenAt: rows[0].last_seen_at });
+  } catch (error) { next(error); }
+});
 app.get("/api/auth/users/by-email", requireAuth, async (req, res, next) => {
   try {
     const email = String(req.query.email || "").trim().toLowerCase();
@@ -611,6 +879,38 @@ app.get("/api/auth/users/by-email", requireAuth, async (req, res, next) => {
 });
 app.post("/api/auth/logout", (_req, res) => { res.clearCookie("pubmark_session", cookieOptions()); res.json({ ok: true }); });
 
+// Plain link opened from the confirmation email, not called by either app —
+// returns a small HTML page rather than JSON.
+function confirmationPage(title, message) {
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
+  <style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1.5rem;color:#1f2937}h1{font-size:1.25rem;color:#0f766e}</style>
+  </head><body><h1>${title}</h1><p>${message}</p></body></html>`;
+}
+app.get("/api/auth/confirm-user", async (req, res, next) => {
+  try {
+    const token = String(req.query.token || "");
+    const tokenHash = token ? crypto.createHash("sha256").update(token).digest("hex") : "";
+    const { rows } = await db.query(
+      "SELECT * FROM pending_user_creations WHERE token_hash = $1 AND expires_at > now()",
+      [tokenHash]
+    );
+    const pending = rows[0];
+    if (!pending) {
+      return res.status(400).send(confirmationPage("Link expired or invalid", "This confirmation link is no longer valid. Ask the person who created your account to resend the invitation."));
+    }
+    try {
+      await db.query(
+        "INSERT INTO profiles (id, email, password_hash, name, phone, address, role, department) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        [crypto.randomUUID(), pending.email, pending.password_hash, pending.name, pending.phone || "", pending.address || "", pending.role, pending.department || null]
+      );
+    } catch (error) {
+      if (error?.code !== "23505") throw error;
+    }
+    await db.query("DELETE FROM pending_user_creations WHERE id = $1", [pending.id]);
+    res.send(confirmationPage("Account confirmed", "Your PubMark account is now active. You can close this tab and sign in."));
+  } catch (error) { next(error); }
+});
+
 const USER_SORT_COLUMNS = { name: "name", email: "email", role: "role", phone: "phone", createdAt: "created_at" };
 
 app.get("/api/users", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
@@ -621,6 +921,7 @@ app.get("/api/users", requireAuth, requireRole("admin", "super_admin"), async (r
     const conditions = [];
     if (role) { values.push(role); conditions.push(`role = $${values.length}`); }
     if (search) { values.push(`%${search}%`); conditions.push(`(name ILIKE $${values.length} OR email ILIKE $${values.length})`); }
+    if (String(req.query.activeOnly) === "true") conditions.push("is_archived = false");
     const whereSql = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
 
     const sortColumn = USER_SORT_COLUMNS[String(req.query.sortField || "")] || "name";
@@ -644,6 +945,9 @@ function canAssignRole(req, role) {
   return !(role === "super_admin" || role === "admin") || req.auth.role === "super_admin";
 }
 
+// Creates a *pending* invitation rather than the account itself — nothing is
+// written to `profiles` here. The account only comes into existence once the
+// invited person clicks the confirmation link (GET /api/auth/confirm-user).
 app.post("/api/users", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try {
     const { name, email, password, role, phone, address, department } = req.body;
@@ -652,14 +956,36 @@ app.post("/api/users", requireAuth, requireRole("admin", "super_admin"), async (
     if (String(password).length < 6) return res.status(400).json({ message: "Password must be at least 6 characters." });
     if (!canAssignRole(req, role)) return res.status(403).json({ message: "Only a super admin can create admin or super admin accounts." });
 
-    const id = crypto.randomUUID();
+    const normalizedEmail = String(email).toLowerCase();
+    const { rows: existing } = await db.query("SELECT id FROM profiles WHERE email = $1", [normalizedEmail]);
+    if (existing[0]) return res.status(409).json({ message: "This email is already in use." });
+
     const passwordHash = await bcrypt.hash(password, 12);
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
     await db.query(
-      "INSERT INTO profiles (id, email, password_hash, name, phone, address, role, department) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-      [id, String(email).toLowerCase(), passwordHash, name, phone || "", address || "", role, department || null]
+      `INSERT INTO pending_user_creations (email, name, password_hash, role, phone, address, department, created_by, token_hash, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (email) DO UPDATE SET
+         name = EXCLUDED.name, password_hash = EXCLUDED.password_hash, role = EXCLUDED.role,
+         phone = EXCLUDED.phone, address = EXCLUDED.address, department = EXCLUDED.department,
+         created_by = EXCLUDED.created_by, token_hash = EXCLUDED.token_hash, expires_at = EXCLUDED.expires_at,
+         created_at = now()`,
+      [normalizedEmail, name, passwordHash, role, phone || "", address || "", department || null, req.auth.sub, tokenHash, expiresAt]
     );
-    const { rows } = await db.query("SELECT id, email, name, role, address, phone, department, created_at FROM profiles WHERE id = $1", [id]);
-    res.status(201).json({ user: profile(rows[0]) });
+    try {
+      await sendUserConfirmationEmail(normalizedEmail, rawToken);
+    } catch (sendError) {
+      // Don't leave an unconfirmable invite behind if the email never went
+      // out — the admin gets a clear reason instead of a generic 500, and
+      // can fix the underlying issue (e.g. wrong recipient in Resend
+      // sandbox mode) and just resubmit the form.
+      await db.query("DELETE FROM pending_user_creations WHERE email = $1", [normalizedEmail]).catch(() => {});
+      return res.status(502).json({ message: `The confirmation email could not be sent: ${sendError.message}` });
+    }
+    res.json({ pendingConfirmation: true, email: normalizedEmail });
   } catch (error) {
     if (error?.code === "23505") return res.status(409).json({ message: "This email is already in use." });
     next(error);
@@ -704,10 +1030,51 @@ app.delete("/api/users/:id", requireAuth, requireRole("admin", "super_admin"), a
   }
 });
 
+// Accounts invited via "Create User" that haven't clicked their confirmation
+// link yet — makes an in-flight invite visible instead of silently
+// disappearing after the super-admin submits the form.
+app.get("/api/pending-users", requireAuth, requireRole("super_admin"), async (_req, res, next) => {
+  try {
+    const { rows } = await db.query(`
+      SELECT pu.id, pu.email, pu.name, pu.role, pu.phone, pu.created_at, pu.expires_at, p.name AS created_by_name
+      FROM pending_user_creations pu
+      LEFT JOIN profiles p ON p.id = pu.created_by
+      ORDER BY pu.created_at DESC
+    `);
+    res.json({ pendingUsers: rows });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/pending-users/:id/resend", requireAuth, requireRole("super_admin"), async (req, res, next) => {
+  try {
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const { rows } = await db.query(
+      "UPDATE pending_user_creations SET token_hash = $1, expires_at = $2 WHERE id = $3 RETURNING email",
+      [tokenHash, expiresAt, req.params.id]
+    );
+    if (!rows[0]) return res.status(404).json({ message: "Pending invitation not found." });
+    try {
+      await sendUserConfirmationEmail(rows[0].email, rawToken);
+    } catch (sendError) {
+      return res.status(502).json({ message: `The confirmation email could not be sent: ${sendError.message}` });
+    }
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/pending-users/:id", requireAuth, requireRole("super_admin"), async (req, res, next) => {
+  try {
+    await db.query("DELETE FROM pending_user_creations WHERE id = $1", [req.params.id]);
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
 app.get("/api/announcements", requireAuth, async (_req, res, next) => {
   try {
     const { rows } = await db.query(`
-      SELECT a.id, a.title, a.message, a.type, a.author_id, a.created_at, p.name AS author_name
+      SELECT a.id, a.title, a.message, a.type, a.category, a.author_id, a.created_at, p.name AS author_name
       FROM announcements a
       LEFT JOIN profiles p ON p.id = a.author_id
       ORDER BY a.created_at DESC
@@ -721,16 +1088,19 @@ app.post("/api/announcements", requireAuth, requireRole("admin", "super_admin"),
     const title = String(req.body.title || "").trim();
     const message = String(req.body.message || "").trim();
     const type = String(req.body.type || "info");
+    // Free text, not an enum — "Other" in the admin picker lets a category
+    // be typed that isn't in the preset list, so nothing forces a mismatch.
+    const category = req.body.category ? String(req.body.category).trim() : null;
     if (!title || !message) return res.status(400).json({ message: "Title and message are required." });
     if (!["info", "warning", "urgent", "success"].includes(type)) return res.status(400).json({ message: "Invalid announcement type." });
 
     const id = crypto.randomUUID();
     await db.query(
-      "INSERT INTO announcements (id, title, message, type, author_id) VALUES ($1, $2, $3, $4, $5)",
-      [id, title, message, type, req.auth.sub]
+      "INSERT INTO announcements (id, title, message, type, category, author_id) VALUES ($1, $2, $3, $4, $5, $6)",
+      [id, title, message, type, category, req.auth.sub]
     );
     const { rows } = await db.query(
-      `SELECT a.id, a.title, a.message, a.type, a.author_id, a.created_at, p.name AS author_name
+      `SELECT a.id, a.title, a.message, a.type, a.category, a.author_id, a.created_at, p.name AS author_name
        FROM announcements a
        LEFT JOIN profiles p ON p.id = a.author_id
        WHERE a.id = $1
@@ -749,10 +1119,38 @@ app.delete("/api/announcements/:id", requireAuth, requireRole("admin", "super_ad
   } catch (error) { next(error); }
 });
 
-app.get("/api/check-requests", requireAuth, requireRole("admin", "super_admin", "officer"), async (_req, res, next) => {
+app.get("/api/check-requests", requireAuth, requireRole("admin", "super_admin", "officer"), async (req, res, next) => {
   try {
     await syncViolationRequestsToCheckRequests();
-    res.json({ requests: await listCheckRequestsInternal() });
+    const officerId = req.auth.role === "officer" ? req.auth.sub : null;
+    const includeArchived = req.query.includeArchived === "true";
+    const { limit, offset } = parsePagination(req);
+    if (limit == null) {
+      return res.json({ requests: await listCheckRequestsInternal(officerId, { includeArchived }) });
+    }
+    const values = [];
+    const conditions = [];
+    if (officerId) { values.push(officerId); conditions.push(`(cr.assigned_to = $${values.length} OR cr.assigned_to IS NULL)`); }
+    if (!includeArchived) conditions.push("cr.is_archived = false");
+    const whereSql = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
+    const total = Number((await db.query(`SELECT COUNT(*) FROM check_requests cr${whereSql}`, values)).rows[0].count);
+    values.push(limit); const limitParam = values.length;
+    values.push(offset); const offsetParam = values.length;
+    const { rows } = await db.query(`
+      SELECT
+        cr.id, cr.stall_id, cr.requested_by, cr.assigned_to, cr.priority, cr.reason, cr.category, cr.notes,
+        cr.status, cr.created_at, cr.completed_at, cr.completion_notes, cr.completion_summary,
+        s.stall_name, rp.name AS requested_by_name, ap.name AS assigned_to_name
+      FROM check_requests cr
+      LEFT JOIN stalls s ON s.id = cr.stall_id
+      LEFT JOIN profiles rp ON rp.id = cr.requested_by
+      LEFT JOIN profiles ap ON ap.id = cr.assigned_to
+      ${whereSql}
+      ORDER BY cr.created_at DESC
+      LIMIT $${limitParam} OFFSET $${offsetParam}
+    `, values);
+    const filesMap = await getCheckRequestFilesMap(rows.map((row) => row.id));
+    res.json({ requests: rows.map((row) => mapCheckRequestRow(row, filesMap)), total });
   } catch (error) { next(error); }
 });
 
@@ -776,22 +1174,39 @@ app.post("/api/check-requests", requireAuth, requireRole("admin", "super_admin")
     const id = crypto.randomUUID();
     const storedFiles = await storeAttachments("checks", id, req.body.completionFiles, req.auth.sub);
 
-    await db.query(
-      "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
-      [id, stallId, requestedBy, assignedTo, priority, reason, notes || null, status, createdAt, completedAt, completionNotes, completionSummary]
-    );
-    for (const file of storedFiles) {
-      await db.query(
-        "INSERT INTO check_request_files (id, check_request_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        [crypto.randomUUID(), id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
+    const conn = await db.connect();
+    try {
+      await conn.query("BEGIN");
+      await conn.query(
+        "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+        [id, stallId, requestedBy, assignedTo, priority, reason, notes || null, status, createdAt, completedAt, completionNotes, completionSummary]
       );
-    }
-    res.status(201).json({ request: (await listCheckRequestsInternal()).find((item) => item.id === id) });
+      for (const file of storedFiles) {
+        await conn.query(
+          "INSERT INTO check_request_files (id, check_request_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+          [crypto.randomUUID(), id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
+        );
+      }
+      await conn.query("COMMIT");
+    } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
+    finally { conn.release(); }
+    res.status(201).json({ request: (await listCheckRequestsInternal(null, { includeArchived: true })).find((item) => item.id === id) });
   } catch (error) { next(error); }
 });
 
 app.patch("/api/check-requests/:id", requireAuth, requireRole("admin", "super_admin", "officer"), async (req, res, next) => {
   try {
+    if (req.auth.role === "officer") {
+      const { rows } = await db.query(
+        "SELECT assigned_to FROM check_requests WHERE id = $1",
+        [req.params.id]
+      );
+      if (!rows[0]) return res.status(404).json({ message: "Check request not found." });
+      if (rows[0].assigned_to && rows[0].assigned_to !== req.auth.sub) {
+        return res.status(403).json({ message: "This check request is assigned to another officer." });
+      }
+    }
+
     const updates = [];
     const values = [];
     if (req.body.assignedTo !== undefined) { values.push(req.body.assignedTo ? String(req.body.assignedTo).trim() : null); updates.push(`assigned_to = $${values.length}`); }
@@ -806,40 +1221,79 @@ app.patch("/api/check-requests/:id", requireAuth, requireRole("admin", "super_ad
     }
     if (req.body.completionNotes !== undefined) { values.push(String(req.body.completionNotes || "")); updates.push(`completion_notes = $${values.length}`); }
     if (req.body.completionSummary !== undefined) { values.push(String(req.body.completionSummary || "")); updates.push(`completion_summary = $${values.length}`); }
-    if (updates.length > 0) {
-      values.push(req.params.id);
-      await db.query(`UPDATE check_requests SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
-    }
 
+    // Uploaded to Storage before the transaction opens — a rejected/failed
+    // upload should never hold a DB connection open waiting on it.
+    let currentFiles = [];
+    let keptIds = new Set();
+    let storedFiles = [];
     if (Array.isArray(req.body.completionFiles)) {
       // A client editing an inspection sends back the files it already had
       // (identified by id, with no contents) plus any new ones. Keep the
       // former untouched — re-inserting them would throw away the real
       // uploads — and delete only what was actually removed.
-      const { rows: currentFiles } = await db.query(
+      const { rows } = await db.query(
         "SELECT id, storage_path FROM check_request_files WHERE check_request_id = $1",
         [req.params.id]
       );
-      const keptIds = new Set(
+      currentFiles = rows;
+      keptIds = new Set(
         req.body.completionFiles.map((file) => file?.id).filter(Boolean).map(String)
       );
       const incoming = req.body.completionFiles.filter((file) => !file?.id);
-      const storedFiles = await storeAttachments("checks", req.params.id, incoming, req.auth.sub);
+      storedFiles = await storeAttachments("checks", req.params.id, incoming, req.auth.sub);
+    }
 
-      for (const row of currentFiles) {
-        if (keptIds.has(String(row.id))) continue;
-        await db.query("DELETE FROM check_request_files WHERE id = $1", [row.id]);
-        await removeAttachment(row.storage_path);
+    const conn = await db.connect();
+    let removedPaths = [];
+    try {
+      await conn.query("BEGIN");
+      if (updates.length > 0) {
+        values.push(req.params.id);
+        await conn.query(`UPDATE check_requests SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
+      }
+
+      // A check request generated from a violation's "Send Req" shares its id
+      // with the violation_requests row that spawned it. Completing it here
+      // means the followup was done, so resolve the violation it was about
+      // instead of leaving it stuck on "Reviewing" forever.
+      if (req.body.status === "completed") {
+        const completedAt = new Date();
+        const { rows: linked } = await conn.query(
+          "SELECT violation_id FROM violation_requests WHERE id = $1",
+          [req.params.id]
+        );
+        if (linked[0]) {
+          await conn.query(
+            "UPDATE violation_requests SET status = 'completed', completed_at = $1 WHERE id = $2",
+            [completedAt, req.params.id]
+          );
+        }
+        if (linked[0]?.violation_id) {
+          await conn.query(
+            "UPDATE violations SET status = 'resolved', resolved_at = $1 WHERE id = $2 AND status <> 'resolved'",
+            [completedAt, linked[0].violation_id]
+          );
+        }
+      }
+
+      const toRemove = currentFiles.filter((row) => !keptIds.has(String(row.id)));
+      for (const row of toRemove) {
+        await conn.query("DELETE FROM check_request_files WHERE id = $1", [row.id]);
       }
       for (const file of storedFiles) {
-        await db.query(
+        await conn.query(
           "INSERT INTO check_request_files (id, check_request_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
           [crypto.randomUUID(), req.params.id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
         );
       }
-    }
+      await conn.query("COMMIT");
+      removedPaths = toRemove.map((row) => row.storage_path);
+    } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
+    finally { conn.release(); }
+    await Promise.all(removedPaths.map(removeAttachment));
 
-    const updated = (await listCheckRequestsInternal()).find((item) => item.id === req.params.id);
+    const updated = (await listCheckRequestsInternal(null, { includeArchived: true })).find((item) => item.id === req.params.id);
     if (!updated) return res.status(404).json({ message: "Check request not found." });
     res.json({ request: updated });
   } catch (error) { next(error); }
@@ -857,10 +1311,27 @@ app.delete("/api/check-requests/:id", requireAuth, requireRole("admin", "super_a
   } catch (error) { next(error); }
 });
 
-app.get("/api/violation-requests", requireAuth, requireRole("admin", "super_admin", "officer"), async (_req, res, next) => {
+app.get("/api/violation-requests", requireAuth, requireRole("admin", "super_admin", "officer"), async (req, res, next) => {
   try {
     await syncViolationRequestsToCheckRequests();
-    res.json({ requests: await listViolationRequestsInternal() });
+    const { limit, offset } = parsePagination(req);
+    if (limit == null) {
+      return res.json({ requests: await listViolationRequestsInternal() });
+    }
+    const total = Number((await db.query("SELECT COUNT(*) FROM violation_requests")).rows[0].count);
+    const { rows } = await db.query(`
+      SELECT
+        vr.id, vr.stall_id, vr.requested_by, vr.reason, vr.category, vr.status, vr.assigned_officer_id,
+        vr.created_at, vr.completed_at,
+        s.stall_name, rp.name AS requested_by_name, ap.name AS assigned_officer_name
+      FROM violation_requests vr
+      LEFT JOIN stalls s ON s.id = vr.stall_id
+      LEFT JOIN profiles rp ON rp.id = vr.requested_by
+      LEFT JOIN profiles ap ON ap.id = vr.assigned_officer_id
+      ORDER BY vr.created_at DESC
+      LIMIT $1 OFFSET $2
+    `, [limit, offset]);
+    res.json({ requests: rows.map(mapViolationRequestRow), total });
   } catch (error) { next(error); }
 });
 
@@ -868,6 +1339,14 @@ app.post("/api/violation-requests", requireAuth, requireRole("admin", "super_adm
   try {
     const stallId = String(req.body.stallId || "").trim();
     const reason = String(req.body.reason || "").trim();
+    // Set only when this request was sent from a violation report's
+    // "Send Req" — lets the check-request UI show it as a followup on that
+    // violation's category instead of a generic priority-based request.
+    const category = req.body.category ? String(req.body.category).trim() : null;
+    // Links this request back to the violation it followed up on, so
+    // completing the resulting check request can resolve that violation
+    // automatically instead of leaving it stuck on "Reviewing".
+    const violationId = req.body.violationId ? String(req.body.violationId).trim() : null;
     const requestedBy = req.body.requestedBy ? String(req.body.requestedBy).trim() : req.auth.sub;
     const assignedOfficerId = req.body.assignedOfficerId ? String(req.body.assignedOfficerId).trim() : null;
     const status = String(req.body.status || (assignedOfficerId ? "assigned" : "pending"));
@@ -877,27 +1356,34 @@ app.post("/api/violation-requests", requireAuth, requireRole("admin", "super_adm
     if (!["pending", "assigned", "completed"].includes(status)) return res.status(400).json({ message: "Invalid status." });
 
     const id = crypto.randomUUID();
-    await db.query(
-      "INSERT INTO violation_requests (id, stall_id, requested_by, reason, status, assigned_officer_id, created_at, completed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-      [id, stallId, requestedBy, reason, status, assignedOfficerId, createdAt, completedAt]
-    );
-    await db.query(
-      "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
-      [
-        id,
-        stallId,
-        requestedBy,
-        assignedOfficerId,
-        "normal",
-        reason,
-        "Generated from violation request.",
-        status === "completed" ? "completed" : "pending",
-        createdAt,
-        status === "completed" ? completedAt || new Date() : null,
-        "",
-        "",
-      ]
-    );
+    const conn = await db.connect();
+    try {
+      await conn.query("BEGIN");
+      await conn.query(
+        "INSERT INTO violation_requests (id, stall_id, requested_by, reason, category, violation_id, status, assigned_officer_id, created_at, completed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        [id, stallId, requestedBy, reason, category, violationId, status, assignedOfficerId, createdAt, completedAt]
+      );
+      await conn.query(
+        "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, category, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+        [
+          id,
+          stallId,
+          requestedBy,
+          assignedOfficerId,
+          "normal",
+          reason,
+          category,
+          "Generated from violation request.",
+          status === "completed" ? "completed" : "pending",
+          createdAt,
+          status === "completed" ? completedAt || new Date() : null,
+          "",
+          "",
+        ]
+      );
+      await conn.query("COMMIT");
+    } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
+    finally { conn.release(); }
     res.status(201).json({ request: (await listViolationRequestsInternal()).find((item) => item.id === id) });
   } catch (error) { next(error); }
 });
@@ -923,8 +1409,6 @@ app.patch("/api/violation-requests/:id", requireAuth, requireRole("admin", "supe
     }
     if (updates.length === 0) return res.status(400).json({ message: "No fields to update." });
 
-    values.push(req.params.id);
-    await db.query(`UPDATE violation_requests SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
     const mirroredUpdates = [];
     const mirroredValues = [];
     if (req.body.reason !== undefined) {
@@ -944,10 +1428,19 @@ app.patch("/api/violation-requests/:id", requireAuth, requireRole("admin", "supe
       mirroredValues.push(req.body.assignedOfficerId ? "pending" : "pending");
       mirroredUpdates.push(`status = $${mirroredValues.length}`);
     }
-    if (mirroredUpdates.length > 0) {
-      mirroredValues.push(req.params.id);
-      await db.query(`UPDATE check_requests SET ${mirroredUpdates.join(", ")} WHERE id = $${mirroredValues.length}`, mirroredValues);
-    }
+
+    const conn = await db.connect();
+    try {
+      await conn.query("BEGIN");
+      values.push(req.params.id);
+      await conn.query(`UPDATE violation_requests SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
+      if (mirroredUpdates.length > 0) {
+        mirroredValues.push(req.params.id);
+        await conn.query(`UPDATE check_requests SET ${mirroredUpdates.join(", ")} WHERE id = $${mirroredValues.length}`, mirroredValues);
+      }
+      await conn.query("COMMIT");
+    } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
+    finally { conn.release(); }
     const updated = (await listViolationRequestsInternal()).find((item) => item.id === req.params.id);
     if (!updated) return res.status(404).json({ message: "Violation request not found." });
     res.json({ request: updated });
@@ -957,14 +1450,56 @@ app.patch("/api/violation-requests/:id", requireAuth, requireRole("admin", "supe
 app.get("/api/violations", requireAuth, requireRole("admin", "super_admin", "officer", "vendor"), async (req, res, next) => {
   try {
     const vendorId = req.auth.role === "vendor" ? req.auth.sub : null;
-    res.json({ violations: await listViolationsInternal(vendorId) });
+    // Staff working lists (Reports & Requests) want archived violations
+    // hidden by default; a true historical count (e.g. Analytics) needs to
+    // opt back in explicitly, since archiving never deletes the row.
+    const includeArchived = vendorId ? true : req.query.includeArchived === "true";
+    const { limit, offset } = parsePagination(req);
+    if (limit == null) {
+      return res.json({ violations: await listViolationsInternal(vendorId, { includeArchived }) });
+    }
+    // Paginated path queries directly instead of the shared "fetch every
+    // row" internal helper (still used, unpaginated, by mutation responses
+    // that need to return one just-changed row).
+    const values = [];
+    const conditions = [];
+    if (vendorId) { values.push(vendorId); conditions.push(`v.vendor_id = $${values.length}`); }
+    if (!includeArchived) conditions.push("v.is_archived = false");
+    const whereSql = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
+    const total = Number((await db.query(`SELECT COUNT(*) FROM violations v${whereSql}`, values)).rows[0].count);
+    values.push(limit); const limitParam = values.length;
+    values.push(offset); const offsetParam = values.length;
+    const { rows } = await db.query(`
+      SELECT
+        v.id, v.stall_id, v.vendor_id, v.officer_id, v.category, v.description, v.status, v.remarks, v.created_at, v.resolved_at,
+        s.stall_name, vp.name AS vendor_name, op.name AS officer_name
+      FROM violations v
+      LEFT JOIN stalls s ON s.id = v.stall_id
+      LEFT JOIN profiles vp ON vp.id = v.vendor_id
+      LEFT JOIN profiles op ON op.id = v.officer_id
+      ${whereSql}
+      ORDER BY v.created_at DESC
+      LIMIT $${limitParam} OFFSET $${offsetParam}
+    `, values);
+    const evidenceMap = await getViolationEvidenceMap(rows.map((row) => row.id));
+    res.json({ violations: rows.map((row) => mapViolationRow(row, evidenceMap)), total });
   } catch (error) { next(error); }
 });
 
 app.post("/api/violations", requireAuth, requireRole("admin", "super_admin", "officer", "vendor"), async (req, res, next) => {
   try {
     const stallId = String(req.body.stallId || "").trim();
-    const vendorId = req.body.vendorId ? String(req.body.vendorId).trim() : null;
+    // The client (mobile in particular) never actually sends this — resolve
+    // it from whoever currently holds the stall, so the report shows a real
+    // vendor name instead of always falling back to "Unknown".
+    let vendorId = req.body.vendorId ? String(req.body.vendorId).trim() : null;
+    if (!vendorId && stallId) {
+      const { rows: occupantRows } = await db.query(
+        "SELECT user_id FROM applications WHERE stall_id = $1 AND status = 'approved' ORDER BY date_applied DESC LIMIT 1",
+        [stallId]
+      );
+      vendorId = occupantRows[0]?.user_id ?? null;
+    }
     const officerId = req.body.officerId ? String(req.body.officerId).trim() : (req.auth.role === "officer" ? req.auth.sub : "44444444-4444-4444-8444-444444444444");
     const category = String(req.body.category || "").trim();
     const description = String(req.body.description || "").trim();
@@ -981,17 +1516,23 @@ app.post("/api/violations", requireAuth, requireRole("admin", "super_admin", "of
     // that silently went missing.
     const storedEvidence = await storeAttachments("violations", id, evidence, req.auth.sub);
 
-    await db.query(
-      "INSERT INTO violations (id, stall_id, vendor_id, officer_id, category, description, status, remarks, created_at, resolved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-      [id, stallId, vendorId, officerId, category, description, status, remarks || null, createdAt, resolvedAt]
-    );
-    for (const file of storedEvidence) {
-      await db.query(
-        "INSERT INTO violation_evidence (id, violation_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        [crypto.randomUUID(), id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
+    const conn = await db.connect();
+    try {
+      await conn.query("BEGIN");
+      await conn.query(
+        "INSERT INTO violations (id, stall_id, vendor_id, officer_id, category, description, status, remarks, created_at, resolved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        [id, stallId, vendorId, officerId, category, description, status, remarks || null, createdAt, resolvedAt]
       );
-    }
-    res.status(201).json({ violation: (await listViolationsInternal()).find((item) => item.id === id) });
+      for (const file of storedEvidence) {
+        await conn.query(
+          "INSERT INTO violation_evidence (id, violation_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+          [crypto.randomUUID(), id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
+        );
+      }
+      await conn.query("COMMIT");
+    } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
+    finally { conn.release(); }
+    res.status(201).json({ violation: (await listViolationsInternal(null, { includeArchived: true })).find((item) => item.id === id) });
   } catch (error) { next(error); }
 });
 
@@ -1003,37 +1544,72 @@ app.patch("/api/violations/:id", requireAuth, requireRole("admin", "super_admin"
     if (req.body.category !== undefined) { values.push(String(req.body.category || "").trim()); updates.push(`category = $${values.length}`); }
     if (req.body.description !== undefined) { values.push(String(req.body.description || "").trim()); updates.push(`description = $${values.length}`); }
     if (req.body.status !== undefined) {
-      values.push(String(req.body.status));
+      const status = String(req.body.status);
+      if (!["open", "reviewed", "resolved", "dismissed"].includes(status)) {
+        return res.status(400).json({ message: "Invalid status." });
+      }
+      values.push(status);
       updates.push(`status = $${values.length}`);
-      values.push(req.body.status === "open" ? null : new Date());
+      values.push(["open", "reviewed"].includes(status) ? null : new Date());
       updates.push(`resolved_at = $${values.length}`);
     }
     if (req.body.remarks !== undefined) { values.push(String(req.body.remarks || "").trim()); updates.push(`remarks = $${values.length}`); }
-    if (updates.length > 0) {
-      values.push(req.params.id);
-      await db.query(`UPDATE violations SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
-    }
+    // Uploaded to Storage before the transaction opens — a rejected/failed
+    // upload should never hold a DB connection open waiting on it.
+    let storedEvidence = [];
     if (Array.isArray(req.body.evidence) && req.body.evidence.length > 0) {
       // Files carrying an id are ones the client already had; re-inserting
       // them would duplicate the attachment list on every edit.
       const incoming = req.body.evidence.filter((file) => !file?.id);
-      const storedEvidence = await storeAttachments("violations", req.params.id, incoming, req.auth.sub);
+      storedEvidence = await storeAttachments("violations", req.params.id, incoming, req.auth.sub);
+    }
+    const conn = await db.connect();
+    try {
+      await conn.query("BEGIN");
+      if (updates.length > 0) {
+        values.push(req.params.id);
+        await conn.query(`UPDATE violations SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
+      }
       for (const file of storedEvidence) {
-        await db.query(
+        await conn.query(
           "INSERT INTO violation_evidence (id, violation_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
           [crypto.randomUUID(), req.params.id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
         );
       }
-    }
-    const updated = (await listViolationsInternal()).find((item) => item.id === req.params.id);
+      await conn.query("COMMIT");
+    } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
+    finally { conn.release(); }
+    const updated = (await listViolationsInternal(null, { includeArchived: true })).find((item) => item.id === req.params.id);
     if (!updated) return res.status(404).json({ message: "Violation not found." });
     res.json({ violation: updated });
   } catch (error) { next(error); }
 });
 
-app.get("/api/termination-requests", requireAuth, requireRole("admin", "super_admin", "vendor"), async (_req, res, next) => {
+app.get("/api/termination-requests", requireAuth, requireRole("admin", "super_admin", "vendor"), async (req, res, next) => {
   try {
-    res.json({ requests: await listTerminationRequestsInternal() });
+    const { limit, offset } = parsePagination(req);
+    if (limit == null) {
+      return res.json({ requests: await listTerminationRequestsInternal() });
+    }
+    const total = Number((await db.query("SELECT COUNT(*) FROM termination_requests")).rows[0].count);
+    const { rows } = await db.query(`
+      SELECT
+        tr.id, tr.type, tr.vendor_id, tr.stall_id, tr.reason, tr.status, tr.created_at, tr.resolved_at,
+        vp.name AS vendor_name, vp.email AS vendor_email, s.stall_name,
+        active.stalls AS active_stalls
+      FROM termination_requests tr
+      LEFT JOIN profiles vp ON vp.id = tr.vendor_id
+      LEFT JOIN stalls s ON s.id = tr.stall_id
+      LEFT JOIN LATERAL (
+        SELECT json_agg(json_build_object('stallId', a.stall_id, 'stallName', st.stall_name, 'contractEnd', a.contract_end) ORDER BY a.contract_end) AS stalls
+        FROM applications a
+        JOIN stalls st ON st.id = a.stall_id
+        WHERE a.user_id = tr.vendor_id AND a.status = 'approved'
+      ) active ON tr.type = 'account'
+      ORDER BY tr.created_at DESC
+      LIMIT $1 OFFSET $2
+    `, [limit, offset]);
+    res.json({ requests: rows.map(mapTerminationRequestRow), total });
   } catch (error) { next(error); }
 });
 
@@ -1057,18 +1633,63 @@ app.post("/api/termination-requests", requireAuth, requireRole("admin", "super_a
   } catch (error) { next(error); }
 });
 
+// Approving an "account" request archives the vendor and rejects their open
+// applications atomically — all in one transaction, so a mid-way failure
+// can't leave a vendor archived with their applications untouched (or vice
+// versa). "contract" requests are unaffected: the client still drives that
+// case with its own two calls, exactly as before.
 app.patch("/api/termination-requests/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
+  const conn = await db.connect();
   try {
     const status = String(req.body.status || "").trim();
-    if (!["pending", "approved", "rejected"].includes(status)) return res.status(400).json({ message: "Invalid status." });
-    await db.query(
+    if (!["pending", "approved", "rejected"].includes(status)) { conn.release(); return res.status(400).json({ message: "Invalid status." }); }
+
+    await conn.query("BEGIN");
+    const { rows: requestRows } = await conn.query("SELECT * FROM termination_requests WHERE id = $1 FOR UPDATE", [req.params.id]);
+    const request = requestRows[0];
+    if (!request) { await conn.query("ROLLBACK"); return res.status(404).json({ message: "Termination request not found." }); }
+
+    if (status === "approved" && request.type === "account") {
+      const { rows: vendorRows } = await conn.query("SELECT * FROM profiles WHERE id = $1", [request.vendor_id]);
+      const vendor = vendorRows[0];
+      if (vendor) {
+        const { rows: rejectedApps } = await conn.query(
+          `UPDATE applications
+           SET status = 'rejected', admin_remarks = TRIM(BOTH E'\n' FROM COALESCE(admin_remarks, '') || E'\n\n' || 'Rejected — vendor account terminated.')
+           WHERE user_id = $1 AND status IN ('pending', 'approved')
+           RETURNING id, stall_id`,
+          [vendor.id]
+        );
+        const archiveId = crypto.randomUUID();
+        await conn.query(
+          "INSERT INTO archive (id, type, title, description, original_id, original_data, archived_by, reason, can_restore) VALUES ($1, 'vendor', $2, $3, $4, $5, $6, $7, false)",
+          [
+            archiveId,
+            vendor.name,
+            `${vendor.email} — account terminated; ${rejectedApps.length} application(s) rejected.`,
+            vendor.id,
+            JSON.stringify({
+              id: vendor.id, email: vendor.email, name: vendor.name, phone: vendor.phone,
+              address: vendor.address, role: vendor.role, department: vendor.department, createdAt: vendor.created_at,
+            }),
+            req.auth.sub,
+            request.reason,
+          ]
+        );
+        await conn.query("UPDATE profiles SET is_archived = true WHERE id = $1", [vendor.id]);
+        for (const app of rejectedApps) await syncStallOccupancy(app.stall_id, conn);
+      }
+    }
+
+    await conn.query(
       "UPDATE termination_requests SET status = $1, resolved_at = $2 WHERE id = $3",
       [status, status === "pending" ? null : new Date(), req.params.id]
     );
+    await conn.query("COMMIT");
+
     const updated = (await listTerminationRequestsInternal()).find((item) => item.id === req.params.id);
-    if (!updated) return res.status(404).json({ message: "Termination request not found." });
     res.json({ request: updated });
-  } catch (error) { next(error); }
+  } catch (error) { await conn.query("ROLLBACK"); next(error); } finally { conn.release(); }
 });
 
 app.get("/api/stalls", async (req, res, next) => {
@@ -1099,6 +1720,10 @@ app.get("/api/stalls", async (req, res, next) => {
       })),
       ...(total !== undefined ? { total } : {}),
     });
+    // Not ETag'd like map-facilities/perimeters: each stall's images carry a
+    // freshly-signed Storage URL (new expiry token) on every request, so the
+    // JSON body can never come out byte-identical twice — an ETag here would
+    // never actually match, just adding a wasted hash on every call.
   } catch (error) { next(error); }
 });
 
@@ -1173,6 +1798,47 @@ app.get("/api/stalls/management", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// Purposes match the folder prefixes storeAttachments already uses; role
+// checks mirror the existing write route for that resource. Only "stalls" is
+// actually wired to a signed-upload flow yet (see POST /api/stalls) — the
+// others are accepted here so future migrations don't need a new endpoint.
+const UPLOAD_PURPOSES = new Set(["stalls", "permits", "violations", "checks", "receipts"]);
+function canSignUploadFor(role, purpose) {
+  if (purpose === "stalls") return ["admin", "super_admin"].includes(role);
+  if (purpose === "permits") return ["vendor", "admin", "super_admin"].includes(role);
+  if (purpose === "violations") return ["admin", "super_admin", "officer", "vendor"].includes(role);
+  if (purpose === "checks") return ["admin", "super_admin", "officer"].includes(role);
+  if (purpose === "receipts") return ["vendor", "officer"].includes(role);
+  return false;
+}
+
+app.post("/api/uploads/sign", requireAuth, async (req, res, next) => {
+  try {
+    const purpose = String(req.body.purpose || "");
+    const fileName = String(req.body.fileName || "").trim();
+    const mimeType = String(req.body.mimeType || "").toLowerCase();
+    const fileSize = Number(req.body.fileSize) || 0;
+    if (!UPLOAD_PURPOSES.has(purpose)) return res.status(400).json({ message: "Invalid upload purpose." });
+    if (!canSignUploadFor(req.auth.role, purpose)) return res.status(403).json({ message: "You cannot upload this type of file." });
+    if (!fileName) return res.status(400).json({ message: "A file name is required." });
+    if (!ALLOWED_ATTACHMENT_MIME.has(mimeType)) {
+      return res.status(400).json({ message: `"${fileName}" is not an accepted file type. Upload a JPEG, PNG, WebP, HEIC image or a PDF.` });
+    }
+    if (fileSize <= 0 || fileSize > MAX_ATTACHMENT_BYTES) {
+      return res.status(400).json({ message: `"${fileName}" must be under ${humanSize(MAX_ATTACHMENT_BYTES)}.` });
+    }
+    if (!supabaseStorage) return res.status(500).json({ message: "File uploads are not configured." });
+
+    // User-scoped, not entity-scoped: at signing time the domain record this
+    // upload will belong to (a new stall, application, etc.) often doesn't
+    // exist yet, so there's no entity id to fold into the path.
+    const storagePath = `${purpose}/${req.auth.sub}/${crypto.randomUUID()}-${sanitizeFileName(fileName)}`;
+    const { data, error } = await supabaseStorage.storage.from(ATTACHMENTS_BUCKET).createSignedUploadUrl(storagePath);
+    if (error) return res.status(502).json({ message: `Could not prepare the upload: ${error.message}` });
+    res.json({ path: data.path, token: data.token, signedUrl: data.signedUrl });
+  } catch (error) { next(error); }
+});
+
 app.post("/api/stalls", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try {
     const { stall_name, business_type, section, floor, floor_area, notes, geometry } = req.body;
@@ -1181,16 +1847,42 @@ app.post("/api/stalls", requireAuth, requireRole("admin", "super_admin"), async 
     // A vacant stall with no photo is what this exists to prevent — the
     // server enforces it too, since a client-side check alone can be skipped.
     if (images.length === 0) return res.status(400).json({ message: "At least one stall photo is required." });
+    // Images arrive either pre-uploaded via POST /api/uploads/sign (has
+    // `.path`) or, for callers not yet migrated, as base64 (has `.base64`).
+    const preSignedImages = images.filter((img) => img?.path);
+    const legacyImages = images.filter((img) => !img?.path);
 
     const id = crypto.randomUUID();
-    const storedImages = await storeAttachments("stalls", id, images, req.auth.sub);
-    await db.query("INSERT INTO stalls (id, stall_name, status, business_type, section, floor, floor_area, notes, geometry) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)", [id, stall_name, "vacant", business_type, section, floor, floor_area || "", notes || "", JSON.stringify(geometry)]);
-    for (const file of storedImages) {
-      await db.query(
-        "INSERT INTO stall_images (id, stall_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        [crypto.randomUUID(), id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
-      );
+    let preSignedResolved = [];
+    let legacyResolved = [];
+    try {
+      preSignedResolved = await resolvePreSignedAttachments("stalls", req.auth.sub, preSignedImages);
+      legacyResolved = await storeAttachments("stalls", id, legacyImages, req.auth.sub);
+    } catch (error) {
+      await Promise.all([...preSignedResolved, ...legacyResolved].map((f) => removeAttachment(f.storagePath)));
+      throw error;
     }
+    const storedImages = [...preSignedResolved, ...legacyResolved];
+
+    const conn = await db.connect();
+    try {
+      await conn.query("BEGIN");
+      await conn.query("INSERT INTO stalls (id, stall_name, status, business_type, section, floor, floor_area, notes, geometry) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)", [id, stall_name, "vacant", business_type, section, floor, floor_area || "", notes || "", JSON.stringify(geometry)]);
+      for (const file of storedImages) {
+        await conn.query(
+          "INSERT INTO stall_images (id, stall_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+          [crypto.randomUUID(), id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
+        );
+      }
+      await conn.query("COMMIT");
+    } catch (innerError) {
+      await conn.query("ROLLBACK");
+      // The domain write failed after files were already confirmed real —
+      // don't leave them orphaned in Storage with nothing referencing them.
+      await Promise.all(storedImages.map((f) => removeAttachment(f.storagePath)));
+      throw innerError;
+    }
+    finally { conn.release(); }
     const savedImages = (await getStallImagesMap([id])).get(id) || [];
     res.status(201).json({ stall: { id, stall_name, status: "vacant", owner_id: null, business_type, section, floor, floor_area, notes, geometry, created_at: new Date().toISOString(), images: savedImages } });
   } catch (error) { next(error); }
@@ -1233,28 +1925,59 @@ app.patch("/api/stalls/:id", requireAuth, requireRole("admin", "super_admin"), a
       return res.status(400).json({ message: "At least one stall photo is required." });
     }
 
-    if (updates.length > 0) {
-      values.push(req.params.id);
-      await db.query(`UPDATE stalls SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
+    // Uploaded to Storage before the transaction opens — a rejected/failed
+    // upload should never hold a DB connection open waiting on it.
+    let existingRows = [];
+    let removed = [];
+    let storedImages = [];
+    if (images !== null) {
+      const { rows } = await db.query("SELECT id, storage_path FROM stall_images WHERE stall_id = $1", [req.params.id]);
+      existingRows = rows;
+      const keptIds = new Set(images.filter((img) => img?.id).map((img) => img.id));
+      removed = existingRows.filter((row) => !keptIds.has(row.id));
+      const newFiles = images.filter((img) => !img?.id);
+      // New images arrive either pre-uploaded via POST /api/uploads/sign
+      // (has `.path`) or, for callers not yet migrated, as base64.
+      const preSignedImages = newFiles.filter((img) => img?.path);
+      const legacyImages = newFiles.filter((img) => !img?.path);
+      let preSignedResolved = [];
+      let legacyResolved = [];
+      try {
+        preSignedResolved = await resolvePreSignedAttachments("stalls", req.auth.sub, preSignedImages);
+        legacyResolved = await storeAttachments("stalls", req.params.id, legacyImages, req.auth.sub);
+      } catch (error) {
+        await Promise.all([...preSignedResolved, ...legacyResolved].map((f) => removeAttachment(f.storagePath)));
+        throw error;
+      }
+      storedImages = [...preSignedResolved, ...legacyResolved];
     }
 
-    if (images !== null) {
-      const { rows: existingRows } = await db.query("SELECT id, storage_path FROM stall_images WHERE stall_id = $1", [req.params.id]);
-      const keptIds = new Set(images.filter((img) => img?.id).map((img) => img.id));
-      const removed = existingRows.filter((row) => !keptIds.has(row.id));
-      for (const row of removed) {
-        await db.query("DELETE FROM stall_images WHERE id = $1", [row.id]);
-        await removeAttachment(row.storage_path);
+    const conn = await db.connect();
+    try {
+      await conn.query("BEGIN");
+      if (updates.length > 0) {
+        values.push(req.params.id);
+        await conn.query(`UPDATE stalls SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
       }
-      const newFiles = images.filter((img) => !img?.id);
-      const storedImages = await storeAttachments("stalls", req.params.id, newFiles, req.auth.sub);
+      for (const row of removed) {
+        await conn.query("DELETE FROM stall_images WHERE id = $1", [row.id]);
+      }
       for (const file of storedImages) {
-        await db.query(
+        await conn.query(
           "INSERT INTO stall_images (id, stall_id, storage_path, file_name, mime_type, file_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
           [crypto.randomUUID(), req.params.id, file.storagePath, file.fileName, file.mimeType, file.fileSize, req.auth.sub]
         );
       }
+      await conn.query("COMMIT");
+    } catch (innerError) {
+      await conn.query("ROLLBACK");
+      // The domain write failed after files were already confirmed real —
+      // don't leave them orphaned in Storage with nothing referencing them.
+      await Promise.all(storedImages.map((f) => removeAttachment(f.storagePath)));
+      throw innerError;
     }
+    finally { conn.release(); }
+    await Promise.all(removed.map((row) => removeAttachment(row.storage_path)));
 
     const { rows } = await db.query("SELECT id, stall_name, status, owner_id, business_type, section, floor, floor_area, notes, geometry, created_at FROM stalls WHERE id = $1", [req.params.id]);
     if (!rows[0]) return res.status(404).json({ message: "Stall not found." });
@@ -1370,6 +2093,7 @@ app.post("/api/stalls/import", requireAuth, requireRole("admin", "super_admin"),
 app.get("/api/applications", requireAuth, async (req, res, next) => {
   try {
     await autoTerminateExpiredPermitDeadlines();
+    await autoTerminateExpiredContracts();
 
     const status = String(req.query.status || "").trim();
     const search = String(req.query.search || "").trim();
@@ -1381,6 +2105,10 @@ app.get("/api/applications", requireAuth, async (req, res, next) => {
     if (req.auth.role === "vendor") {
       values.push(req.auth.sub);
       conditions.push(`a.user_id = $${values.length}`);
+    } else {
+      // Staff views only — a vendor should still see their own history even
+      // after an admin archives one of their decided applications.
+      conditions.push(`a.is_archived = false`);
     }
     if (status) { values.push(status); conditions.push(`a.status = $${values.length}`); }
     if (search) {
@@ -1402,7 +2130,8 @@ app.get("/api/applications", requireAuth, async (req, res, next) => {
     let sql = `
       SELECT
         a.id, a.user_id, a.stall_id, a.business_name, a.business_type,
-        a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path,
+        a.contract_start, a.contract_term_months, a.contract_end, a.renewal_deadline_at, a.contract_terminated_at,
+        a.approved_at, a.rejected_at, a.permit_uploaded_at, a.permit_path, a.additional_file_path,
         a.notes, a.status, a.admin_remarks, a.date_applied,
         s.stall_name, s.section, s.floor_area,
         p.name as applicant_name, p.email as applicant_email,
@@ -1452,12 +2181,26 @@ app.get("/api/applications/occupied-stalls", async (_req, res, next) => {
   } catch (error) { next(error); }
 });
 
-app.post("/api/applications", requireAuth, requireRole("vendor"), async (req, res, next) => {
+app.post("/api/applications", requireAuth, requireRole("admin", "super_admin", "vendor"), async (req, res, next) => {
   try {
-    const { stallId, businessName, businessType, contractStart, contractTermMonths, contractEnd, permit, additionalFile, notes, applicantAddress } = req.body;
+    const { stallId, businessName, businessType, contractStart, contractTermMonths, contractEnd, permit, additionalFile, notes, applicantAddress, vendorId } = req.body;
     if (!stallId || !businessName || !businessType || !contractStart || !contractTermMonths || !contractEnd) {
       return res.status(400).json({ message: "Missing required fields." });
     }
+
+    // A vendor caller may only ever file for themselves — vendorId is only
+    // honored for staff filing a walk-in application on someone else's
+    // behalf. The target must be an active vendor account.
+    let targetUserId = req.auth.sub;
+    if ((req.auth.role === "admin" || req.auth.role === "super_admin") && vendorId) {
+      const { rows: vendorRows } = await db.query(
+        "SELECT id FROM profiles WHERE id = $1 AND role = 'vendor' AND is_archived = false",
+        [vendorId]
+      );
+      if (!vendorRows[0]) return res.status(400).json({ message: "Selected vendor account was not found or is no longer active." });
+      targetUserId = vendorId;
+    }
+
     const id = crypto.randomUUID();
     // Upload both documents before inserting, and clean up the first if the
     // second is rejected, so a failed submission leaves nothing behind.
@@ -1471,10 +2214,10 @@ app.post("/api/applications", requireAuth, requireRole("vendor"), async (req, re
     }
     await db.query(
       "INSERT INTO applications (id, user_id, stall_id, business_name, business_type, contract_start, contract_term_months, contract_end, permit_path, additional_file_path, notes, applicant_address) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
-      [id, req.auth.sub, stallId, businessName, businessType, contractStart, parseInt(contractTermMonths), contractEnd, storedPermit?.storagePath || null, storedAdditional?.storagePath || null, notes || "", (applicantAddress || "").trim() || null]
+      [id, targetUserId, stallId, businessName, businessType, contractStart, parseInt(contractTermMonths), contractEnd, storedPermit?.storagePath || null, storedAdditional?.storagePath || null, notes || "", (applicantAddress || "").trim() || null]
     );
     const { rows } = await db.query(
-      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
+      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.renewal_deadline_at, a.contract_terminated_at, a.approved_at, a.rejected_at, a.permit_uploaded_at, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
       [id]
     );
     const app = await mapApplicationRow(rows[0]);
@@ -1486,28 +2229,43 @@ app.patch("/api/applications/:id", requireAuth, requireRole("admin", "super_admi
   try {
     const { status, adminRemarks } = req.body;
     const updates = []; const values = [];
-    if (status !== undefined) { values.push(status); updates.push(`status = $${values.length}`); }
+    if (status !== undefined) {
+      values.push(status); updates.push(`status = $${values.length}`);
+      // Stamps the decision moment, not just the decision — same idea as
+      // contract_terminated_at already timestamping termination. Only an
+      // explicit admin decision sets these; the two auto-termination paths
+      // (autoTerminateExpiredContracts, autoTerminateExpiredPermitDeadlines)
+      // deliberately do not, so they stay distinguishable on the tracking
+      // timeline from a reviewed rejection.
+      if (status === "approved") updates.push(`approved_at = NOW()`);
+      if (status === "rejected") updates.push(`rejected_at = NOW()`);
+    }
     if (adminRemarks !== undefined) { values.push(adminRemarks); updates.push(`admin_remarks = $${values.length}`); }
     if (updates.length === 0) return res.status(400).json({ message: "No fields to update." });
     values.push(req.params.id);
     await db.query(`UPDATE applications SET ${updates.join(", ")} WHERE id = $${values.length}`, values);
     const { rows } = await db.query(
-      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
+      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.renewal_deadline_at, a.contract_terminated_at, a.approved_at, a.rejected_at, a.permit_uploaded_at, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
       [req.params.id]
     );
     if (!rows[0]) return res.status(404).json({ message: "Application not found." });
+    if (status !== undefined) await syncStallOccupancy(rows[0].stall_id);
     const app = await mapApplicationRow(rows[0]);
     res.json({ application: app });
   } catch (error) { next(error); }
 });
 
-app.patch("/api/applications/:id/permit", requireAuth, async (req, res, next) => {
+app.patch("/api/applications/:id/permit", requireAuth, requireRole("admin", "super_admin", "vendor"), async (req, res, next) => {
   try {
     const permit = req.body.permit;
     if (!permit?.name) return res.status(400).json({ message: "A permit file is required." });
 
+    // Apply an expired deadline before accepting a direct upload from an old
+    // detail screen, so refreshing the application list cannot be bypassed.
+    await autoTerminateExpiredPermitDeadlines();
+
     const { rows: existingRows } = await db.query(
-      "SELECT id, user_id, admin_remarks, permit_path FROM applications WHERE id = $1",
+      "SELECT id, user_id, status, admin_remarks, permit_path FROM applications WHERE id = $1",
       [req.params.id]
     );
     const existing = existingRows[0];
@@ -1516,10 +2274,19 @@ app.patch("/api/applications/:id/permit", requireAuth, async (req, res, next) =>
       return res.status(403).json({ message: "Access denied." });
     }
 
-    const [stored] = await storeAttachments("permits", req.params.id, [permit], req.auth.sub);
     const meta = parsePermitMeta(existing.admin_remarks || "");
+    const visibleRemarks = meta.visibleRemarks.toLowerCase();
+    if (
+      meta.permitTerminatedAt ||
+      visibleRemarks.includes("contract terminated") ||
+      visibleRemarks.includes("application terminated because the business permit was not submitted")
+    ) {
+      return res.status(409).json({ message: "This application is no longer active, so its permit cannot be changed." });
+    }
+
+    const [stored] = await storeAttachments("permits", req.params.id, [permit], req.auth.sub);
     await db.query(
-      "UPDATE applications SET permit_path = $1, admin_remarks = $2 WHERE id = $3",
+      "UPDATE applications SET permit_path = $1, admin_remarks = $2, permit_uploaded_at = NOW() WHERE id = $3",
       [stored.storagePath, buildPermitMetaRemarks(meta.visibleRemarks, {}), req.params.id]
     );
     // Drop the file this one replaced, so re-uploads don't accumulate.
@@ -1528,7 +2295,7 @@ app.patch("/api/applications/:id/permit", requireAuth, async (req, res, next) =>
     }
 
     const { rows } = await db.query(
-      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
+      `SELECT a.id, a.user_id, a.stall_id, a.business_name, a.business_type, a.contract_start, a.contract_term_months, a.contract_end, a.renewal_deadline_at, a.contract_terminated_at, a.approved_at, a.rejected_at, a.permit_uploaded_at, a.permit_path, a.additional_file_path, a.notes, a.status, a.admin_remarks, a.date_applied, a.applicant_address, s.stall_name, s.section, s.floor_area, p.name, p.email, p.address FROM applications a LEFT JOIN stalls s ON a.stall_id = s.id LEFT JOIN profiles p ON a.user_id = p.id WHERE a.id = $1`,
       [req.params.id]
     );
     if (!rows[0]) return res.status(404).json({ message: "Application not found." });
@@ -1541,15 +2308,105 @@ app.delete("/api/applications/:id", requireAuth, requireRole("admin", "super_adm
     // Read the file paths before the row goes, or the permit is stranded in
     // Storage with nothing left pointing at it.
     const { rows } = await db.query(
-      "SELECT permit_path, additional_file_path FROM applications WHERE id = $1",
+      "SELECT stall_id, permit_path, additional_file_path FROM applications WHERE id = $1",
       [req.params.id]
     );
     await db.query("DELETE FROM applications WHERE id = $1", [req.params.id]);
     if (rows[0]) {
       await removeAttachment(rows[0].permit_path);
       await removeAttachment(rows[0].additional_file_path);
+      await syncStallOccupancy(rows[0].stall_id);
     }
     res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+const RENEWAL_SELECT = `
+  SELECT rr.*, a.stall_id, a.contract_end, a.renewal_deadline_at,
+    s.stall_name, p.name AS vendor_name, reviewer.name AS reviewed_by_name
+  FROM contract_renewal_requests rr
+  JOIN applications a ON a.id = rr.application_id
+  LEFT JOIN stalls s ON s.id = a.stall_id
+  LEFT JOIN profiles p ON p.id = rr.vendor_id
+  LEFT JOIN profiles reviewer ON reviewer.id = rr.reviewed_by
+`;
+
+function mapRenewalRow(row) {
+  return {
+    id: row.id, applicationId: row.application_id, vendorId: row.vendor_id,
+    vendorName: row.vendor_name || "Unknown", stallId: row.stall_id,
+    stallName: row.stall_name || "Unknown", requestedMonths: row.requested_months,
+    contractEnd: row.contract_end, renewalDeadlineAt: row.renewal_deadline_at,
+    status: row.status, remarks: row.remarks || "", reviewedBy: row.reviewed_by,
+    reviewedByName: row.reviewed_by_name || null, reviewedAt: row.reviewed_at,
+    createdAt: row.created_at,
+  };
+}
+
+app.get("/api/contract-renewals", requireAuth, requireRole("vendor", "admin", "super_admin"), async (req, res, next) => {
+  try {
+    await autoTerminateExpiredContracts();
+    const values = [];
+    const where = req.auth.role === "vendor" ? (values.push(req.auth.sub), " WHERE rr.vendor_id = $1") : "";
+    const { rows } = await db.query(`${RENEWAL_SELECT}${where} ORDER BY rr.created_at DESC`, values);
+    res.json({ renewals: rows.map(mapRenewalRow) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/contract-renewals", requireAuth, requireRole("vendor"), async (req, res, next) => {
+  try {
+    const applicationId = String(req.body.applicationId || "").trim();
+    const requestedMonths = Number(req.body.requestedMonths);
+    if (![6, 12, 24, 36].includes(requestedMonths)) return res.status(400).json({ message: "Choose a 6, 12, 24, or 36 month renewal." });
+    const { rows: apps } = await db.query(
+      "SELECT * FROM applications WHERE id = $1 AND user_id = $2", [applicationId, req.auth.sub]
+    );
+    const application = apps[0];
+    if (!application || application.status !== "approved" || application.contract_terminated_at) return res.status(409).json({ message: "This contract is not eligible for renewal." });
+    const deadline = application.renewal_deadline_at || new Date(new Date(application.contract_end).getTime() + 7 * 86400000);
+    if (new Date(deadline).getTime() < Date.now()) return res.status(409).json({ message: "The renewal deadline has passed. Contact the Super Admin." });
+    const { rows: pending } = await db.query("SELECT id FROM contract_renewal_requests WHERE application_id = $1 AND status = 'pending'", [applicationId]);
+    if (pending[0]) return res.status(409).json({ message: "A renewal request is already pending." });
+    const id = crypto.randomUUID();
+    await db.query("INSERT INTO contract_renewal_requests (id, application_id, vendor_id, requested_months) VALUES ($1,$2,$3,$4)", [id, applicationId, req.auth.sub, requestedMonths]);
+    const { rows } = await db.query(`${RENEWAL_SELECT} WHERE rr.id = $1`, [id]);
+    res.status(201).json({ renewal: mapRenewalRow(rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.patch("/api/contract-renewals/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
+  const conn = await db.connect();
+  try {
+    const status = String(req.body.status || "");
+    const remarks = String(req.body.remarks || "").trim();
+    if (!["approved", "rejected"].includes(status)) return res.status(400).json({ message: "Status must be approved or rejected." });
+    await conn.query("BEGIN");
+    const { rows } = await conn.query("SELECT * FROM contract_renewal_requests WHERE id = $1 FOR UPDATE", [req.params.id]);
+    const renewal = rows[0];
+    if (!renewal || renewal.status !== "pending") { await conn.query("ROLLBACK"); return res.status(409).json({ message: "This renewal is no longer pending." }); }
+    if (status === "approved") {
+      await conn.query("UPDATE applications SET contract_end = (GREATEST(contract_end, CURRENT_DATE) + make_interval(months => $1))::date, contract_term_months = $1, renewal_deadline_at = NULL, contract_terminated_at = NULL, status = 'approved' WHERE id = $2", [renewal.requested_months, renewal.application_id]);
+    }
+    await conn.query("UPDATE contract_renewal_requests SET status=$1, remarks=$2, reviewed_by=$3, reviewed_at=NOW() WHERE id=$4", [status, remarks || null, req.auth.sub, req.params.id]);
+    await conn.query("COMMIT");
+    const result = await db.query(`${RENEWAL_SELECT} WHERE rr.id = $1`, [req.params.id]);
+    res.json({ renewal: mapRenewalRow(result.rows[0]) });
+  } catch (error) { await conn.query("ROLLBACK"); next(error); } finally { conn.release(); }
+});
+
+app.patch("/api/applications/:id/renewal-deadline", requireAuth, requireRole("super_admin"), async (req, res, next) => {
+  try {
+    const newDeadline = new Date(req.body.deadlineAt);
+    const reason = String(req.body.reason || "").trim();
+    if (Number.isNaN(newDeadline.getTime()) || newDeadline.getTime() <= Date.now()) return res.status(400).json({ message: "Choose a future renewal deadline." });
+    if (!reason) return res.status(400).json({ message: "An extension reason is required." });
+    const { rows } = await db.query("SELECT contract_end, renewal_deadline_at, contract_terminated_at FROM applications WHERE id=$1", [req.params.id]);
+    const appRow = rows[0];
+    if (!appRow || appRow.contract_terminated_at) return res.status(409).json({ message: "A terminated contract deadline cannot be extended." });
+    const previous = appRow.renewal_deadline_at || new Date(new Date(appRow.contract_end).getTime() + 7 * 86400000);
+    await db.query("UPDATE applications SET renewal_deadline_at=$1 WHERE id=$2", [newDeadline, req.params.id]);
+    await db.query("INSERT INTO renewal_deadline_extensions (id,application_id,previous_deadline_at,new_deadline_at,reason,extended_by) VALUES ($1,$2,$3,$4,$5,$6)", [crypto.randomUUID(), req.params.id, previous, newDeadline, reason, req.auth.sub]);
+    res.json({ renewalDeadlineAt: newDeadline.toISOString() });
   } catch (error) { next(error); }
 });
 
@@ -1602,9 +2459,17 @@ app.get("/api/receipts", requireAuth, requireRole("vendor", "officer", "admin", 
     const params = [];
     if (req.auth.role === "vendor") { params.push(req.auth.sub); where = `WHERE pr.vendor_id = $${params.length}`; }
     else if (req.auth.role === "officer") { params.push(req.auth.sub); where = `WHERE pr.submitted_by = $${params.length}`; }
-    const { rows } = await db.query(`${PAYMENT_RECEIPT_SELECT} ${where} ORDER BY pr.created_at DESC`, params);
+    let sql = `${PAYMENT_RECEIPT_SELECT} ${where} ORDER BY pr.created_at DESC`;
+    let total;
+    const { limit, offset } = parsePagination(req);
+    if (limit != null) {
+      total = Number((await db.query(`SELECT COUNT(*) FROM payment_receipts pr ${where}`, params)).rows[0].count);
+      params.push(limit); sql += ` LIMIT $${params.length}`;
+      params.push(offset); sql += ` OFFSET $${params.length}`;
+    }
+    const { rows } = await db.query(sql, params);
     const receipts = await Promise.all(rows.map(mapPaymentReceiptRow));
-    res.json({ receipts });
+    res.json({ receipts, ...(total !== undefined ? { total } : {}) });
   } catch (error) { next(error); }
 });
 
@@ -1700,25 +2565,62 @@ function mapArchiveRow(r) {
   };
 }
 
-app.get("/api/archive", requireAuth, requireRole("admin", "super_admin"), async (_req, res, next) => {
+app.get("/api/archive", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try {
-    const { rows } = await db.query(`${ARCHIVE_SELECT} ORDER BY a.archived_at DESC`);
-    res.json({ records: rows.map(mapArchiveRow) });
+    let sql = `${ARCHIVE_SELECT} ORDER BY a.archived_at DESC`;
+    let total;
+    const { limit, offset } = parsePagination(req);
+    const values = [];
+    if (limit != null) {
+      total = Number((await db.query("SELECT COUNT(*) FROM archive")).rows[0].count);
+      values.push(limit); sql += ` LIMIT $${values.length}`;
+      values.push(offset); sql += ` OFFSET $${values.length}`;
+    }
+    const { rows } = await db.query(sql, values);
+    res.json({ records: rows.map(mapArchiveRow), ...(total !== undefined ? { total } : {}) });
   } catch (error) { next(error); }
 });
 
+// Archiving a completed application or violation never deletes it — the row
+// stays exactly as it is, just flagged with `is_archived`, which is what
+// makes it disappear from the working admin lists (GET /api/applications,
+// GET /api/violations) while remaining fully intact in the database and
+// now also catalogued here. Only records that are actually done (a decided
+// application, a closed-out violation) can be archived this way, so nothing
+// still in progress can vanish from view by mistake.
 app.post("/api/archive", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
+  const conn = await db.connect();
   try {
     const type = String(req.body.type || "").trim();
     const title = String(req.body.title || "").trim();
     const originalId = String(req.body.originalId || "").trim();
-    if (!["application", "vendor", "stall", "violation"].includes(type)) {
+    if (!["application", "vendor", "stall", "violation", "check_request"].includes(type)) {
+      conn.release();
       return res.status(400).json({ message: "Invalid archive type." });
     }
-    if (!title || !originalId) return res.status(400).json({ message: "Title and original record are required." });
+    if (!title || !originalId) { conn.release(); return res.status(400).json({ message: "Title and original record are required." }); }
+
+    await conn.query("BEGIN");
+
+    if (type === "application") {
+      const { rows } = await conn.query("SELECT status FROM applications WHERE id = $1 FOR UPDATE", [originalId]);
+      if (!rows[0]) { await conn.query("ROLLBACK"); return res.status(404).json({ message: "Application not found." }); }
+      if (rows[0].status !== "rejected") { await conn.query("ROLLBACK"); return res.status(409).json({ message: "Only a decided (rejected/terminated) application can be archived." }); }
+      await conn.query("UPDATE applications SET is_archived = true WHERE id = $1", [originalId]);
+    } else if (type === "violation") {
+      const { rows } = await conn.query("SELECT status FROM violations WHERE id = $1 FOR UPDATE", [originalId]);
+      if (!rows[0]) { await conn.query("ROLLBACK"); return res.status(404).json({ message: "Violation not found." }); }
+      if (!["resolved", "dismissed"].includes(rows[0].status)) { await conn.query("ROLLBACK"); return res.status(409).json({ message: "Only a resolved or dismissed violation can be archived." }); }
+      await conn.query("UPDATE violations SET is_archived = true WHERE id = $1", [originalId]);
+    } else if (type === "check_request") {
+      const { rows } = await conn.query("SELECT status FROM check_requests WHERE id = $1 FOR UPDATE", [originalId]);
+      if (!rows[0]) { await conn.query("ROLLBACK"); return res.status(404).json({ message: "Inspection request not found." }); }
+      if (rows[0].status !== "completed") { await conn.query("ROLLBACK"); return res.status(409).json({ message: "Only a completed inspection can be archived." }); }
+      await conn.query("UPDATE check_requests SET is_archived = true WHERE id = $1", [originalId]);
+    }
 
     const id = crypto.randomUUID();
-    await db.query(
+    await conn.query(
       `INSERT INTO archive (id, type, title, description, original_id, original_data, archived_by, reason, can_restore)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
@@ -1733,9 +2635,11 @@ app.post("/api/archive", requireAuth, requireRole("admin", "super_admin"), async
         req.body.canRestore !== false,
       ]
     );
+    await conn.query("COMMIT");
+
     const { rows } = await db.query(`${ARCHIVE_SELECT} WHERE a.id = $1`, [id]);
     res.status(201).json({ record: mapArchiveRow(rows[0]) });
-  } catch (error) { next(error); }
+  } catch (error) { await conn.query("ROLLBACK"); next(error); } finally { conn.release(); }
 });
 
 app.delete("/api/archive/:id", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
@@ -1789,13 +2693,18 @@ app.get("/api/transfers", requireAuth, async (req, res, next) => {
   try {
     // Vendors only see transfers they sent or received; staff see everything.
     const isStaff = ["admin", "super_admin"].includes(req.auth.role);
-    const { rows } = isStaff
-      ? await db.query(`${TRANSFER_SELECT} ORDER BY t.created_at DESC`)
-      : await db.query(
-          `${TRANSFER_SELECT} WHERE t.from_user_id = $1 OR t.to_user_id = $1 ORDER BY t.created_at DESC`,
-          [req.auth.sub]
-        );
-    res.json({ transfers: rows.map(mapTransferRow) });
+    const where = isStaff ? "" : "WHERE t.from_user_id = $1 OR t.to_user_id = $1";
+    const values = isStaff ? [] : [req.auth.sub];
+    let sql = `${TRANSFER_SELECT} ${where} ORDER BY t.created_at DESC`;
+    let total;
+    const { limit, offset } = parsePagination(req);
+    if (limit != null) {
+      total = Number((await db.query(`SELECT COUNT(*) FROM transfers t ${where}`, values)).rows[0].count);
+      values.push(limit); sql += ` LIMIT $${values.length}`;
+      values.push(offset); sql += ` OFFSET $${values.length}`;
+    }
+    const { rows } = await db.query(sql, values);
+    res.json({ transfers: rows.map(mapTransferRow), ...(total !== undefined ? { total } : {}) });
   } catch (error) { next(error); }
 });
 
@@ -1862,6 +2771,108 @@ app.patch("/api/transfers/:id", requireAuth, async (req, res, next) => {
 });
 
 // ── Market Perimeters (multi-zone) ────────────────────────────────────────────
+const FACILITY_TYPES = new Set(["entrance", "cr", "stairs", "office", "technical_room"]);
+const FACILITY_FLOORS = new Set(["1", "2"]);
+const FACILITY_LABELS = { entrance: "Entrance", cr: "CR", stairs: "Stairs", office: "Office", technical_room: "Technical Room" };
+const FACILITY_AREA_TYPES = new Set(["cr", "office", "technical_room"]);
+
+function validFacilityPosition(position) {
+  return Array.isArray(position) && position.length >= 2 && Number.isFinite(position[0]) && Number.isFinite(position[1]);
+}
+
+function validFacilityGeometry(type, geometry) {
+  if (!geometry || typeof geometry !== "object") return false;
+  if (FACILITY_AREA_TYPES.has(type)) {
+    const ring = geometry.type === "Polygon" ? geometry.coordinates?.[0] : null;
+    return Array.isArray(ring) && ring.length >= 4 && ring.every(validFacilityPosition) &&
+      ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1];
+  }
+  return geometry.type === "Point" && validFacilityPosition(geometry.coordinates);
+}
+
+function normalizeConnectedFloors(type, floor, value) {
+  if (type !== "stairs") return null;
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map(String))].filter((item) => FACILITY_FLOORS.has(item) && item !== floor);
+}
+
+function mapFacilityRow(row) {
+  return {
+    id: row.id, type: row.type, name: FACILITY_LABELS[row.type] ?? row.name, floor: row.floor,
+    geometry: typeof row.geometry === "string" ? JSON.parse(row.geometry) : row.geometry,
+    connectedFloors: Array.isArray(row.connected_floors) ? row.connected_floors
+      : typeof row.connected_floors === "string" ? JSON.parse(row.connected_floors) : [],
+    isAccessible: Boolean(row.is_accessible), notes: row.notes || "", createdAt: row.created_at,
+  };
+}
+
+app.get("/api/map-facilities", async (req, res, next) => {
+  try {
+    const floor = req.query.floor ? String(req.query.floor) : null;
+    if (floor && !FACILITY_FLOORS.has(floor)) return res.status(400).json({ message: "Floor must be 1 or 2." });
+    const { rows } = await db.query("SELECT * FROM map_facilities ORDER BY type, name");
+    const facilities = rows.map(mapFacilityRow).filter((item) => !floor || item.floor === floor || item.connectedFloors.includes(floor));
+    sendWithETag(req, res, { facilities });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/map-facilities", requireAuth, requireRole("super_admin"), async (req, res, next) => {
+  try {
+    const type = String(req.body.type || "");
+    const name = FACILITY_LABELS[type];
+    const floor = String(req.body.floor || "");
+    const { geometry } = req.body;
+    if (!FACILITY_TYPES.has(type)) return res.status(400).json({ message: "Unsupported facility type." });
+    if (!FACILITY_FLOORS.has(floor)) return res.status(400).json({ message: "Floor must be 1 or 2." });
+    if (!validFacilityGeometry(type, geometry)) return res.status(400).json({ message: `Invalid geometry for ${type}.` });
+    const connectedFloors = normalizeConnectedFloors(type, floor, req.body.connectedFloors);
+    const id = crypto.randomUUID();
+    const { rows } = await db.query(
+      `INSERT INTO map_facilities (id,type,name,floor,geometry,connected_floors,is_accessible,notes,created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [id, type, name, floor, JSON.stringify(geometry), connectedFloors ? JSON.stringify(connectedFloors) : null,
+        Boolean(req.body.isAccessible), String(req.body.notes || "").trim(), req.auth.sub]
+    );
+    res.status(201).json({ facility: mapFacilityRow(rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.patch("/api/map-facilities/:id", requireAuth, requireRole("super_admin"), async (req, res, next) => {
+  try {
+    const found = await db.query("SELECT * FROM map_facilities WHERE id = $1", [req.params.id]);
+    if (!found.rows[0]) return res.status(404).json({ message: "Facility not found." });
+    const current = mapFacilityRow(found.rows[0]);
+    const value = {
+      type: req.body.type === undefined ? current.type : String(req.body.type),
+      name: FACILITY_LABELS[req.body.type === undefined ? current.type : String(req.body.type)],
+      floor: req.body.floor === undefined ? current.floor : String(req.body.floor),
+      geometry: req.body.geometry === undefined ? current.geometry : req.body.geometry,
+      isAccessible: req.body.isAccessible === undefined ? current.isAccessible : Boolean(req.body.isAccessible),
+      notes: req.body.notes === undefined ? current.notes : String(req.body.notes).trim(),
+    };
+    if (!FACILITY_TYPES.has(value.type)) return res.status(400).json({ message: "Unsupported facility type." });
+    if (!FACILITY_FLOORS.has(value.floor)) return res.status(400).json({ message: "Floor must be 1 or 2." });
+    if (!validFacilityGeometry(value.type, value.geometry)) return res.status(400).json({ message: `Invalid geometry for ${value.type}.` });
+    const connectedInput = req.body.connectedFloors === undefined ? current.connectedFloors : req.body.connectedFloors;
+    const connectedFloors = normalizeConnectedFloors(value.type, value.floor, connectedInput);
+    const { rows } = await db.query(
+      `UPDATE map_facilities SET type=$1,name=$2,floor=$3,geometry=$4,connected_floors=$5,is_accessible=$6,notes=$7,updated_at=now()
+       WHERE id=$8 RETURNING *`,
+      [value.type, value.name, value.floor, JSON.stringify(value.geometry), connectedFloors ? JSON.stringify(connectedFloors) : null,
+        value.isAccessible, value.notes, req.params.id]
+    );
+    res.json({ facility: mapFacilityRow(rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/map-facilities/:id", requireAuth, requireRole("super_admin"), async (req, res, next) => {
+  try {
+    const result = await db.query("DELETE FROM map_facilities WHERE id = $1 RETURNING id", [req.params.id]);
+    if (!result.rows[0]) return res.status(404).json({ message: "Facility not found." });
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
 app.get("/api/perimeters", async (req, res, next) => {
   try {
     const { rows } = await db.query(`
@@ -1879,7 +2890,7 @@ app.get("/api/perimeters", async (req, res, next) => {
       notes: row.notes || "",
       createdAt: row.created_at,
     }));
-    res.json({ perimeters });
+    sendWithETag(req, res, { perimeters });
   } catch (error) { next(error); }
 });
 

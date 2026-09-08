@@ -1,10 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router";
 import {
-  LayoutDashboard,
-  MapPin,
   FileText,
-  Users,
   User,
   Check,
   X,
@@ -26,15 +23,18 @@ import {
   ChevronDown,
   ArrowUpDown,
   Receipt as ReceiptIcon,
+  Send,
+  Archive,
+  Loader2,
 } from "lucide-react";
 import { AdminMapView } from "../components/AdminMapView";
 import { StallManagementPanel } from "../components/StallManagementPanel";
 import { ContractModal } from "../components/ContractModal";
 import {
-  getAnnouncements,
   createAnnouncement,
   deleteAnnouncement,
 } from "../services/announcementsApi";
+import { useAnnouncements } from "../hooks/useAnnouncements";
 import { useApplications } from "../hooks/useApplications";
 import {
   updateApplicationAdmin,
@@ -46,7 +46,7 @@ import { useStalls } from "../hooks/useStalls";
 import { getSession, getAllUsers } from "../components/authStorage";
 import { listUsers } from "../services/api";
 import { migrateLegacyRequests } from "../services/legacyRequestMigration";
-import { getViolations, assignOfficer } from "../components/violationsStore";
+import { getViolations, updateViolationStatus } from "../components/violationsStore";
 import {
   getViolationRequests,
   createViolationRequest,
@@ -58,9 +58,13 @@ import {
   updateTerminationStatus,
 } from "../components/terminationRequestsStore";
 import { getReceipts, reviewReceipt } from "../services/receiptsApi";
+import { archiveRecord } from "../services/archiveApi";
 import { DashboardLayout } from "../components/DashboardLayout";
+import { PaymentReceiptsPanel } from "../components/PaymentReceiptsPanel";
+import { ContractRenewalsPanel } from "../components/ContractRenewalsPanel";
 import { showToast } from "../components/Toast";
 import { AttachmentLink } from "../components/AttachmentLink";
+import { FilePreviewLink } from "../components/FilePreviewLink";
 import {
   buildPermitDeadlineRemarks,
   formatPermitDeadline,
@@ -110,6 +114,18 @@ const announcementTypeConfig = {
   },
 };
 
+// Common topics for a market-wide announcement. "Other" reveals a free-text
+// field so nothing is forced into the wrong bucket.
+const ANNOUNCEMENT_CATEGORY_OPTIONS = [
+  { value: "Market Operations", label: "Market Operations" },
+  { value: "Fees & Payments", label: "Fees & Payments" },
+  { value: "Maintenance", label: "Maintenance" },
+  { value: "Safety & Compliance", label: "Safety & Compliance" },
+  { value: "Events", label: "Events" },
+  { value: "Policy Updates", label: "Policy Updates" },
+  { value: "other", label: "Other (specify below)" },
+];
+
 function formatDate(isoString) {
   return new Date(isoString).toLocaleDateString("en-US", {
     month: "short",
@@ -141,6 +157,8 @@ export function AdminDashboard() {
     if (path.includes("/applications")) return "applications";
     if (path.includes("/vendors")) return "stall-management";
     if (path.includes("/announcements")) return "announcements";
+    if (path.includes("/receipts")) return "receipts";
+    if (path.includes("/renewals")) return "renewals";
     if (path.includes("/violations")) return "violations";
     if (path.includes("/check-requests")) return "check-requests";
     return "dashboard";
@@ -161,14 +179,22 @@ export function AdminDashboard() {
   const [selectedApp, setSelectedApp] = useState(null);
   const [contractApp, setContractApp] = useState(null);
   const [remarksInput, setRemarksInput] = useState("");
-  const [announcements, setAnnouncements] = useState([]);
+  const [processingAppId, setProcessingAppId] = useState(null);
+  const [processingAction, setProcessingAction] = useState(null); // "approve" | "reject" | null
+  const {
+    announcements,
+    setAnnouncements,
+    loading: announcementsLoading,
+    refetch: refetchAnnouncementsQuery,
+  } = useAnnouncements();
   const [showForm, setShowForm] = useState(false);
-  const [newTitle, setNewTitle] = useState("");
   const [newMessage, setNewMessage] = useState("");
   const [newType, setNewType] = useState("info");
+  const [newCategory, setNewCategory] = useState("");
+  const [newCustomCategory, setNewCustomCategory] = useState("");
   const [appStatusFilter, setAppStatusFilter] = useState("all");
   const [violationsList, setViolationsList] = useState([]);
-  const [assigningViolation, setAssigningViolation] = useState(null);
+
   const [expandedViolation, setExpandedViolation] = useState(null);
   const [users, setUsers] = useState([]);
   const [appSortField, setAppSortField] = useState("date");
@@ -188,6 +214,14 @@ export function AdminDashboard() {
   const [permitDeadlineInput, setPermitDeadlineInput] = useState("");
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [selectedStallForRequest, setSelectedStallForRequest] = useState(null);
+  // True when the modal was opened from a specific violation ("Send Req"),
+  // which already fixes the stall — the picker only makes sense for the
+  // general "New Request" flow, where the admin has to choose one.
+  const [requestStallLocked, setRequestStallLocked] = useState(false);
+  const [requestViolationCategory, setRequestViolationCategory] = useState("");
+  // The violation this request follows up on, so completing it can resolve
+  // that violation automatically.
+  const [requestViolationId, setRequestViolationId] = useState(null);
   const [requestReason, setRequestReason] = useState("");
   const [assigningRequest, setAssigningRequest] = useState(null);
   const [requestOfficers, setRequestOfficers] = useState([]);
@@ -207,7 +241,11 @@ export function AdminDashboard() {
     }
   }, [navigate]);
 
-  const { stalls: storedStalls } = useStalls();
+  const { stalls: storedStalls, loading: stallsLoading } = useStalls();
+  const [tableApplicationsLoading, setTableApplicationsLoading] = useState(true);
+  const [reportsLoading, setReportsLoading] = useState(true);
+  const [receiptsTabLoading, setReceiptsTabLoading] = useState(true);
+  const [requestDataLoading, setRequestDataLoading] = useState(true);
   const approvedStallIds = new Set(
     applications.filter((a) => a.status === "approved").map((a) => a.stallId),
   );
@@ -238,6 +276,7 @@ export function AdminDashboard() {
   }, [selectedApp]);
 
   const handleApprove = async (id) => {
+    if (processingAppId) return;
     const targetApp = applications.find((application) => application.id === id);
     if (!targetApp) return;
     if (
@@ -259,6 +298,8 @@ export function AdminDashboard() {
       return;
     }
 
+    setProcessingAppId(id);
+    setProcessingAction("approve");
     try {
       const adminRemarks = buildPermitDeadlineRemarks(remarksInput, {
         permitDeadlineAt:
@@ -276,10 +317,16 @@ export function AdminDashboard() {
       showToast("Application approved.", "success");
     } catch (error) {
       showToast(`Failed to approve application: ${error.message}`, "error");
+    } finally {
+      setProcessingAppId(null);
+      setProcessingAction(null);
     }
   };
 
   const handleReject = async (id) => {
+    if (processingAppId) return;
+    setProcessingAppId(id);
+    setProcessingAction("reject");
     try {
       const adminRemarks = buildPermitDeadlineRemarks(remarksInput);
       await updateApplicationStatus(id, "rejected", adminRemarks || undefined);
@@ -298,6 +345,9 @@ export function AdminDashboard() {
       showToast("Application rejected.", "error");
     } catch (error) {
       showToast(`Failed to reject application: ${error.message}`, "error");
+    } finally {
+      setProcessingAppId(null);
+      setProcessingAction(null);
     }
   };
 
@@ -346,6 +396,7 @@ export function AdminDashboard() {
   }
 
   async function loadApplicationsTable() {
+    setTableApplicationsLoading(true);
     try {
       const result = await getApplicationsPage({
         status: appStatusFilter,
@@ -358,6 +409,8 @@ export function AdminDashboard() {
       setApplicationsTotal(result.total);
     } catch (error) {
       showToast(`Failed to load applications: ${error.message}`, "error");
+    } finally {
+      setTableApplicationsLoading(false);
     }
   }
 
@@ -370,14 +423,12 @@ export function AdminDashboard() {
   }, [tab, applicationsPageNum, appStatusFilter, appSortField, appSortAsc]);
 
   async function loadAnnouncements() {
-    try {
-      setAnnouncements(await getAnnouncements());
-    } catch (error) {
-      showToast(`Failed to load announcements: ${error.message}`, "error");
-    }
+    const result = await refetchAnnouncementsQuery();
+    if (result.error) showToast(`Failed to load announcements: ${result.error.message}`, "error");
   }
 
   async function loadRequestData() {
+    setRequestDataLoading(true);
     const [
       violationRequestsResult,
       officerRequestsResult,
@@ -431,9 +482,11 @@ export function AdminDashboard() {
         "error",
       );
     }
+    setRequestDataLoading(false);
   }
 
   async function loadReportsData() {
+    setReportsLoading(true);
     const [
       violationsResult,
       checkRequestsResult,
@@ -502,6 +555,7 @@ export function AdminDashboard() {
         "error",
       );
     }
+    setReportsLoading(false);
   }
 
   async function handleReviewReceipt(id, status) {
@@ -517,6 +571,12 @@ export function AdminDashboard() {
   }
 
   useEffect(() => {
+    void getReceipts().then(setReceiptsList).catch(() => {
+      // The dedicated page reports load failures; elsewhere the badge may stay empty.
+    });
+  }, []);
+
+  useEffect(() => {
     if (tab === "announcements" || tab === "dashboard") {
       void loadAnnouncements();
     }
@@ -527,6 +587,15 @@ export function AdminDashboard() {
       void loadReportsData();
       setUsers(getAllUsers());
     }
+    if (tab === "receipts") {
+      setReceiptsTabLoading(true);
+      void getReceipts()
+        .then(setReceiptsList)
+        .catch((error) => {
+          showToast(`Failed to load receipts: ${error.message}`, "error");
+        })
+        .finally(() => setReceiptsTabLoading(false));
+    }
     if (tab === "check-requests") {
       void loadRequestData();
       setUsers(getAllUsers());
@@ -534,21 +603,119 @@ export function AdminDashboard() {
   }, [tab]);
 
   async function handlePostAnnouncement() {
-    if (!newTitle.trim() || !newMessage.trim()) return;
+    const finalCategory = newCategory === "other" ? newCustomCategory.trim() : newCategory;
+    if (!finalCategory || !newMessage.trim()) return;
     try {
       const created = await createAnnouncement({
-        title: newTitle.trim(),
+        // The category picker doubles as the title — one field, not two.
+        title: finalCategory,
         message: newMessage.trim(),
         type: newType,
+        category: finalCategory,
       });
       setAnnouncements((prev) => [created, ...prev]);
-      setNewTitle("");
       setNewMessage("");
       setNewType("info");
+      setNewCategory("");
+      setNewCustomCategory("");
       setShowForm(false);
       showToast("Announcement posted.", "success");
     } catch (error) {
       showToast(`Failed to post announcement: ${error.message}`, "error");
+    }
+  }
+
+  // Expanding a violation's details is also how it gets marked seen — but
+  // only the first time: once status leaves "open" this guard stops it from
+  // re-firing on every subsequent expand/collapse of the same row.
+  async function handleExpandViolation(v) {
+    const willExpand = expandedViolation !== v.id;
+    setExpandedViolation(willExpand ? v.id : null);
+    if (!willExpand || v.status !== "open") return;
+    try {
+      const updated = await updateViolationStatus(v.id, "reviewed");
+      setViolationsList((prev) =>
+        prev.map((item) => (item.id === v.id ? updated : item)),
+      );
+    } catch (error) {
+      showToast(`Failed to mark violation as reviewed: ${error.message}`, "error");
+    }
+  }
+
+  // Archiving never deletes the row — it just flags it so it drops out of
+  // this list (the server enforces it's a decided/closed record first) while
+  // staying fully intact and catalogued on the Archive page. Tracked by id
+  // (not a single boolean) so archiving one row only spins that row's own
+  // button, not every Archive button on the page.
+  const [archivingIds, setArchivingIds] = useState(new Set());
+
+  function markArchiving(id, isArchiving) {
+    setArchivingIds((prev) => {
+      const next = new Set(prev);
+      if (isArchiving) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  async function handleArchiveApplication(app) {
+    markArchiving(app.id, true);
+    try {
+      await archiveRecord({
+        type: "application",
+        title: `${app.businessName} — ${app.stallName}`,
+        description: `Application by ${app.applicantName} for ${app.stallName}. Status: ${app.status}.`,
+        originalId: app.id,
+        originalData: app,
+        reason: app.adminRemarks || "",
+        canRestore: false,
+      });
+      showToast("Application archived.", "success");
+      await loadApplicationsTable();
+    } catch (error) {
+      showToast(`Failed to archive application: ${error.message}`, "error");
+    } finally {
+      markArchiving(app.id, false);
+    }
+  }
+
+  async function handleArchiveViolation(v) {
+    markArchiving(v.id, true);
+    try {
+      await archiveRecord({
+        type: "violation",
+        title: `${v.category} — ${v.stallName}`,
+        description: `Violation against ${v.vendorName} at ${v.stallName}. Status: ${v.status}.`,
+        originalId: v.id,
+        originalData: v,
+        reason: v.remarks || "",
+        canRestore: false,
+      });
+      showToast("Violation archived.", "success");
+      setViolationsList((prev) => prev.filter((item) => item.id !== v.id));
+    } catch (error) {
+      showToast(`Failed to archive violation: ${error.message}`, "error");
+      markArchiving(v.id, false);
+    }
+  }
+
+  async function handleArchiveCheckRequest(r) {
+    markArchiving(r.id, true);
+    try {
+      await archiveRecord({
+        type: "check_request",
+        title: `Inspection — ${r.stallName}`,
+        description: `Inspection at ${r.stallName}, requested by ${r.requestedByName}, completed by ${r.assignedToName ?? "—"}.`,
+        originalId: r.id,
+        originalData: r,
+        reason: r.completionSummary || "",
+        canRestore: false,
+      });
+      showToast("Inspection report archived.", "success");
+      setMapRequests((prev) => prev.filter((item) => item.id !== r.id));
+    } catch (error) {
+      showToast(`Failed to archive inspection report: ${error.message}`, "error");
+      markArchiving(r.id, false);
     }
   }
 
@@ -561,21 +728,6 @@ export function AdminDashboard() {
       showToast("Announcement deleted.", "success");
     } catch (error) {
       showToast(`Failed to delete announcement: ${error.message}`, "error");
-    }
-  }
-
-  async function handleAssignOfficer(violationId, officerId) {
-    const officer = users.find((u) => u.id === officerId);
-    if (!officer) return;
-    try {
-      await assignOfficer(violationId, officerId, officer.name);
-      const refreshed = await getViolations();
-      setViolationsList(refreshed);
-      setAllViolations(refreshed);
-      setAssigningViolation(null);
-      showToast(`Officer "${officer.name}" assigned to violation.`, "success");
-    } catch (error) {
-      showToast(`Failed to assign violation: ${error.message}`, "error");
     }
   }
 
@@ -597,12 +749,17 @@ export function AdminDashboard() {
         requestedBy: session.userId,
         requestedByName: session.name,
         reason: requestReason.trim(),
+        category: requestViolationCategory || null,
+        violationId: requestViolationId,
       });
 
       showToast("Violation check request created.", "success");
       setShowRequestModal(false);
       setSelectedStallForRequest(null);
       setRequestReason("");
+      setRequestStallLocked(false);
+      setRequestViolationId(null);
+      setRequestViolationCategory("");
       await loadRequestData();
     } catch (error) {
       showToast(`Failed to create request: ${error.message}`, "error");
@@ -696,49 +853,35 @@ export function AdminDashboard() {
       applications: "/admin/applications",
       "stall-management": "/admin/vendors",
       announcements: "/admin/announcements",
+      receipts: "/admin/receipts",
+      renewals: "/admin/renewals",
       violations: "/admin/violations",
       "check-requests": "/admin/check-requests",
     };
     navigate(paths[newTab]);
   }
 
-  const openViolations = allViolations.filter(
-    (v) => v.status === "open",
-  ).length;
-  const pendingRequests = checkRequests.filter(
-    (r) => r.status === "pending",
-  ).length;
-
-  const TABS = [
-    { id: "dashboard", label: "Overview", icon: LayoutDashboard },
-    { id: "stalls", label: "Stall Map", icon: MapPin },
-    {
-      id: "applications",
-      label: "Applications",
-      icon: FileText,
-      badge: stats.pending,
-    },
-    { id: "stall-management", label: "Stall Management", icon: Store },
-    { id: "announcements", label: "Announcements", icon: Megaphone },
-    {
-      id: "violations",
-      label: "Reports & Requests",
-      icon: AlertTriangle,
-      badge: openViolations,
-    },
-    {
-      id: "check-requests",
-      label: "Send Request",
-      icon: Search,
-      badge: pendingRequests,
-    },
-  ];
+  const TAB_HEADERS = {
+    dashboard: { title: "Admin Dashboard", subtitle: "Manage applications, stalls, and announcements" },
+    stalls: { title: "Stall Map", subtitle: "View and manage stall status on the market map" },
+    applications: { title: "Applications", subtitle: "Review and decide on vendor stall applications" },
+    "stall-management": { title: "Vendors", subtitle: "Manage vendor stalls and details" },
+    announcements: { title: "Announcements", subtitle: "Post and manage market announcements" },
+    receipts: { title: "Payment Receipts", subtitle: "Review and verify submitted payment receipts" },
+    renewals: { title: "Contract Renewals", subtitle: "Manage vendor contract renewal requests" },
+    violations: { title: "Reports & Requests", subtitle: "Violation reports, inspections, and termination requests" },
+    "check-requests": { title: "Send Request", subtitle: "Request stall inspections from officers" },
+  };
+  const { title: pageTitle, subtitle: pageSubtitle } = TAB_HEADERS[tab] ?? TAB_HEADERS.dashboard;
 
   return (
     <DashboardLayout
       session={session}
-      title="Admin Dashboard"
-      subtitle="Manage applications, stalls, and announcements"
+      title={pageTitle}
+      subtitle={pageSubtitle}
+      navBadges={{
+        "/admin/receipts": receiptsList.filter((receipt) => receipt.status === "pending").length,
+      }}
       actions={
         tab === "announcements" ? (
           <button
@@ -751,37 +894,34 @@ export function AdminDashboard() {
         ) : undefined
       }
     >
-      {/* Tab bar */}
-      <div className="bg-white border-b border-gray-200 px-6">
-        <div className="flex gap-1">
-          {TABS.map((t) => {
-            const Icon = t.icon;
-            return (
-              <button
-                key={t.id}
-                onClick={() => handleTabChange(t.id)}
-                className={`flex items-center gap-2 px-4 py-3.5 text-sm font-medium border-b-2 transition-colors ${
-                  tab === t.id
-                    ? "border-[#14B8A6] text-[#14B8A6]"
-                    : "border-transparent text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                {t.label}
-                {t.badge && t.badge > 0 && (
-                  <span className="w-4 h-4 bg-red-500 text-white text-[10px] rounded-full flex items-center justify-center">
-                    {t.badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
       <div className={`p-6 space-y-5 ${tab === "stalls" ? "!p-0" : ""}`}>
+        {tab === "receipts" && (
+          receiptsTabLoading ? (
+            <div className="bg-white rounded-2xl border border-gray-200 py-20 flex flex-col items-center gap-3">
+              <div className="w-8 h-8 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+              <p className="text-sm text-gray-400">Loading receipts…</p>
+            </div>
+          ) : (
+            <PaymentReceiptsPanel
+              receipts={receiptsList}
+              search={reportSearch}
+              onSearchChange={setReportSearch}
+              statusFilter={reportStatusFilter}
+              onStatusFilterChange={setReportStatusFilter}
+              onReview={handleReviewReceipt}
+            />
+          )
+        )}
+        {tab === "renewals" && <ContractRenewalsPanel />}
+
         {/* Dashboard */}
         {tab === "dashboard" && (
+          applicationsLoading || stallsLoading ? (
+            <div className="bg-white rounded-2xl border border-gray-200 py-20 flex flex-col items-center gap-3">
+              <div className="w-8 h-8 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+              <p className="text-sm text-gray-400">Loading dashboard…</p>
+            </div>
+          ) : (
           <>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow">
@@ -941,17 +1081,27 @@ export function AdminDashboard() {
                                 <>
                                   <button
                                     onClick={() => handleApprove(app.id)}
-                                    className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-medium hover:bg-emerald-600 transition-colors"
+                                    disabled={!!processingAppId}
+                                    className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-medium hover:bg-emerald-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                                     title="Approve"
                                   >
-                                    <Check className="w-4 h-4" />
+                                    {processingAppId === app.id && processingAction === "approve" ? (
+                                      <span className="block w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                                    ) : (
+                                      <Check className="w-4 h-4" />
+                                    )}
                                   </button>
                                   <button
                                     onClick={() => handleReject(app.id)}
-                                    className="px-3 py-1.5 bg-red-500 text-white rounded-lg text-xs font-medium hover:bg-red-600 transition-colors"
+                                    disabled={!!processingAppId}
+                                    className="px-3 py-1.5 bg-red-500 text-white rounded-lg text-xs font-medium hover:bg-red-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                                     title="Reject"
                                   >
-                                    <X className="w-4 h-4" />
+                                    {processingAppId === app.id && processingAction === "reject" ? (
+                                      <span className="block w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                                    ) : (
+                                      <X className="w-4 h-4" />
+                                    )}
                                   </button>
                                 </>
                               )}
@@ -1023,13 +1173,30 @@ export function AdminDashboard() {
                 </div>
 
                 <div className="grid grid-cols-1 gap-3">
-                  <input
-                    type="text"
-                    value={newTitle}
-                    onChange={(e) => setNewTitle(e.target.value)}
-                    placeholder="Announcement title..."
+                  <select
+                    value={newCategory}
+                    onChange={(e) => setNewCategory(e.target.value)}
                     className="w-full h-10 px-4 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14B8A6] text-sm transition-all"
-                  />
+                  >
+                    <option value="" disabled>
+                      Select a title
+                    </option>
+                    {ANNOUNCEMENT_CATEGORY_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  {newCategory === "other" && (
+                    <input
+                      type="text"
+                      value={newCustomCategory}
+                      onChange={(e) => setNewCustomCategory(e.target.value)}
+                      placeholder="Specify the title"
+                      className="w-full h-10 px-4 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14B8A6] text-sm transition-all"
+                      autoFocus
+                    />
+                  )}
                   <textarea
                     value={newMessage}
                     onChange={(e) => setNewMessage(e.target.value)}
@@ -1046,7 +1213,10 @@ export function AdminDashboard() {
                   </p>
                   <button
                     onClick={handlePostAnnouncement}
-                    disabled={!newTitle.trim() || !newMessage.trim()}
+                    disabled={
+                      (newCategory === "other" ? !newCustomCategory.trim() : !newCategory) ||
+                      !newMessage.trim()
+                    }
                     className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl text-sm font-medium hover:shadow-lg hover:shadow-teal-500/30 hover:scale-105 active:scale-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:hover:shadow-none"
                   >
                     <Megaphone className="w-4 h-4" />
@@ -1116,6 +1286,7 @@ export function AdminDashboard() {
               )}
             </div>
           </>
+          )
         )}
 
         {/* Stalls */}
@@ -1188,7 +1359,12 @@ export function AdminDashboard() {
                 </span>
               </div>
 
-              {!applicationsLoading && tableApplications.length === 0 ? (
+              {tableApplicationsLoading ? (
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center py-20">
+                  <div className="w-8 h-8 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin mb-3" />
+                  <p className="text-sm text-gray-400">Loading applications…</p>
+                </div>
+              ) : tableApplications.length === 0 ? (
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center py-20 text-center">
                   <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                     <FileText className="w-8 h-8 text-gray-400" />
@@ -1292,20 +1468,30 @@ export function AdminDashboard() {
                                         e.stopPropagation();
                                         handleApprove(app.id);
                                       }}
-                                      className="px-2.5 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-medium hover:bg-emerald-600 transition-colors"
+                                      disabled={!!processingAppId}
+                                      className="px-2.5 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-medium hover:bg-emerald-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                                       title="Approve"
                                     >
-                                      <Check className="w-3.5 h-3.5" />
+                                      {processingAppId === app.id && processingAction === "approve" ? (
+                                        <span className="block w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                                      ) : (
+                                        <Check className="w-3.5 h-3.5" />
+                                      )}
                                     </button>
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         handleReject(app.id);
                                       }}
-                                      className="px-2.5 py-1.5 bg-red-500 text-white rounded-lg text-xs font-medium hover:bg-red-600 transition-colors"
+                                      disabled={!!processingAppId}
+                                      className="px-2.5 py-1.5 bg-red-500 text-white rounded-lg text-xs font-medium hover:bg-red-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                                       title="Reject"
                                     >
-                                      <X className="w-3.5 h-3.5" />
+                                      {processingAppId === app.id && processingAction === "reject" ? (
+                                        <span className="block w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                                      ) : (
+                                        <X className="w-3.5 h-3.5" />
+                                      )}
                                     </button>
                                   </>
                                 )}
@@ -1318,6 +1504,24 @@ export function AdminDashboard() {
                                     className="flex items-center gap-1 px-2.5 py-1.5 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-lg text-xs font-medium"
                                   >
                                     <Printer className="w-3 h-3" /> Contract
+                                  </button>
+                                )}
+                                {app.status === "rejected" && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleArchiveApplication(app);
+                                    }}
+                                    disabled={archivingIds.has(app.id)}
+                                    className="flex items-center gap-1 px-2.5 py-1.5 bg-gray-100 text-gray-600 rounded-lg text-xs font-medium hover:bg-gray-200 transition-colors disabled:opacity-60"
+                                    title="Archive"
+                                  >
+                                    {archivingIds.has(app.id) ? (
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    ) : (
+                                      <Archive className="w-3.5 h-3.5" />
+                                    )}
+                                    {archivingIds.has(app.id) ? "Archiving…" : "Archive"}
                                   </button>
                                 )}
                               </div>
@@ -1579,15 +1783,31 @@ export function AdminDashboard() {
                         <div className="flex gap-2 pt-1">
                           <button
                             onClick={() => handleApprove(selectedApp.id)}
-                            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-emerald-500 text-white rounded-xl text-sm font-medium hover:bg-emerald-600 transition-colors"
+                            disabled={!!processingAppId}
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-emerald-500 text-white rounded-xl text-sm font-medium hover:bg-emerald-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                           >
-                            <Check className="w-4 h-4" /> Approve
+                            {processingAppId === selectedApp.id && processingAction === "approve" ? (
+                              <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                            ) : (
+                              <Check className="w-4 h-4" />
+                            )}
+                            {processingAppId === selectedApp.id && processingAction === "approve"
+                              ? "Approving…"
+                              : "Approve"}
                           </button>
                           <button
                             onClick={() => handleReject(selectedApp.id)}
-                            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-red-500 text-white rounded-xl text-sm font-medium hover:bg-red-600 transition-colors"
+                            disabled={!!processingAppId}
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-red-500 text-white rounded-xl text-sm font-medium hover:bg-red-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                           >
-                            <X className="w-4 h-4" /> Reject
+                            {processingAppId === selectedApp.id && processingAction === "reject" ? (
+                              <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                            ) : (
+                              <X className="w-4 h-4" />
+                            )}
+                            {processingAppId === selectedApp.id && processingAction === "reject"
+                              ? "Rejecting…"
+                              : "Reject"}
                           </button>
                         </div>
                       )}
@@ -1653,13 +1873,30 @@ export function AdminDashboard() {
                     <label className="block text-sm font-medium text-gray-700 mb-1.5">
                       Title
                     </label>
-                    <input
-                      type="text"
-                      value={newTitle}
-                      onChange={(e) => setNewTitle(e.target.value)}
-                      placeholder="Announcement title..."
+                    <select
+                      value={newCategory}
+                      onChange={(e) => setNewCategory(e.target.value)}
                       className="w-full h-10 px-4 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14B8A6] text-sm transition-all"
-                    />
+                    >
+                      <option value="" disabled>
+                        Select a title
+                      </option>
+                      {ANNOUNCEMENT_CATEGORY_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                    {newCategory === "other" && (
+                      <input
+                        type="text"
+                        value={newCustomCategory}
+                        onChange={(e) => setNewCustomCategory(e.target.value)}
+                        placeholder="Specify the title"
+                        className="mt-2 w-full h-10 px-4 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14B8A6] text-sm transition-all"
+                        autoFocus
+                      />
+                    )}
                   </div>
 
                   <div>
@@ -1684,7 +1921,10 @@ export function AdminDashboard() {
                     </button>
                     <button
                       onClick={handlePostAnnouncement}
-                      disabled={!newTitle.trim() || !newMessage.trim()}
+                      disabled={
+                        (newCategory === "other" ? !newCustomCategory.trim() : !newCategory) ||
+                        !newMessage.trim()
+                      }
                       className="px-5 py-2 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl text-sm font-medium hover:shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Post Announcement
@@ -1695,7 +1935,12 @@ export function AdminDashboard() {
             )}
 
             {/* Announcements List */}
-            {announcements.length === 0 ? (
+            {announcementsLoading ? (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-16 flex flex-col items-center gap-3">
+                <div className="w-8 h-8 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+                <p className="text-sm text-gray-400">Loading announcements…</p>
+              </div>
+            ) : announcements.length === 0 ? (
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-16 text-center">
                 <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                   <Megaphone className="w-8 h-8 text-gray-400" />
@@ -1829,22 +2074,6 @@ export function AdminDashboard() {
                   </span>
                 )}
               </button>
-              <button
-                onClick={() => {
-                  setReportSubTab("receipts");
-                  setReportSearch("");
-                  setReportStatusFilter("all");
-                }}
-                className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all relative ${reportSubTab === "receipts" ? "bg-white text-[#14B8A6] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
-              >
-                Payment Receipts
-                {receiptsList.filter((r) => r.status === "pending").length >
-                  0 && (
-                  <span className="ml-1 inline-flex items-center justify-center w-4 h-4 bg-red-500 text-white rounded-full text-[9px] font-bold">
-                    {receiptsList.filter((r) => r.status === "pending").length}
-                  </span>
-                )}
-              </button>
             </div>
 
             {/* Search + Filter bar */}
@@ -1866,7 +2095,8 @@ export function AdminDashboard() {
                   className="px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#14B8A6]"
                 >
                   <option value="all">All Status</option>
-                  <option value="open">Open</option>
+                  <option value="open">Pending Action</option>
+                  <option value="reviewed">Reviewing</option>
                   <option value="resolved">Resolved</option>
                   <option value="dismissed">Dismissed</option>
                 </select>
@@ -1896,7 +2126,12 @@ export function AdminDashboard() {
                       .includes(reportSearch.toLowerCase());
                   return matchStatus && matchSearch;
                 });
-                return filtered.length === 0 ? (
+                return reportsLoading ? (
+                  <div className="bg-white rounded-2xl border border-gray-200 p-10 flex flex-col items-center gap-3">
+                    <div className="w-7 h-7 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+                    <p className="text-sm text-gray-400">Loading violation reports…</p>
+                  </div>
+                ) : filtered.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center">
                     <AlertTriangle className="w-10 h-10 text-gray-200 mx-auto mb-3" />
                     <p className="text-sm text-gray-400">
@@ -1908,7 +2143,8 @@ export function AdminDashboard() {
                     {filtered.map((v) => {
                       const isExpanded = expandedViolation === v.id;
                       const statusCfg = {
-                        open: { label: "Open", cls: "bg-red-100 text-red-700" },
+                        open: { label: "Pending Action", cls: "bg-red-100 text-red-700" },
+                        reviewed: { label: "Reviewing", cls: "bg-amber-100 text-amber-700" },
                         resolved: {
                           label: "Resolved",
                           cls: "bg-green-100 text-green-700",
@@ -1925,12 +2161,10 @@ export function AdminDashboard() {
                         >
                           <div
                             className="flex items-start gap-4 px-5 py-4 cursor-pointer hover:bg-gray-50 transition-colors"
-                            onClick={() =>
-                              setExpandedViolation(isExpanded ? null : v.id)
-                            }
+                            onClick={() => handleExpandViolation(v)}
                           >
                             <div
-                              className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${v.status === "open" ? "bg-red-500" : v.status === "resolved" ? "bg-green-500" : "bg-gray-400"}`}
+                              className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${v.status === "open" ? "bg-red-500" : v.status === "reviewed" ? "bg-amber-500" : v.status === "resolved" ? "bg-green-500" : "bg-gray-400"}`}
                               style={{ marginTop: 6 }}
                             />
                             <div className="flex-1 min-w-0">
@@ -1969,6 +2203,26 @@ export function AdminDashboard() {
                               <p className="text-xs text-gray-600 mt-1.5 truncate">
                                 {v.description}
                               </p>
+                              {(v.status === "resolved" || v.status === "dismissed") && (
+                                <div className="mt-2 flex justify-end">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleArchiveViolation(v);
+                                    }}
+                                    disabled={archivingIds.has(v.id)}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-semibold rounded-lg transition-colors disabled:opacity-60"
+                                    title="Archive"
+                                  >
+                                    {archivingIds.has(v.id) ? (
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    ) : (
+                                      <Archive className="w-3.5 h-3.5" />
+                                    )}
+                                    {archivingIds.has(v.id) ? "Archiving…" : "Archive"}
+                                  </button>
+                                </div>
+                              )}
                             </div>
                             <span className="text-gray-400 text-xs flex-shrink-0">
                               {isExpanded ? "▲" : "▼"}
@@ -1976,7 +2230,8 @@ export function AdminDashboard() {
                           </div>
 
                           {isExpanded && (
-                            <div className="border-t border-gray-100 bg-gray-50 px-5 py-4 grid grid-cols-1 md:grid-cols-2 gap-5">
+                            <div className="border-t border-gray-100 bg-gray-50">
+                            <div className="px-5 py-4 grid grid-cols-1 md:grid-cols-2 gap-5">
                               <div className="space-y-3">
                                 <div>
                                   <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
@@ -2026,6 +2281,24 @@ export function AdminDashboard() {
                                 )}
                               </div>
                             </div>
+                            {v.status === "reviewed" && (
+                              <div className="px-5 pb-4 flex justify-end gap-2">
+                                <button
+                                  onClick={() => {
+                                    setSelectedStallForRequest({ id: v.stallId, stall_name: v.stallName });
+                                    setRequestViolationCategory(v.category);
+                                    setRequestViolationId(v.id);
+                                    setRequestStallLocked(true);
+                                    setShowRequestModal(true);
+                                  }}
+                                  className="flex items-center gap-1.5 px-3 py-2 bg-[#14B8A6] hover:bg-[#0d9488] text-white text-xs font-semibold rounded-lg transition-colors"
+                                >
+                                  <Send className="w-3.5 h-3.5" />
+                                  Send Req
+                                </button>
+                              </div>
+                            )}
+                            </div>
                           )}
                         </div>
                       );
@@ -2051,7 +2324,12 @@ export function AdminDashboard() {
                     r.reason.toLowerCase().includes(reportSearch.toLowerCase());
                   return hasReport && matchSearch;
                 });
-                return completedReqs.length === 0 ? (
+                return reportsLoading ? (
+                  <div className="bg-white rounded-2xl border border-gray-200 p-10 flex flex-col items-center gap-3">
+                    <div className="w-7 h-7 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+                    <p className="text-sm text-gray-400">Loading inspection reports…</p>
+                  </div>
+                ) : completedReqs.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center">
                     <FileText className="w-10 h-10 text-gray-200 mx-auto mb-3" />
                     <p className="text-sm text-gray-400">
@@ -2125,6 +2403,24 @@ export function AdminDashboard() {
                                 <span className="font-medium">Reason:</span>{" "}
                                 {r.reason}
                               </p>
+                              <div className="mt-2 flex justify-end">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleArchiveCheckRequest(r);
+                                  }}
+                                  disabled={archivingIds.has(r.id)}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-semibold rounded-lg transition-colors disabled:opacity-60"
+                                  title="Archive"
+                                >
+                                  {archivingIds.has(r.id) ? (
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  ) : (
+                                    <Archive className="w-3.5 h-3.5" />
+                                  )}
+                                  {archivingIds.has(r.id) ? "Archiving…" : "Archive"}
+                                </button>
+                              </div>
                             </div>
                             <span className="text-gray-400 text-xs flex-shrink-0">
                               {isExpanded ? "▲" : "▼"}
@@ -2196,7 +2492,12 @@ export function AdminDashboard() {
             {/* ── Termination Requests ── */}
             {reportSubTab === "terminations" && (
               <div className="space-y-3">
-                {terminationsList.length === 0 ? (
+                {reportsLoading ? (
+                  <div className="bg-white rounded-2xl border border-gray-200 p-10 flex flex-col items-center gap-3">
+                    <div className="w-7 h-7 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+                    <p className="text-sm text-gray-400">Loading termination requests…</p>
+                  </div>
+                ) : terminationsList.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center">
                     <AlertTriangle className="w-10 h-10 text-gray-200 mx-auto mb-3" />
                     <p className="text-sm text-gray-400">
@@ -2263,10 +2564,23 @@ export function AdminDashboard() {
                                 </span>
                               </div>
                             </div>
-                            {t.reason && (
+                            {t.type === "contract" && t.reason && (
                               <p className="text-xs text-gray-600 mt-2 bg-gray-50 rounded-lg px-3 py-2 leading-relaxed">
                                 <span className="font-medium">Reason:</span>{" "}
                                 {t.reason}
+                              </p>
+                            )}
+                            {t.type === "account" && t.activeStalls?.length > 0 && (
+                              <p className="text-xs text-amber-700 mt-2 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 leading-relaxed">
+                                <span className="font-medium">
+                                  Still holds {t.activeStalls.length > 1 ? `${t.activeStalls.length} stalls` : "a stall"}:
+                                </span>{" "}
+                                {t.activeStalls.map((s, i) => (
+                                  <span key={s.stallId}>
+                                    {i > 0 && ", "}
+                                    {s.stallName} (due {formatDate(s.contractEnd)})
+                                  </span>
+                                ))}
                               </p>
                             )}
                             {isPending && (
@@ -2324,7 +2638,12 @@ export function AdminDashboard() {
                       .toLowerCase()
                       .includes(reportSearch.toLowerCase()),
                 );
-                return filtered.length === 0 ? (
+                return reportsLoading ? (
+                  <div className="bg-white rounded-2xl border border-gray-200 p-10 flex flex-col items-center gap-3">
+                    <div className="w-7 h-7 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+                    <p className="text-sm text-gray-400">Loading receipts…</p>
+                  </div>
+                ) : filtered.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-gray-200 p-10 text-center">
                     <ReceiptIcon className="w-10 h-10 text-gray-200 mx-auto mb-3" />
                     <p className="text-sm text-gray-400">
@@ -2393,15 +2712,15 @@ export function AdminDashboard() {
                               </p>
                             )}
                             {r.fileUrl && (
-                              <a
-                                href={r.fileUrl}
-                                target="_blank"
-                                rel="noreferrer"
+                              <FilePreviewLink
+                                url={r.fileUrl}
+                                name={r.fileName}
+                                mimeType={r.mimeType}
                                 className="inline-flex items-center gap-1 text-xs text-[#14B8A6] font-medium mt-2 hover:underline"
                               >
                                 <FileText className="w-3.5 h-3.5" />
                                 View receipt file
-                              </a>
+                              </FilePreviewLink>
                             )}
                             {r.status === "pending" && (
                               <div className="flex gap-2 mt-3">
@@ -2446,7 +2765,12 @@ export function AdminDashboard() {
                 </p>
               </div>
               <button
-                onClick={() => setShowRequestModal(true)}
+                onClick={() => {
+                  setRequestStallLocked(false);
+                  setRequestViolationCategory("");
+                  setRequestViolationId(null);
+                  setShowRequestModal(true);
+                }}
                 className="flex items-center gap-1.5 bg-[#14B8A6] hover:bg-[#0d9488] text-white text-xs font-semibold px-3 py-2 rounded-lg transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -2454,7 +2778,12 @@ export function AdminDashboard() {
               </button>
             </div>
 
-            {checkRequests.length === 0 && mapRequests.length === 0 ? (
+            {requestDataLoading ? (
+              <div className="bg-white rounded-2xl border border-gray-200 p-8 flex flex-col items-center gap-3">
+                <div className="w-7 h-7 border-2 border-gray-200 border-t-[#14B8A6] rounded-full animate-spin" />
+                <p className="text-sm text-gray-400">Loading requests…</p>
+              </div>
+            ) : checkRequests.length === 0 && mapRequests.length === 0 ? (
               <div className="bg-white rounded-2xl border border-gray-200 p-8 text-center">
                 <Search className="w-10 h-10 text-gray-300 mx-auto mb-3" />
                 <p className="text-sm text-gray-500">No requests sent yet</p>
@@ -2771,6 +3100,9 @@ export function AdminDashboard() {
                   setShowRequestModal(false);
                   setSelectedStallForRequest(null);
                   setRequestReason("");
+                  setRequestStallLocked(false);
+                  setRequestViolationCategory("");
+                  setRequestViolationId(null);
                 }}
                 className="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center"
               >
@@ -2779,46 +3111,65 @@ export function AdminDashboard() {
             </div>
 
             <div className="p-6 space-y-4 overflow-y-auto flex-1">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Select Stall from Map
-                </label>
-                <div className="h-64 border border-gray-300 rounded-xl overflow-hidden relative bg-gray-100">
-                  {/* Simple stall selector list */}
-                  <div className="h-full overflow-y-auto p-3 space-y-2">
-                    {storedStalls.map((stall) => (
-                      <button
-                        key={stall.id}
-                        onClick={() => setSelectedStallForRequest(stall)}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          selectedStallForRequest?.id === stall.id
-                            ? "bg-[#14B8A6] text-white"
-                            : "bg-white hover:bg-gray-50"
-                        }`}
-                      >
-                        {stall.stall_name}{" "}
-                        <span className="text-xs opacity-75">
-                          ({stall.section})
-                        </span>
-                      </button>
-                    ))}
+              {requestStallLocked ? (
+                <>
+                  <div className="px-3 py-2.5 bg-teal-50 border border-teal-100 rounded-xl">
+                    <p className="text-xs text-gray-500">Stall</p>
+                    <p className="text-sm font-medium text-gray-900">
+                      {selectedStallForRequest?.stall_name}
+                    </p>
                   </div>
+                  {requestViolationCategory && (
+                    <div className="px-3 py-2.5 bg-teal-50 border border-teal-100 rounded-xl">
+                      <p className="text-xs text-gray-500">Category</p>
+                      <p className="text-sm font-medium text-gray-900">
+                        {requestViolationCategory}
+                      </p>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                    Select Stall from Map
+                  </label>
+                  <div className="h-64 border border-gray-300 rounded-xl overflow-hidden relative bg-gray-100">
+                    {/* Simple stall selector list */}
+                    <div className="h-full overflow-y-auto p-3 space-y-2">
+                      {storedStalls.map((stall) => (
+                        <button
+                          key={stall.id}
+                          onClick={() => setSelectedStallForRequest(stall)}
+                          className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                            selectedStallForRequest?.id === stall.id
+                              ? "bg-[#14B8A6] text-white"
+                              : "bg-white hover:bg-gray-50"
+                          }`}
+                        >
+                          {stall.stall_name}{" "}
+                          <span className="text-xs opacity-75">
+                            ({stall.section})
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {selectedStallForRequest && (
+                    <p className="text-xs text-[#14B8A6] font-medium mt-1">
+                      Selected: {selectedStallForRequest.stall_name}
+                    </p>
+                  )}
                 </div>
-                {selectedStallForRequest && (
-                  <p className="text-xs text-[#14B8A6] font-medium mt-1">
-                    Selected: {selectedStallForRequest.stall_name}
-                  </p>
-                )}
-              </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Reason for Check
+                  Message
                 </label>
                 <textarea
                   value={requestReason}
                   onChange={(e) => setRequestReason(e.target.value)}
-                  placeholder="Describe why this stall should be checked..."
+                  placeholder="Input Message here"
                   rows={4}
                   className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#14B8A6] resize-none"
                 />
@@ -2830,6 +3181,9 @@ export function AdminDashboard() {
                     setShowRequestModal(false);
                     setSelectedStallForRequest(null);
                     setRequestReason("");
+                    setRequestStallLocked(false);
+                    setRequestViolationCategory("");
+                    setRequestViolationId(null);
                   }}
                   className="flex-1 px-4 py-2.5 border border-gray-200 text-gray-600 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors"
                 >
@@ -2902,7 +3256,9 @@ export function AdminDashboard() {
             </h3>
             <p className="text-sm text-gray-500 text-center mb-6">
               {terminationActionConfirm.action === "approved"
-                ? `This will approve the termination request submitted by ${terminationActionConfirm.name}. This action cannot be undone.`
+                ? terminationActionConfirm.type === "account"
+                  ? `This will archive ${terminationActionConfirm.name}'s account and close out their stall applications.`
+                  : `This will approve the termination request submitted by ${terminationActionConfirm.name}. This action cannot be undone.`
                 : `The termination request from ${terminationActionConfirm.name} will be rejected and they will be notified.`}
             </p>
             <div className="flex gap-3">

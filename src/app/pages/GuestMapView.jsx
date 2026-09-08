@@ -3,12 +3,15 @@ import { useNavigate, Link } from "react-router";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { MapPin, Store, X, LogIn, UserPlus, User, ChevronRight, CheckSquare, Clock } from "lucide-react";
+import { MapPin, Store, X, LogIn, UserPlus, User, ChevronRight, CheckSquare, Clock, Loader2 } from "lucide-react";
 import { useStalls } from "../hooks/useStalls";
 import { useOccupiedStalls } from "../hooks/useOccupiedStalls";
 import { FloorSwitcher } from "../components/FloorSwitcher";
 import { showToast } from "../components/Toast";
 import { ImageViewerModal } from "../components/ImageViewerModal";
+import { useMapFacilities } from "../hooks/useMapFacilities";
+import { MapFacilitiesLayer, MapFacilitiesLegend, stallFloaterHtml } from "../components/MapFacilitiesLayer";
+import { registerMapFloater } from "../components/mapFloaterDeclutter";
 
 const MAP_CSS = `
   .leaflet-container { background: #e5e7eb; }
@@ -40,6 +43,7 @@ function DrawnStallsLayer({
   const map = useMap();
   useEffect(() => {
     const layers = [];
+    const unregister = [];
     stalls.forEach((stall) => {
       const occupied = occupiedStallIds.has(stall.id);
       const pending = !occupied && pendingStallIds.has(stall.id);
@@ -59,15 +63,19 @@ function DrawnStallsLayer({
         },
       );
       const label = occupied ? "Occupied" : pending ? "Application pending" : "Available";
-      layer.bindTooltip(`<strong>${stall.stall_name}</strong> · ${label}`, {
-        direction: "top",
+      layer.bindTooltip(stallFloaterHtml(stall.stall_name, color), {
+        permanent: true,
+        direction: "center",
+        className: "vendor-stall-floater",
         opacity: 0.95,
       });
       layer.on("click", () => onSelect(stall));
       layer.addTo(map);
+      unregister.push(registerMapFloater(map, layer, { selected: isSelected }));
       layers.push(layer);
     });
     return () => {
+      unregister.forEach((remove) => remove());
       layers.forEach((l) => map.removeLayer(l));
     };
   }, [stalls, occupiedStallIds, pendingStallIds, selectedId, selectedIds, multiSelectMode, map, onSelect]);
@@ -102,6 +110,7 @@ export function GuestMapView() {
   const [flyTarget, setFlyTarget] = useState(null);
   const [pendingStallIds, setPendingStallIds] = useState(null);
   const [activeFloor, setActiveFloor] = useState("1");
+  const { facilities } = useMapFacilities(activeFloor);
 
   const floorStalls = stalls.filter((s) => s.floor === activeFloor);
 
@@ -186,9 +195,11 @@ export function GuestMapView() {
             multiSelectMode={multiSelectMode}
             onSelect={handleSelectStall}
           />
+          <MapFacilitiesLayer facilities={facilities} />
           <FlyTo position={flyTarget} />
         </MapContainer>
       </div>
+      <MapFacilitiesLegend showStallStatuses className="absolute bottom-5 left-5 z-[900] space-y-1 rounded-xl border bg-white/95 p-3 shadow-lg" />
 
       {/* Top bar */}
       <div className="absolute top-0 left-0 right-0 z-[1000] pointer-events-none">
@@ -269,6 +280,19 @@ export function GuestMapView() {
           )}
         </div>
       </div>
+
+      {/* Loading state */}
+      {loading && (
+        <div
+          className="absolute inset-0 z-[500] flex items-center justify-center bg-white/60 backdrop-blur-[1px]"
+          style={{ top: "80px" }}
+        >
+          <div className="flex flex-col items-center gap-3">
+            <Loader2 className="w-7 h-7 text-teal-600 animate-spin" />
+            <p className="text-sm font-medium text-gray-600">Loading stalls…</p>
+          </div>
+        </div>
+      )}
 
       {/* Empty state */}
       {!loading && stalls.length === 0 && (

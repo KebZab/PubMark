@@ -247,7 +247,7 @@ the same officer account.
 - [x] Violations — report with camera evidence, resolve/dismiss
 - [x] Check requests — complete inspections with findings + photos
 - [x] Map — stalls flagged by open violations
-- [x] Receipts — filename only, no real upload (same as permits/evidence)
+- [x] Receipts — real camera/document uploads to private Supabase Storage, with signed viewing links
 - [x] Phase 4 complete
 
 ---
@@ -312,6 +312,16 @@ exception: they upload real files to Supabase Storage. That needs one-time
 setup (a `receipts` storage bucket, plus `SUPABASE_URL` and
 `SUPABASE_SERVICE_ROLE_KEY` in `server/.env`) — see `server/README.md`. Worth
 confirming that's done before building the screen.
+
+This receipt work is now complete for officer and vendor mobile screens.
+Vendors submit treasurer-issued receipts from approved application details;
+both roles upload actual file contents and see review status. Admin and Super
+Admin review them from dedicated web routes.
+
+Contract renewal is also available from vendor application details. The mobile
+banner starts 30 days before expiration, becomes urgent during the last 7 days,
+and shows the effective seven-day post-expiration renewal deadline (including
+any Super Admin extension). See `database.md` for the full renewal lifecycle.
 
 **`CLAUDE.md` is out of date.** It still describes the pre-Supabase, pre-mobile
 layout, so a fresh session would start with a materially wrong picture. Worth

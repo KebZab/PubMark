@@ -1,4 +1,4 @@
-import { getToken } from "./tokenStore";
+import { getToken, clearSession } from "./tokenStore";
 import { resolveApiBaseUrl } from "./apiBaseUrl";
 
 // Mirrors src/app/services/api.ts in the web app, with one difference:
@@ -12,6 +12,17 @@ export class ApiConfigurationError extends Error {
       "Could not work out the API address. In development this is normally automatic; for a production build, set EXPO_PUBLIC_API_BASE_URL in mobile/.env.",
     );
   }
+}
+
+// Set once by AuthContext on mount. The server flags EVERY authenticated
+// request with `code: "account_terminated"` once an admin approves closing
+// an account, not just login — this is what lets apiFetch notice mid-session
+// (from whatever screen happens to be active) and force a clean logout,
+// instead of the app just sitting there throwing errors until the token's
+// normal 8h expiry.
+let onAccountTerminated = null;
+export function setAccountTerminatedHandler(handler) {
+  onAccountTerminated = handler;
 }
 
 export async function apiFetch(path, init = {}) {
@@ -40,6 +51,10 @@ export async function apiFetch(path, init = {}) {
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
+    if (error.code === "account_terminated") {
+      await clearSession();
+      onAccountTerminated?.();
+    }
     throw new Error(error.message || "Unable to complete the request.");
   }
   return response.json();
@@ -94,8 +109,23 @@ export async function getAnnouncements() {
   return apiFetch("/announcements");
 }
 
+// Per-account "last seen" watermarks behind notification badges (e.g. the
+// Notices tab's unread count) — see hooks/useLastSeenTracker.js.
+export async function getNotificationReadState() {
+  return apiFetch("/notification-read-state");
+}
+
+export async function markNotificationSeen(trackerKey) {
+  return apiFetch(`/notification-read-state/${trackerKey}`, { method: "POST" });
+}
+
 export async function getStalls() {
   return apiFetch("/stalls");
+}
+
+export async function getMapFacilities(floor) {
+  const query = floor ? `?floor=${encodeURIComponent(floor)}` : "";
+  return apiFetch(`/map-facilities${query}`);
 }
 
 export async function createApplication(input) {
@@ -183,5 +213,31 @@ export async function createReceipt(input) {
   return apiFetch("/receipts", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+// ── Termination requests ────────────────────────────────────────────────────
+
+/**
+ * Requests closing the whole account (`type: "account"`) or ending a single
+ * stall contract (`type: "contract"`, with `stallId`) — an admin reviews and
+ * approves/rejects it, this only ever queues the request.
+ * @param {{type: "account"|"contract", stallId?: string, reason: string}} input
+ */
+export async function createTerminationRequest(input) {
+  return apiFetch("/termination-requests", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function getContractRenewals() {
+  return apiFetch("/contract-renewals");
+}
+
+export async function requestContractRenewal(applicationId, requestedMonths) {
+  return apiFetch("/contract-renewals", {
+    method: "POST",
+    body: JSON.stringify({ applicationId, requestedMonths: Number(requestedMonths) }),
   });
 }

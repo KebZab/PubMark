@@ -2,27 +2,46 @@ import { useState, useEffect } from "react";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { X, AlertTriangle, MapPin, Send, ChevronDown } from "lucide-react";
+import { X, MapPin, Send, Loader2 } from "lucide-react";
 import { FloorSwitcher } from "./FloorSwitcher";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
 import { saveCheckRequest } from "./checkRequestsStore";
 import { listUsers } from "../services/api";
 import { showToast } from "./Toast";
+import { useMapFacilities } from "../hooks/useMapFacilities";
+import { MapFacilitiesLayer, MapFacilitiesLegend, stallFloaterHtml } from "./MapFacilitiesLayer";
+import { registerMapFloater } from "./mapFloaterDeclutter";
 
+// The one application that represents a stall's current state: the approved
+// tenant if there is one, otherwise whoever applied first — matches how
+// every other admin map resolves this.
 function getActiveApp(stallId, applications) {
-  return (
-    applications
-      .filter((a) => a.stallId === stallId && a.status !== "rejected")
-      .sort((a, b) => new Date(b.dateApplied).getTime() - new Date(a.dateApplied).getTime())[0] ??
-    null
-  );
+  const active = applications
+    .filter((a) => a.stallId === stallId && a.status !== "rejected")
+    .sort((a, b) => new Date(a.dateApplied).getTime() - new Date(b.dateApplied).getTime());
+  return active.find((a) => a.status === "approved") ?? active[0] ?? null;
 }
+
+// Common reasons an admin sends an officer to check a stall. "Other" reveals
+// a free-text field so nothing is forced into the wrong bucket.
+const REASON_OPTIONS = [
+  { value: "Routine inspection", label: "Routine inspection" },
+  { value: "Complaint received", label: "Complaint received" },
+  { value: "Suspected violation", label: "Suspected violation" },
+  { value: "Safety or sanitation concern", label: "Safety or sanitation concern" },
+  { value: "Lease/contract verification", label: "Lease or contract verification" },
+  { value: "Vacancy verification", label: "Vacancy verification" },
+  { value: "Follow-up on previous report", label: "Follow-up on previous report" },
+  { value: "other", label: "Other (specify below)" },
+];
 
 function StallMarkers({ stalls, applications, currentFloor, selectedStallId, onSelectStall }) {
   const map = useMap();
 
   useEffect(() => {
+    const renderedLayers = [];
+    const unregister = [];
     function stallColor(stallId) {
       const app = getActiveApp(stallId, applications);
       if (app?.status === "approved") return "#ef4444";
@@ -58,18 +77,17 @@ function StallMarkers({ stalls, applications, currentFloor, selectedStallId, onS
       );
       geo.eachLayer((l) => {
         const layer = l;
-        layer.bindTooltip(stallTooltip(stall), { direction: "top", opacity: 0.95 });
+        layer.bindTooltip(stallFloaterHtml(stall.stall_name, color), { permanent: true, direction: "center", className: "vendor-stall-floater", opacity: 0.95 });
         layer.on("click", () => onSelectStall(stall.id));
         map.addLayer(layer);
+        unregister.push(registerMapFloater(map, layer, { selected: isSelected }));
+        renderedLayers.push(layer);
       });
     });
 
     return () => {
-      map.eachLayer((layer) => {
-        if (layer instanceof L.Path && !(layer instanceof L.TileLayer)) {
-          map.removeLayer(layer);
-        }
-      });
+      unregister.forEach((remove) => remove());
+      renderedLayers.forEach((layer) => map.removeLayer(layer));
     };
   }, [map, stalls, applications, currentFloor, selectedStallId, onSelectStall]);
 
@@ -80,13 +98,16 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
   const { stalls } = useStalls();
   const { applications } = useApplications();
   const [activeFloor, setActiveFloor] = useState("1");
+  const { facilities } = useMapFacilities(activeFloor);
   const [selectedStallId, setSelectedStallId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [priority, setPriority] = useState("normal");
   const [reason, setReason] = useState("");
+  const [customReason, setCustomReason] = useState("");
   const [notes, setNotes] = useState("");
   const [assignedOfficer, setAssignedOfficer] = useState("");
   const [officers, setOfficers] = useState([]);
+  const [submitting, setSubmitting] = useState(false);
 
   const selectedStall = stalls.find((s) => s.id === selectedStallId) ?? null;
 
@@ -117,18 +138,27 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
     setSelectedStallId(stallId);
     setShowForm(true);
     setReason("");
+    setCustomReason("");
     setNotes("");
     setPriority("normal");
     setAssignedOfficer(officers[0]?.id ?? "");
+    setSubmitting(false);
   }
 
   async function handleSubmit() {
-    if (!selectedStall) return;
-    if (!reason.trim()) {
-      showToast("Please provide a reason for the check request.", "error");
+    if (!selectedStall || submitting) return;
+    const finalReason = reason === "other" ? customReason.trim() : reason;
+    if (!finalReason) {
+      showToast(
+        reason === "other"
+          ? "Please specify the reason for the check request."
+          : "Please choose a reason for the check request.",
+        "error",
+      );
       return;
     }
 
+    setSubmitting(true);
     try {
       await saveCheckRequest({
         stallId: selectedStall.id,
@@ -138,7 +168,7 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
         assignedTo: assignedOfficer || null,
         assignedToName: officers.find((o) => o.id === assignedOfficer)?.name ?? null,
         priority,
-        reason: reason.trim(),
+        reason: finalReason,
         notes: notes.trim(),
         status: "pending",
         completionNotes: "",
@@ -150,6 +180,8 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
       if (onRequestCreated) onRequestCreated();
     } catch (error) {
       showToast(`Failed to create check request: ${error.message}`, "error");
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -197,6 +229,7 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
             selectedStallId={selectedStallId}
             onSelectStall={handleStallClick}
           />
+          <MapFacilitiesLayer facilities={facilities} />
         </MapContainer>
 
         {/* Legend */}
@@ -204,6 +237,7 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
           <p className="font-semibold text-gray-500 uppercase text-[10px] tracking-wide mb-1">
             Legend
           </p>
+          <MapFacilitiesLegend className="mb-2 space-y-1 border-b pb-2" />
           <div className="flex items-center gap-2">
             <div className="w-5 h-3 rounded border-2 border-green-500 bg-green-500/20" />
             <span className="text-gray-700">Vacant</span>
@@ -233,7 +267,8 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
                   setShowForm(false);
                   setSelectedStallId(null);
                 }}
-                className="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center hover:bg-white/30 transition-colors"
+                disabled={submitting}
+                className="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center hover:bg-white/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <X className="w-4 h-4 text-white" />
               </button>
@@ -244,13 +279,30 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
                 <label className="block text-xs font-medium text-gray-700 mb-1.5">
                   Reason <span className="text-red-500">*</span>
                 </label>
-                <input
-                  type="text"
+                <select
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
-                  placeholder="e.g. Routine inspection, complaint received"
                   className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                >
+                  <option value="" disabled>
+                    Select a reason
+                  </option>
+                  {REASON_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                {reason === "other" && (
+                  <input
+                    type="text"
+                    value={customReason}
+                    onChange={(e) => setCustomReason(e.target.value)}
+                    placeholder="Specify the reason"
+                    className="mt-2 w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    autoFocus
+                  />
+                )}
               </div>
 
               <div>
@@ -308,16 +360,27 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
                   setShowForm(false);
                   setSelectedStallId(null);
                 }}
-                className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+                disabled={submitting}
+                className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSubmit}
-                className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2"
+                disabled={submitting}
+                className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                <Send className="w-4 h-4" />
-                Send Request
+                {submitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Sending...
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-4 h-4" />
+                    Send Request
+                  </>
+                )}
               </button>
             </div>
           </div>

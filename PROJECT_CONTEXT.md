@@ -8,6 +8,24 @@ report violations; admins manage day-to-day market operations; super-admins
 manage users, maps, inventory, analytics, and archives. The interface is a
 React/Vite/TypeScript wireframe with an interactive Leaflet market map.
 
+### Current receipt and renewal status (2026-09-06)
+
+- The running backend is PostgreSQL/Supabase-backed for applications, receipts,
+  and contract renewals; the older MySQL/localStorage description below is
+  retained as historical migration context.
+- Vendor and officer web/mobile clients upload real payment-receipt files.
+  Admin and Super Admin review them at `/admin/receipts` and
+  `/super-admin/receipts`.
+- Contract expiration warnings begin 30 days before `contract_end`. Vendors
+  may request renewal through seven days after expiration unless Super Admin
+  grants a longer deadline with a required audit reason.
+- Admin and Super Admin review renewals at `/admin/renewals` and
+  `/super-admin/renewals`. Approval extends the existing contract; an
+  application without a pending request is terminated after its final renewal
+  deadline.
+- The schema is in `server/migrations/2026-09-06-contract-renewals.sql` and has
+  been applied to the configured shared database.
+
 **Current architectural status (important):** the application is in a backend
 migration. Login and registration now call the temporary MySQL HTTP API, but
 the majority of domain pages and stores still use browser `localStorage`.

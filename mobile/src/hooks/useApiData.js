@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 // Small fetch-with-state helper, equivalent to the web app's useApplications /
 // useStalls hooks. Tracks loading separately from "empty" so screens can avoid
@@ -7,39 +7,37 @@ export function useApiData(fetcher, deps = []) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const mounted = useRef(false);
+  const requestId = useRef(0);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const stableFetcher = useCallback(fetcher, deps);
 
   const load = useCallback(async () => {
+    if (!mounted.current) return;
+    const id = ++requestId.current;
+    const isCurrent = () => mounted.current && id === requestId.current;
     setError(null);
     try {
-      setData(await stableFetcher());
+      const result = await stableFetcher();
+      if (isCurrent()) setData(result);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong.");
+      if (isCurrent()) setError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, [stableFetcher]);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const result = await stableFetcher();
-        if (!cancelled) setData(result);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Something went wrong.");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
+    mounted.current = true;
+    setLoading(true);
+    void load();
     return () => {
-      cancelled = true;
+      mounted.current = false;
+      // Invalidate both initial loads and manual refreshes on cleanup.
+      requestId.current++;
     };
-  }, [stableFetcher]);
+  }, [load]);
 
   // For pull-to-refresh: refetch without flipping back to the loading state.
   const refetch = useCallback(async () => {

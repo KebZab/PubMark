@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Clock, CheckCircle, XCircle, Trash2, Eye, User, MapPin } from "lucide-react";
+import { Clock, CheckCircle, XCircle, User, MapPin } from "lucide-react";
 import {
   getCheckRequests,
   updateCheckRequestStatus,
@@ -132,7 +132,7 @@ export function CheckRequests() {
               ) : (
                 requests.map((req) => {
                   const cfg = STATUS_CONFIG[req.status];
-                  const StatusIcon = cfg.icon;
+
                   const priorityCfg = PRIORITY_CONFIG[req.priority];
                   const isSelected = selectedRequest?.id === req.id;
                   return (
