@@ -1,4 +1,5 @@
 import { FileText, Receipt, Search } from "lucide-react";
+import { FilePreviewLink } from "./FilePreviewLink";
 
 function formatDate(value) {
   if (!value) return "—";
@@ -105,9 +106,14 @@ export function PaymentReceiptsPanel({
                   {receipt.notes ? <p className="mt-2 rounded-lg bg-gray-50 px-3 py-2 text-xs leading-relaxed text-gray-600">{receipt.notes}</p> : null}
                   {receipt.remarks ? <p className="mt-2 text-xs text-gray-500">Review remarks: {receipt.remarks}</p> : null}
                   {receipt.fileUrl ? (
-                    <a href={receipt.fileUrl} target="_blank" rel="noreferrer" className={`mt-2 inline-flex items-center gap-1 text-xs font-medium hover:underline ${theme.link}`}>
+                    <FilePreviewLink
+                      url={receipt.fileUrl}
+                      name={receipt.fileName}
+                      mimeType={receipt.mimeType}
+                      className={`mt-2 inline-flex items-center gap-1 text-xs font-medium hover:underline ${theme.link}`}
+                    >
                       <FileText className="h-3.5 w-3.5" /> View receipt file
-                    </a>
+                    </FilePreviewLink>
                   ) : (
                     <p className="mt-2 text-xs italic text-gray-400">Receipt file is unavailable.</p>
                   )}

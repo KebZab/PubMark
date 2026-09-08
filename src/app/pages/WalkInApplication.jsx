@@ -44,7 +44,7 @@ function SectionHeader({ icon: Icon, label }) {
   );
 }
 
-function CreateVendorPanel() {
+function CreateVendorPanel({ onVendorCreated }) {
   const [form, setForm] = useState(EMPTY_VENDOR_FORM);
   const [formErrors, setFormErrors] = useState({});
   const [showPw, setShowPw] = useState(false);
@@ -79,6 +79,7 @@ function CreateVendorPanel() {
         address: form.address,
       });
       setInvitationSentEmail(form.email.trim());
+      onVendorCreated?.({ name: form.name.trim(), email: form.email.trim() });
       setForm(EMPTY_VENDOR_FORM);
       setFormErrors({});
     } catch (error) {
@@ -89,36 +90,51 @@ function CreateVendorPanel() {
   }
 
   return (
-    <div className="max-w-lg space-y-4">
+    <div className="space-y-4">
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 sm:p-6 space-y-4">
-        <p className="text-xs leading-5 text-gray-500">
+        <SectionHeader icon={UserPlus} label="Vendor Account Details" />
+        <p className="text-xs leading-5 text-gray-500 -mt-2">
           Create a vendor account for a walk-in applicant. They'll get a confirmation email and
           won't be able to sign in — or be selectable in "Apply for Stall" — until they click it.
         </p>
-        {[
-          { field: "name", label: "Full Name", placeholder: "Juan dela Cruz", type: "text" },
-          { field: "email", label: "Email Address", placeholder: "vendor@example.com", type: "email" },
-          { field: "phone", label: "Phone Number", placeholder: "09XXXXXXXXX", type: "text" },
-          { field: "address", label: "Address", placeholder: "Street, City, Province", type: "text" },
-        ].map(({ field, label, placeholder, type }) => (
-          <div key={field}>
-            <label htmlFor={`vendor-${field}`} className="block text-xs font-medium text-gray-700 mb-1.5">
-              {label}
-            </label>
-            <input
-              id={`vendor-${field}`}
-              type={type}
-              value={form[field]}
-              onChange={(e) => setForm((prev) => ({ ...prev, [field]: e.target.value }))}
-              placeholder={placeholder}
-              className={`w-full px-3 py-2.5 bg-gray-50 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#14B8A6] ${
-                formErrors[field] ? "border-red-300" : "border-gray-200"
-              }`}
-            />
-            {formErrors[field] && <p className="text-red-500 text-xs mt-1">{formErrors[field]}</p>}
-          </div>
-        ))}
-        <div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {[
+            { field: "name", label: "Full Name", placeholder: "Juan dela Cruz", type: "text" },
+            { field: "email", label: "Email Address", placeholder: "vendor@example.com", type: "email" },
+            { field: "phone", label: "Phone Number", placeholder: "09XXXXXXXXX", type: "text" },
+            { field: "address", label: "Address", placeholder: "Street, City, Province", type: "text" },
+          ].map(({ field, label, placeholder, type }) => (
+            <div key={field}>
+              <label htmlFor={`vendor-${field}`} className="block text-xs font-medium text-gray-700 mb-1.5">
+                {label}
+              </label>
+              <input
+                id={`vendor-${field}`}
+                type={type}
+                value={form[field]}
+                onChange={(e) => {
+                  // Same 11-digit rule as the vendor-facing registration forms
+                  // (web Register.jsx / mobile RegisterScreen.jsx).
+                  const value =
+                    field === "phone" ? e.target.value.replace(/[^\d]/g, "").slice(0, 11) : e.target.value;
+                  setForm((prev) => ({ ...prev, [field]: value }));
+                }}
+                placeholder={placeholder}
+                maxLength={field === "phone" ? 11 : undefined}
+                className={`w-full px-3 py-2.5 bg-gray-50 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#14B8A6] ${
+                  formErrors[field] ? "border-red-300" : "border-gray-200"
+                }`}
+              />
+              {field === "phone" && (
+                <p className={`text-[11px] mt-1 text-right ${form.phone.length === 11 ? "text-[#14B8A6]" : "text-gray-400"}`}>
+                  {form.phone.length}/11
+                </p>
+              )}
+              {formErrors[field] && <p className="text-red-500 text-xs mt-1">{formErrors[field]}</p>}
+            </div>
+          ))}
+        </div>
+        <div className="max-w-sm">
           <label className="block text-xs font-medium text-gray-700 mb-1.5">Password</label>
           <div className="relative">
             <input
@@ -181,7 +197,7 @@ function StepIndicator({ step }) {
   ];
   const activeIndex = steps.findIndex((s) => s.key === step);
   return (
-    <div className="flex items-center gap-2 mb-5 max-w-lg">
+    <div className="flex items-center gap-2 mb-5 max-w-md">
       {steps.map((s, i) => (
         <div key={s.key} className="flex items-center gap-2 flex-1">
           <div
@@ -284,7 +300,10 @@ function ApplyFormStep({ vendor, stalls, pickedStallIds, applications, onBack, o
           : `${succeeded.length} of ${results.length} applications submitted for ${vendor.name}${failed > 0 ? ` (${failed} failed)` : ""}.`,
         failed > 0 ? "error" : "success",
       );
-      onDone();
+      onDone({
+        vendorName: vendor.name,
+        stallNames: pickedStalls.map((s) => s.stall_name),
+      });
     } catch (error) {
       showToast(`Failed to submit application: ${error.message}`, "error");
     } finally {
@@ -293,7 +312,7 @@ function ApplyFormStep({ vendor, stalls, pickedStallIds, applications, onBack, o
   }
 
   return (
-    <form onSubmit={handleSubmit} className="max-w-lg space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-4">
       {excludedStallIds.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
           <p className="text-sm font-semibold text-amber-800">Some stalls were excluded</p>
@@ -536,7 +555,7 @@ function ApplyFormStep({ vendor, stalls, pickedStallIds, applications, onBack, o
   );
 }
 
-function ApplyForStallPanel() {
+function ApplyForStallPanel({ onApplicationSubmitted }) {
   const [step, setStep] = useState("vendor");
   const [selectedVendor, setSelectedVendor] = useState(null);
   const [pickedStallIds, setPickedStallIds] = useState([]);
@@ -588,7 +607,7 @@ function ApplyForStallPanel() {
       <StepIndicator step={step} />
 
       {step === "vendor" && (
-        <div className="max-w-lg space-y-3">
+        <div className="space-y-3">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
@@ -624,7 +643,7 @@ function ApplyForStallPanel() {
       )}
 
       {step === "stall" && selectedVendor && (
-        <div className="max-w-lg space-y-4">
+        <div className="space-y-4">
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-4 flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-semibold text-gray-900">{selectedVendor.name}</p>
@@ -710,7 +729,8 @@ function ApplyForStallPanel() {
           pickedStallIds={pickedStallIds}
           applications={applications}
           onBack={() => setStep("stall")}
-          onDone={() => {
+          onDone={(activity) => {
+            onApplicationSubmitted?.(activity);
             setSelectedVendor(null);
             setPickedStallIds([]);
             setSearch("");
@@ -722,10 +742,71 @@ function ApplyForStallPanel() {
   );
 }
 
+function ActivityPanel({ activity }) {
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 sm:p-6 space-y-4 lg:sticky lg:top-6">
+      <h3 className="text-sm font-semibold text-gray-900">This Session</h3>
+      {activity.length === 0 ? (
+        <div className="py-8 text-center">
+          <div className="w-10 h-10 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-2">
+            <Clock className="w-4 h-4 text-gray-300" />
+          </div>
+          <p className="text-xs text-gray-400 leading-relaxed">
+            Vendors you create and applications you file will be listed here as you go.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {activity.map((item, i) => (
+            <div key={i} className="flex gap-3">
+              <div
+                className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                  item.type === "vendor" ? "bg-teal-50" : "bg-blue-50"
+                }`}
+              >
+                {item.type === "vendor" ? (
+                  <UserPlus className="w-4 h-4 text-[#14B8A6]" />
+                ) : (
+                  <ScrollText className="w-4 h-4 text-blue-600" />
+                )}
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-gray-800 truncate">{item.title}</p>
+                <p className="text-xs text-gray-500 mt-0.5">{item.detail}</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">{item.time}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function WalkInApplication() {
   const navigate = useNavigate();
   const session = getSession();
   const [tab, setTab] = useState("create-vendor");
+  const [activity, setActivity] = useState([]);
+
+  function logActivity(entry) {
+    setActivity((prev) => [
+      { ...entry, time: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) },
+      ...prev,
+    ]);
+  }
+
+  function handleVendorCreated({ name, email }) {
+    logActivity({ type: "vendor", title: name, detail: `Vendor account created · ${email}` });
+  }
+
+  function handleApplicationSubmitted({ vendorName, stallNames }) {
+    logActivity({
+      type: "application",
+      title: vendorName,
+      detail: `Applied for ${stallNames.join(", ") || "a stall"}`,
+    });
+  }
 
   useEffect(() => {
     const s = getSession();
@@ -762,8 +843,15 @@ export function WalkInApplication() {
           </button>
         </div>
 
-        {tab === "create-vendor" && <CreateVendorPanel />}
-        {tab === "apply-stall" && <ApplyForStallPanel />}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+          <div className="lg:col-span-2">
+            {tab === "create-vendor" && <CreateVendorPanel onVendorCreated={handleVendorCreated} />}
+            {tab === "apply-stall" && <ApplyForStallPanel onApplicationSubmitted={handleApplicationSubmitted} />}
+          </div>
+          <div className="lg:col-span-1">
+            <ActivityPanel activity={activity} />
+          </div>
+        </div>
       </div>
     </DashboardLayout>
   );

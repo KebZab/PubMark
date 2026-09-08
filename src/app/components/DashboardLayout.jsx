@@ -7,7 +7,6 @@ import {
   FileText,
   BarChart3,
   Archive,
-  Settings,
   Bell,
   LogOut,
   Menu,
@@ -42,7 +41,6 @@ function getNavItems(role) {
         { label: "Send Request", icon: ClipboardList, path: "/super-admin/check-requests" },
         { label: "Analytics", icon: BarChart3, path: "/analytics" },
         { label: "Archive", icon: Archive, path: "/archive" },
-        { label: "Settings", icon: Settings, path: "/super-admin/settings" },
       ];
     case "admin":
       return [
@@ -252,13 +250,15 @@ export function DashboardLayout({ session, children, title, subtitle, actions, n
             {subtitle && <p className="text-xs text-gray-500 truncate">{subtitle}</p>}
           </div>
           {actions && <div className="flex items-center gap-2 flex-shrink-0">{actions}</div>}
-          <button
-            onClick={handleLogout}
-            className="hidden lg:flex items-center gap-1.5 text-xs text-gray-500 hover:text-red-600 transition-colors flex-shrink-0"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            Logout
-          </button>
+          {role !== "admin" && role !== "super_admin" && (
+            <button
+              onClick={handleLogout}
+              className="hidden lg:flex items-center gap-1.5 text-xs text-gray-500 hover:text-red-600 transition-colors flex-shrink-0"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Logout
+            </button>
+          )}
         </header>
 
         {/* Page content */}

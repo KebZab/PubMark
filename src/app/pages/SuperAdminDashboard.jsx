@@ -71,6 +71,7 @@ import { SuperAdminMapEditor } from "../components/SuperAdminMapEditor";
 import { showToast } from "../components/Toast";
 import { buildPermitDeadlineRemarks, parsePermitDeadlineMeta } from "../components/permitDeadline";
 import { AttachmentLink } from "../components/AttachmentLink";
+import { FilePreviewLink } from "../components/FilePreviewLink";
 
 const ROLE_COLORS = {
   super_admin: "bg-purple-100 text-purple-700",
@@ -119,7 +120,6 @@ export function SuperAdminDashboard() {
     if (path.includes("/renewals")) return "renewals";
     if (path.includes("/violations")) return "violations";
     if (path.includes("/check-requests")) return "check-requests";
-    if (path.includes("/settings")) return "overview"; // Could add settings tab later
     return "overview";
   };
 
@@ -2606,15 +2606,15 @@ export function SuperAdminDashboard() {
                               </p>
                             )}
                             {r.fileUrl && (
-                              <a
-                                href={r.fileUrl}
-                                target="_blank"
-                                rel="noreferrer"
+                              <FilePreviewLink
+                                url={r.fileUrl}
+                                name={r.fileName}
+                                mimeType={r.mimeType}
                                 className="inline-flex items-center gap-1 text-xs text-purple-700 font-medium mt-2 hover:underline"
                               >
                                 <FileText className="w-3.5 h-3.5" />
                                 View receipt file
-                              </a>
+                              </FilePreviewLink>
                             )}
                             {r.status === "pending" && (
                               <div className="flex gap-2 mt-3">
@@ -3074,13 +3074,25 @@ export function SuperAdminDashboard() {
                     id={`user-${field}`}
                     type={type}
                     value={form[field]}
-                    onChange={(e) => setForm((prev) => ({ ...prev, [field]: e.target.value }))}
+                    onChange={(e) => {
+                      // Same 11-digit rule as the vendor-facing registration
+                      // forms (web Register.jsx / mobile RegisterScreen.jsx).
+                      const value =
+                        field === "phone" ? e.target.value.replace(/[^\d]/g, "").slice(0, 11) : e.target.value;
+                      setForm((prev) => ({ ...prev, [field]: value }));
+                    }}
                     placeholder={placeholder}
                     disabled={field === "email" && !!editUser}
+                    maxLength={field === "phone" ? 11 : undefined}
                     className={`w-full px-3 py-2.5 bg-gray-50 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 ${
                       formErrors[field] ? "border-red-300" : "border-gray-200"
                     } ${field === "email" && editUser ? "opacity-60 cursor-not-allowed" : ""}`}
                   />
+                  {field === "phone" && (
+                    <p className={`text-[11px] mt-1 text-right ${form.phone.length === 11 ? "text-teal-500" : "text-gray-400"}`}>
+                      {form.phone.length}/11
+                    </p>
+                  )}
                   {formErrors[field] && (
                     <p className="text-red-500 text-xs mt-1">{formErrors[field]}</p>
                   )}

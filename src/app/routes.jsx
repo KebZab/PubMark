@@ -218,14 +218,6 @@ export const router = createBrowserRouter([
     ),
   },
   {
-    path: "/super-admin/settings",
-    element: (
-      <ProtectedRoute role="super_admin">
-        <SuperAdminDashboard />
-      </ProtectedRoute>
-    ),
-  },
-  {
     path: "/super-admin/violations",
     element: (
       <ProtectedRoute role="super_admin">

@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router";
 import {
-  LayoutDashboard,
-  MapPin,
   FileText,
   User,
   Check,
@@ -66,6 +64,7 @@ import { PaymentReceiptsPanel } from "../components/PaymentReceiptsPanel";
 import { ContractRenewalsPanel } from "../components/ContractRenewalsPanel";
 import { showToast } from "../components/Toast";
 import { AttachmentLink } from "../components/AttachmentLink";
+import { FilePreviewLink } from "../components/FilePreviewLink";
 import {
   buildPermitDeadlineRemarks,
   formatPermitDeadline,
@@ -862,50 +861,24 @@ export function AdminDashboard() {
     navigate(paths[newTab]);
   }
 
-  const openViolations = allViolations.filter(
-    (v) => v.status === "open",
-  ).length;
-  const pendingRequests = checkRequests.filter(
-    (r) => r.status === "pending",
-  ).length;
-
-  const TABS = [
-    { id: "dashboard", label: "Overview", icon: LayoutDashboard },
-    { id: "stalls", label: "Stall Map", icon: MapPin },
-    {
-      id: "applications",
-      label: "Applications",
-      icon: FileText,
-      badge: stats.pending,
-    },
-    { id: "stall-management", label: "Stall Management", icon: Store },
-    { id: "announcements", label: "Announcements", icon: Megaphone },
-    {
-      id: "receipts",
-      label: "Payment Receipts",
-      icon: ReceiptIcon,
-      badge: receiptsList.filter((receipt) => receipt.status === "pending").length,
-    },
-    { id: "renewals", label: "Contract Renewals", icon: Clock },
-    {
-      id: "violations",
-      label: "Reports & Requests",
-      icon: AlertTriangle,
-      badge: openViolations,
-    },
-    {
-      id: "check-requests",
-      label: "Send Request",
-      icon: Search,
-      badge: pendingRequests,
-    },
-  ];
+  const TAB_HEADERS = {
+    dashboard: { title: "Admin Dashboard", subtitle: "Manage applications, stalls, and announcements" },
+    stalls: { title: "Stall Map", subtitle: "View and manage stall status on the market map" },
+    applications: { title: "Applications", subtitle: "Review and decide on vendor stall applications" },
+    "stall-management": { title: "Vendors", subtitle: "Manage vendor stalls and details" },
+    announcements: { title: "Announcements", subtitle: "Post and manage market announcements" },
+    receipts: { title: "Payment Receipts", subtitle: "Review and verify submitted payment receipts" },
+    renewals: { title: "Contract Renewals", subtitle: "Manage vendor contract renewal requests" },
+    violations: { title: "Reports & Requests", subtitle: "Violation reports, inspections, and termination requests" },
+    "check-requests": { title: "Send Request", subtitle: "Request stall inspections from officers" },
+  };
+  const { title: pageTitle, subtitle: pageSubtitle } = TAB_HEADERS[tab] ?? TAB_HEADERS.dashboard;
 
   return (
     <DashboardLayout
       session={session}
-      title="Admin Dashboard"
-      subtitle="Manage applications, stalls, and announcements"
+      title={pageTitle}
+      subtitle={pageSubtitle}
       navBadges={{
         "/admin/receipts": receiptsList.filter((receipt) => receipt.status === "pending").length,
       }}
@@ -921,34 +894,6 @@ export function AdminDashboard() {
         ) : undefined
       }
     >
-      {/* Tab bar */}
-      <div className="bg-white border-b border-gray-200 px-6">
-        <div className="flex gap-1">
-          {TABS.map((t) => {
-            const Icon = t.icon;
-            return (
-              <button
-                key={t.id}
-                onClick={() => handleTabChange(t.id)}
-                className={`flex items-center gap-2 px-4 py-3.5 text-sm font-medium border-b-2 transition-colors ${
-                  tab === t.id
-                    ? "border-[#14B8A6] text-[#14B8A6]"
-                    : "border-transparent text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                {t.label}
-                {t.badge && t.badge > 0 && (
-                  <span className="w-4 h-4 bg-red-500 text-white text-[10px] rounded-full flex items-center justify-center">
-                    {t.badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
       <div className={`p-6 space-y-5 ${tab === "stalls" ? "!p-0" : ""}`}>
         {tab === "receipts" && (
           receiptsTabLoading ? (
@@ -2767,15 +2712,15 @@ export function AdminDashboard() {
                               </p>
                             )}
                             {r.fileUrl && (
-                              <a
-                                href={r.fileUrl}
-                                target="_blank"
-                                rel="noreferrer"
+                              <FilePreviewLink
+                                url={r.fileUrl}
+                                name={r.fileName}
+                                mimeType={r.mimeType}
                                 className="inline-flex items-center gap-1 text-xs text-[#14B8A6] font-medium mt-2 hover:underline"
                               >
                                 <FileText className="w-3.5 h-3.5" />
                                 View receipt file
-                              </a>
+                              </FilePreviewLink>
                             )}
                             {r.status === "pending" && (
                               <div className="flex gap-2 mt-3">

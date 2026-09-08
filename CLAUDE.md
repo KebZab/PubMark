@@ -22,7 +22,7 @@ Beyond auth, **stalls (incl. geometry), applications, perimeters, announcements,
 **Backend (`server/` directory, separate package.json):**
 - `npm install` — install backend dependencies (run inside `server/`)
 - `npm run seed` — populate the Postgres database with demo accounts (`admin@pubmark.com`, `officer@pubmark.com`, etc.) via `seed-demo-users.js`
-- `npm run dev` — start Express API server (http://localhost:4000)
+- `npm run dev` — start a Cloudflare quick tunnel (`start-with-tunnel.js`) and the Express API server (http://localhost:4000). The tunnel gets a new random URL every run, which is auto-written to `API_PUBLIC_URL` in `server/.env` before the server starts, so account-confirmation emails always link to a reachable address. Use `npm run dev:no-tunnel` to run just the server without the tunnel.
 - `npm run start` — production start
 
 **Setup order:**
