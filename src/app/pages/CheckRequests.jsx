@@ -9,6 +9,7 @@ import { getSession } from "../components/authStorage";
 import { DashboardLayout } from "../components/DashboardLayout";
 import { AdminCheckRequestMap } from "../components/AdminCheckRequestMap";
 import { showToast } from "../components/Toast";
+import { usePendingReceiptsBadge } from "../hooks/useReceipts";
 
 const STATUS_CONFIG = {
   pending: { label: "Pending", color: "bg-amber-100 text-amber-700", icon: Clock },
@@ -37,6 +38,7 @@ export function CheckRequests() {
   const session = getSession();
   const [requests, setRequests] = useState([]);
   const [selectedRequest, setSelectedRequest] = useState(null);
+  const navBadges = usePendingReceiptsBadge();
 
   useEffect(() => {
     void refreshRequests();
@@ -82,6 +84,7 @@ export function CheckRequests() {
       session={session}
       title="Officer Check Requests"
       subtitle="Request officers to inspect specific stalls"
+      navBadges={navBadges}
     >
       <div className="h-full flex flex-col">
         {/* Stats bar */}
