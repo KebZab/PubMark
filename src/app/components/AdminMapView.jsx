@@ -557,6 +557,19 @@ function StallContractModal({ stall, app, onClose }) {
             </div>
           </div>
 
+          {/* Applicant notes */}
+          {app.notes && (
+            <div>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2.5 flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5" />
+                Applicant Notes
+              </p>
+              <p className="text-sm text-gray-700 leading-relaxed bg-gray-50 rounded-xl p-3.5">
+                {app.notes}
+              </p>
+            </div>
+          )}
+
           {/* Documents */}
           {app.permitFileName && (
             <div>
@@ -896,6 +909,10 @@ function PerimeterLayer({ geometry }) {
     const layer = L.geoJSON(
       { type: "Feature", properties: {}, geometry: geometry },
       {
+        // Reference-only overlay — without this, its near-invisible fill
+        // (which covers the same area as every stall inside it) silently
+        // intercepts clicks meant for whichever stall is underneath it.
+        interactive: false,
         style: {
           color: "#7c3aed",
           weight: 3,

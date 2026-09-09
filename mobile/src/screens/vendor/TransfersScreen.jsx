@@ -3,13 +3,16 @@ import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, Text, 
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../context/AuthContext";
-import { useApiData } from "../../hooks/useApiData";
-import { getTransfers, respondToTransfer } from "../../services/api";
+import { useTransfers } from "../../hooks/useTransfers";
+import { respondToTransfer } from "../../services/api";
 import { Card, EmptyState, ErrorState, LoadingState, ScreenHeader, formatDate } from "../../components/ui";
 
 export default function TransfersScreen() {
   const { user } = useAuth();
-  const { data, loading, error, refetch } = useApiData(getTransfers);
+  // Shared with the Transfers tab badge (useTransfersBadge) -- same query
+  // key, so accepting/declining here updates the badge immediately instead
+  // of waiting for its own cache to separately go stale.
+  const { data, loading, error, refetch } = useTransfers();
   const [responding, setResponding] = useState(null);
 
   const all = data?.transfers ?? [];

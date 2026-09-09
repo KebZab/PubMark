@@ -27,10 +27,17 @@ SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhY
 GMAIL_USER=pubmark214@gmail.com
 GMAIL_APP_PASSWORD=oikijxzuarvegiev
 # Base URL used to build the confirmation link in the email. Defaults to
-# http://localhost:<PORT> when unset. Currently a temporary ngrok tunnel —
-# this URL changes every time ngrok restarts, so update it here whenever
-# that happens.
-API_PUBLIC_URL=https://delay-hammock-unaired.ngrok-free.dev
+# http://localhost:<PORT> when unset. A Cloudflare quick tunnel — the URL
+# changes every run. `npm run dev` (start-with-tunnel.js) rewrites this line
+# with the fresh URL automatically before the server starts. Use
+# `npm run dev:no-tunnel` instead if you ever need to skip the tunnel.
+API_PUBLIC_URL=https://available-weight-foster-saying.trycloudflare.com
+
+# "Sign in with Google" — Client ID from Google Cloud Console (APIs &
+# Services -> Credentials -> OAuth client ID -> Web application). Leave
+# blank to keep the feature disabled. Must match VITE_GOOGLE_CLIENT_ID in
+# the root .env.local exactly once set.
+GOOGLE_CLIENT_ID=635844852444-6r6fh5oqvujqblhlfbvk6dqsllo7pt8n.apps.googleusercontent.com
 
 
 

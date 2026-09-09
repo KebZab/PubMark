@@ -1,5 +1,15 @@
-import { useCallback, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Modal, RefreshControl, ScrollView, Text, View, Pressable } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Modal,
+  RefreshControl,
+  ScrollView,
+  Text,
+  View,
+  Pressable,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
@@ -22,10 +32,34 @@ export default function HomeScreen({ navigation }) {
   const { user, signOut } = useAuth();
   const { data, loading, error, refetch } = useApplications();
   const [showDropdown, setShowDropdown] = useState(false);
+  const [dropdownMounted, setDropdownMounted] = useState(false);
+  const dropdownAnim = useRef(new Animated.Value(0)).current;
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [terminateConfirm, setTerminateConfirm] = useState(false);
   const [terminating, setTerminating] = useState(false);
   const [terminateError, setTerminateError] = useState("");
+
+  // Drives the dropdown's open/close animation on the native UI thread
+  // (useNativeDriver) rather than snapping instantly -- kept mounted a beat
+  // longer on close so the fade/scale-out is visible before it unmounts.
+  useEffect(() => {
+    if (showDropdown) {
+      setDropdownMounted(true);
+      Animated.timing(dropdownAnim, {
+        toValue: 1,
+        duration: 160,
+        useNativeDriver: true,
+      }).start();
+    } else {
+      Animated.timing(dropdownAnim, {
+        toValue: 0,
+        duration: 120,
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (finished) setDropdownMounted(false);
+      });
+    }
+  }, [showDropdown, dropdownAnim]);
 
   const closeProfileModal = () => {
     setShowProfileModal(false);
@@ -49,9 +83,14 @@ export default function HomeScreen({ navigation }) {
 
   // Kept mounted while you're on another tab, so this stays stale until a
   // manual pull-to-refresh unless refetched on every return to this tab.
+  // The cleanup (fires on blur, i.e. switching to another tab) also closes
+  // the profile dropdown -- without it, this screen stays mounted with
+  // showDropdown still true, so it's sitting there already open the moment
+  // you tab back in.
   useFocusEffect(
     useCallback(() => {
       refetch();
+      return () => setShowDropdown(false);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []),
   );
@@ -97,7 +136,7 @@ export default function HomeScreen({ navigation }) {
           ScrollView sibling on Android too. */}
       <View
         className="border-b border-gray-200 bg-white px-4 py-3"
-        style={{ zIndex: showDropdown ? 20 : 0, elevation: showDropdown ? 20 : 0 }}
+        style={{ zIndex: dropdownMounted ? 20 : 0, elevation: dropdownMounted ? 20 : 0 }}
       >
         <View className="relative self-start">
           <Pressable onPress={() => setShowDropdown((v) => !v)} className="flex-row items-center gap-2.5">
@@ -113,10 +152,32 @@ export default function HomeScreen({ navigation }) {
             </View>
           </Pressable>
 
-          {showDropdown ? (
-            <View
-              className="overflow-hidden rounded-2xl border border-gray-100 bg-white py-2 shadow-lg"
-              style={{ position: "absolute", top: "100%", left: 0, marginTop: 8, width: 208, elevation: 6 }}
+          {dropdownMounted ? (
+            <Animated.View
+              pointerEvents={showDropdown ? "auto" : "none"}
+              style={{
+                position: "absolute",
+                top: "100%",
+                left: 0,
+                marginTop: 8,
+                width: 208,
+                elevation: 6,
+                backgroundColor: "#ffffff",
+                borderRadius: 16,
+                borderWidth: 1,
+                borderColor: "#f3f4f6",
+                paddingVertical: 8,
+                overflow: "hidden",
+                shadowColor: "#000000",
+                shadowOffset: { width: 0, height: 8 },
+                shadowOpacity: 0.12,
+                shadowRadius: 16,
+                opacity: dropdownAnim,
+                transform: [
+                  { scale: dropdownAnim.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1] }) },
+                  { translateY: dropdownAnim.interpolate({ inputRange: [0, 1], outputRange: [-6, 0] }) },
+                ],
+              }}
             >
               <View className="border-b border-gray-100 px-4 py-2.5">
                 <Text className="text-xs font-semibold text-gray-900">{user?.name ?? ""}</Text>
@@ -146,10 +207,21 @@ export default function HomeScreen({ navigation }) {
                 </View>
                 <Text className="text-sm text-red-600">Log Out</Text>
               </Pressable>
-            </View>
+            </Animated.View>
           ) : null}
         </View>
       </View>
+
+      {/* Full-screen invisible tap-to-dismiss layer -- sits above the
+          ScrollView (elevation 0) but below the header (elevation 20, only
+          while the dropdown is open), so tapping anywhere outside the
+          dropdown closes it without blocking taps on the header itself. */}
+      {dropdownMounted ? (
+        <Pressable
+          onPress={() => setShowDropdown(false)}
+          style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 10, elevation: 10 }}
+        />
+      ) : null}
 
       <ScrollView
         className="flex-1"

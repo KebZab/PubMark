@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { ActivityIndicator, View } from "react-native";
+import { ActivityIndicator, Easing, View } from "react-native";
 import GuestMapScreen from "../screens/GuestMapScreen";
 import { Ionicons } from "@expo/vector-icons";
 import { NavigationContainer } from "@react-navigation/native";
@@ -7,6 +7,7 @@ import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { useAuth } from "../context/AuthContext";
 import { useNoticesBadge } from "../hooks/useNoticesBadge";
+import { useTransfersBadge } from "../hooks/useTransfersBadge";
 import LoginScreen from "../screens/LoginScreen";
 import RegisterScreen from "../screens/RegisterScreen";
 import VendorHomeScreen from "../screens/vendor/HomeScreen";
@@ -38,6 +39,21 @@ const tabScreenOptions = {
   tabBarStyle: { borderTopColor: "#e5e7eb" },
   tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
   tabBarBadgeStyle: { backgroundColor: "#ef4444" },
+  // "shift" (slide+fade) is bottom-tabs' closest match to the slide
+  // transition the login/auth stack uses by default, so switching tabs
+  // feels like the same kind of screen change as signing in does, instead
+  // of the instant snap bottom-tabs uses when this is left unset.
+  // (Previously swapped to "fade" because Android `elevation` shadows used
+  // to detach into a floating box under this slide — now that those shadows
+  // are iOS-only (see ui.jsx), "shift" is safe again on Android too.)
+  animation: "shift",
+  // "shift"'s own default timing is a fairly stiff linear-ish snap. An
+  // eased curve (slow-fast-slow rather than constant speed) reads as
+  // noticeably smoother/more polished for the same motion.
+  transitionSpec: {
+    animation: "timing",
+    config: { duration: 240, easing: Easing.out(Easing.cubic) },
+  },
 };
 
 // The web app gives officers an amber accent rather than the vendor teal, so
@@ -45,13 +61,6 @@ const tabScreenOptions = {
 const officerTabScreenOptions = {
   ...tabScreenOptions,
   tabBarActiveTintColor: "#f59e0b",
-  // "shift" (slide+fade) is bottom-tabs' closest match to the slide
-  // transition the login/auth stack uses by default, so switching officer
-  // tabs feels like the same kind of screen change as signing in does.
-  // (Previously swapped to "fade" because Android `elevation` shadows used
-  // to detach into a floating box under this slide — now that those shadows
-  // are iOS-only (see ui.jsx), "shift" is safe again on Android too.)
-  animation: "shift",
 };
 
 // Each tab needs an explicit icon; without one the tab bar renders an empty box.
@@ -62,6 +71,7 @@ function tabIcon(name) {
 // Vendor tabs mirror the web vendor dashboard: home / applications / notices / map
 function VendorTabs() {
   const { unreadCount } = useNoticesBadge();
+  const { pendingCount } = useTransfersBadge();
   return (
     <Tab.Navigator screenOptions={tabScreenOptions}>
       <Tab.Screen
@@ -77,7 +87,10 @@ function VendorTabs() {
       <Tab.Screen
         name="Transfers"
         component={VendorTransfersScreen}
-        options={{ tabBarIcon: tabIcon("swap-horizontal-outline") }}
+        options={{
+          tabBarIcon: tabIcon("swap-horizontal-outline"),
+          tabBarBadge: pendingCount > 0 ? pendingCount : undefined,
+        }}
       />
       <Tab.Screen
         name="Notices"
@@ -115,12 +128,18 @@ function VendorNavigator({ pendingApplication }) {
       <Stack.Screen name="Tabs">
         {(props) => <VendorEntry {...props} pendingApplication={pendingApplication} />}
       </Stack.Screen>
+      {/* "default" lets native-stack use each platform's own best native
+          transition (backed by react-native-screens, not JS-driven) rather
+          than forcing the Android-only "slide_from_right" preset -- which
+          was already a no-op on iOS (falls back to "default" there per
+          react-navigation's own docs) and, on Android, overrides the
+          platform's more polished built-in transition with a plainer slide. */}
       <Stack.Screen
         name="ApplicationDetail"
         component={ApplicationDetailScreen}
-        options={{ animation: "slide_from_right" }}
+        options={{ animation: "default" }}
       />
-      <Stack.Screen name="ApplyForStall" options={{ presentation: "card", animation: "slide_from_right" }}>
+      <Stack.Screen name="ApplyForStall" options={{ presentation: "card", animation: "default" }}>
         {(props) => <ApplicationFormScreen {...props} pendingApplication={pendingApplication} />}
       </Stack.Screen>
     </Stack.Navigator>
