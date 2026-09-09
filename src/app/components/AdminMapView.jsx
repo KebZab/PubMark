@@ -557,6 +557,19 @@ function StallContractModal({ stall, app, onClose }) {
             </div>
           </div>
 
+          {/* Applicant notes */}
+          {app.notes && (
+            <div>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2.5 flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5" />
+                Applicant Notes
+              </p>
+              <p className="text-sm text-gray-700 leading-relaxed bg-gray-50 rounded-xl p-3.5">
+                {app.notes}
+              </p>
+            </div>
+          )}
+
           {/* Documents */}
           {app.permitFileName && (
             <div>
@@ -896,6 +909,10 @@ function PerimeterLayer({ geometry }) {
     const layer = L.geoJSON(
       { type: "Feature", properties: {}, geometry: geometry },
       {
+        // Reference-only overlay — without this, its near-invisible fill
+        // (which covers the same area as every stall inside it) silently
+        // intercepts clicks meant for whichever stall is underneath it.
+        interactive: false,
         style: {
           color: "#7c3aed",
           weight: 3,
@@ -1208,7 +1225,7 @@ export function AdminMapView() {
       {/* ── Map (full area) ──────────────────────────── */}
       <div className="flex-1 relative">
         {mapDataLoading && (
-          <div className="absolute inset-0 z-[1100] flex items-center justify-center bg-white/70 backdrop-blur-[1px]">
+          <div className="absolute inset-0 z-[1100] flex items-center justify-center bg-white/70 backdrop-blur-[1px] pointer-events-none">
             <div className="flex flex-col items-center gap-3">
               <Loader2 className="w-7 h-7 text-teal-600 animate-spin" />
               <p className="text-sm font-medium text-gray-600">Loading stalls…</p>

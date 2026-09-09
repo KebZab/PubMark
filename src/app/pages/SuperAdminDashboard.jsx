@@ -902,7 +902,7 @@ export function SuperAdminDashboard() {
       id: "violations",
       label: "Reports & Requests",
       icon: AlertTriangle,
-      badge: stats.openViolations,
+      badge: stats.openViolations > 0 ? stats.openViolations : undefined,
     },
     {
       id: "check-requests",

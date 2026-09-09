@@ -2,7 +2,9 @@ import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -271,6 +273,11 @@ export default function ReceiptsScreen() {
             <Text className="flex-1 text-base font-semibold text-gray-900">Record a receipt</Text>
           </View>
 
+          <KeyboardAvoidingView
+            className="flex-1"
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            keyboardVerticalOffset={20}
+          >
           <ScrollView
             className="flex-1"
             contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
@@ -471,6 +478,7 @@ export default function ReceiptsScreen() {
               )}
             </Pressable>
           </ScrollView>
+          </KeyboardAvoidingView>
         </SafeAreaView>
       </Modal>
     </SafeAreaView>

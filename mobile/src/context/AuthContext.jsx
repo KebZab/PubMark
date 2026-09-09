@@ -1,8 +1,17 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { Alert } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
-import { login as apiLogin, registerVendor, getCurrentProfile, setAccountTerminatedHandler } from "../services/api";
+import { GoogleSignin } from "@react-native-google-signin/google-signin";
+import {
+  login as apiLogin,
+  registerVendor,
+  loginWithGoogle,
+  getCurrentProfile,
+  setAccountTerminatedHandler,
+} from "../services/api";
 import { clearSession, getProfile, saveSession } from "../services/tokenStore";
+
+const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
 
 const AuthContext = createContext(undefined);
 
@@ -10,6 +19,18 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const queryClient = useQueryClient();
+
+  // Configuring with no web client ID leaves the library present but inert —
+  // mirrors web hiding its Google button entirely when the env var is unset,
+  // rather than crashing on a missing config.
+  useEffect(() => {
+    if (googleWebClientId) {
+      GoogleSignin.configure({
+        webClientId: googleWebClientId,
+        iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
+      });
+    }
+  }, []);
 
   // Fires from apiFetch the moment ANY request notices the account was
   // terminated — not just at login — so a vendor who's still signed in when
@@ -56,6 +77,19 @@ export function AuthProvider({ children }) {
     return profile;
   };
 
+  // credential is the Google ID token. Returns the signed-in profile, or
+  // { needsSignup: true, email, name } when there's no account for this
+  // Google email yet — LoginScreen then shows the fill-up form.
+  const signInWithGoogle = async (credential) => {
+    const result = await loginWithGoogle(credential);
+    if (result.profile) {
+      await saveSession(result.token, result.profile);
+      setUser(result.profile);
+      return result.profile;
+    }
+    return result;
+  };
+
   // Registering signs the new vendor straight in: the server returns a token
   // with the profile, exactly as login does, so there is no second round trip
   // and no chance of landing on the login screen right after signing up.
@@ -67,6 +101,18 @@ export function AuthProvider({ children }) {
   };
 
   const signOut = async () => {
+    // Best-effort — wrapped so an unexpected rejection here (this device
+    // never signed in via Google is the common case) can't block clearing
+    // the app's own session below. Without this call, a later "Continue
+    // with Google" could silently reuse the last-picked account instead of
+    // showing the picker again.
+    if (googleWebClientId) {
+      try {
+        await GoogleSignin.signOut();
+      } catch {
+        // no-op — see comment above
+      }
+    }
     await clearSession();
     setUser(null);
     // None of this app's query keys (stalls, applications, announcements,
@@ -76,7 +122,11 @@ export function AuthProvider({ children }) {
     queryClient.clear();
   };
 
-  return <AuthContext.Provider value={{ user, loading, signIn, signUp, signOut }}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={{ user, loading, signIn, signUp, signInWithGoogle, signOut }}>
+      {children}
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth() {

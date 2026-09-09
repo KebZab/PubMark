@@ -25,6 +25,7 @@ import { showToast } from "../components/Toast";
 import { createUser, listUsersPage } from "../services/api";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
+import { usePendingReceiptsBadge } from "../hooks/useReceipts";
 import { createApplication } from "../services/applicationsApi";
 import { addMonths, formatFileSize } from "../components/applicationsStorage";
 import { describeFileProblem, FILE_ACCEPT_ATTRIBUTE } from "../services/fileUpload";
@@ -815,6 +816,8 @@ export function WalkInApplication() {
     }
   }, [navigate]);
 
+  const navBadges = usePendingReceiptsBadge();
+
   if (!session) return null;
 
   return (
@@ -822,6 +825,7 @@ export function WalkInApplication() {
       session={session}
       title="Walk-in Application"
       subtitle="Create a vendor account or file a stall application for a walk-in applicant"
+      navBadges={navBadges}
     >
       <div className="p-6">
         <div className="flex gap-1 bg-gray-100 p-1 rounded-xl w-fit mb-5">

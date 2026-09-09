@@ -55,7 +55,9 @@ export async function apiFetch(path, init = {}) {
       await clearSession();
       onAccountTerminated?.();
     }
-    throw new Error(error.message || "Unable to complete the request.");
+    const thrown = new Error(error.message || "Unable to complete the request.");
+    thrown.code = error.code;
+    throw thrown;
   }
   return response.json();
 }
@@ -73,6 +75,22 @@ export async function registerVendor(input) {
   return apiFetch("/auth/register", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+// Mirrors src/app/services/api.ts's loginWithGoogle/completeGoogleSignup —
+// same two backend routes, same shapes, credential is the Google ID token.
+export async function loginWithGoogle(credential) {
+  return apiFetch("/auth/google/login", {
+    method: "POST",
+    body: JSON.stringify({ credential }),
+  });
+}
+
+export async function completeGoogleSignup(credential, fields) {
+  return apiFetch("/auth/google/register", {
+    method: "POST",
+    body: JSON.stringify({ credential, ...fields }),
   });
 }
 

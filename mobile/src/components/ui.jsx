@@ -1,5 +1,17 @@
-import { useState } from "react";
-import { ActivityIndicator, Alert, Image, Linking, Platform, Pressable, Text, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Animated,
+  Dimensions,
+  Image,
+  Linking,
+  Modal,
+  Platform,
+  Pressable,
+  Text,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import ImageViewerModal from "./ImageViewerModal";
@@ -103,43 +115,71 @@ export function formatDate(value) {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+function InfoRow({ label, value }) {
+  return (
+    <View className="rounded-xl bg-gray-100 px-4 py-3">
+      <Text className="text-[10px] font-medium uppercase tracking-wide text-gray-400">{label}</Text>
+      <Text className="mt-1 text-sm font-semibold text-gray-900">{value}</Text>
+    </View>
+  );
+}
+
 /**
  * Header used across the officer screens. Shows who's signed in and gives them
  * a way out from any tab, rather than hiding sign-out on a single screen.
+ * Mirrors the vendor Home screen's avatar/dropdown pattern (same animated
+ * open/close, same Profile Settings + Log Out menu) so both apps share one
+ * visual language for "who am I, how do I sign out" instead of two.
  */
 export function OfficerHeader({ title, subtitle, right }) {
   const { user, signOut } = useAuth();
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [dropdownMounted, setDropdownMounted] = useState(false);
+  const dropdownAnim = useRef(new Animated.Value(0)).current;
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const triggerRef = useRef(null);
+  // Screen-space position of the trigger button, measured right before
+  // opening -- this header is a shared component, not the screen root, so
+  // (unlike a plain nested absolute position) a true full-screen "tap
+  // outside to dismiss" layer has to live in a Modal, which needs real
+  // screen coordinates to place the dropdown correctly rather than a
+  // position relative to some parent.
+  const [anchor, setAnchor] = useState({ top: 0, right: 16 });
 
-  const confirmSignOut = () => {
-    if (Platform.OS === "web") {
-      signOut();
-      return;
-    }
-    Alert.alert("Sign out?", `You're signed in as ${user?.name}.`, [
-      { text: "Cancel", style: "cancel" },
-      { text: "Sign out", style: "destructive", onPress: () => signOut() },
-    ]);
+  const openDropdown = () => {
+    triggerRef.current?.measure((x, y, width, height, pageX, pageY) => {
+      setAnchor({
+        top: pageY + height + 8,
+        right: Math.max(Dimensions.get("window").width - (pageX + width), 0),
+      });
+      setShowDropdown(true);
+    });
   };
+
+  useEffect(() => {
+    if (showDropdown) {
+      setDropdownMounted(true);
+      Animated.timing(dropdownAnim, { toValue: 1, duration: 160, useNativeDriver: true }).start();
+    } else {
+      Animated.timing(dropdownAnim, { toValue: 0, duration: 120, useNativeDriver: true }).start(
+        ({ finished }) => {
+          if (finished) setDropdownMounted(false);
+        },
+      );
+    }
+  }, [showDropdown, dropdownAnim]);
 
   return (
     <View
       className={`bg-white px-5 py-4 ${IS_IOS ? "" : "border-b border-gray-200"}`}
-      style={IS_IOS ? { shadowColor: "#0f172a", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8 } : {}}
+      style={
+        IS_IOS ? { shadowColor: "#0f172a", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8 } : {}
+      }
     >
-      <View className="mb-3 flex-row items-center justify-between">
-        <Text className="text-[11px] text-gray-400" numberOfLines={1}>
-          {user?.name}
-        </Text>
-        <Pressable
-          onPress={confirmSignOut}
-          hitSlop={10}
-          className="flex-row items-center gap-1 rounded-full bg-red-50 px-2.5 py-1"
-        >
-          <Ionicons name="log-out-outline" size={13} color="#dc2626" />
-          <Text className="text-[11px] font-semibold text-red-600">Sign out</Text>
-        </Pressable>
-      </View>
-
+      {/* One row: title identifies the screen, the avatar on the right is
+          the only "who am I" element -- repeating a full name/greeting on
+          every tab (this header is shared across all officer screens) read
+          as cluttered, so that's now folded into a single compact button. */}
       <View className="flex-row items-center justify-between">
         <View className="flex-1 flex-row items-center gap-2.5 pr-3">
           <View className="h-9 w-9 items-center justify-center rounded-xl bg-amber-500">
@@ -150,8 +190,128 @@ export function OfficerHeader({ title, subtitle, right }) {
             {subtitle ? <Text className="mt-0.5 text-xs text-gray-500">{subtitle}</Text> : null}
           </View>
         </View>
-        {right}
+
+        <View className="flex-row items-center gap-2">
+          {right}
+
+          <Pressable
+            ref={triggerRef}
+            onPress={() => (showDropdown ? setShowDropdown(false) : openDropdown())}
+            hitSlop={8}
+            className="h-9 flex-row items-center gap-1 rounded-full bg-gray-100 pl-2.5 pr-2"
+          >
+            <Ionicons name="person" size={16} color="#4b5563" />
+            <Ionicons name={showDropdown ? "chevron-up" : "chevron-down"} size={13} color="#9ca3af" />
+          </Pressable>
+        </View>
       </View>
+
+      {/* A shared component like this one doesn't own the whole screen's
+          layout, so getting a genuine full-screen "tap outside to dismiss"
+          layer (rather than one confined to this header's own box) needs a
+          Modal -- which renders outside the normal tree -- positioned using
+          the trigger's actual measured screen coordinates from openDropdown. */}
+      <Modal
+        transparent
+        visible={dropdownMounted}
+        animationType="none"
+        onRequestClose={() => setShowDropdown(false)}
+      >
+        <View style={{ flex: 1 }}>
+          <Pressable
+            onPress={() => setShowDropdown(false)}
+            style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}
+          />
+          <Animated.View
+            pointerEvents={showDropdown ? "auto" : "none"}
+            style={{
+              position: "absolute",
+              top: anchor.top,
+              right: anchor.right,
+              width: 208,
+              elevation: 6,
+              backgroundColor: "#ffffff",
+              borderRadius: 16,
+              borderWidth: 1,
+              borderColor: "#f3f4f6",
+              paddingVertical: 8,
+              overflow: "hidden",
+              shadowColor: "#000000",
+              shadowOffset: { width: 0, height: 8 },
+              shadowOpacity: 0.12,
+              shadowRadius: 16,
+              opacity: dropdownAnim,
+              transform: [
+                { scale: dropdownAnim.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1] }) },
+                { translateY: dropdownAnim.interpolate({ inputRange: [0, 1], outputRange: [-6, 0] }) },
+              ],
+            }}
+          >
+            <View className="border-b border-gray-100 px-4 py-2.5">
+              <Text className="text-xs font-semibold text-gray-900" numberOfLines={1}>
+                {user?.name ?? ""}
+              </Text>
+              <Text className="mt-0.5 text-[11px] text-gray-400" numberOfLines={1}>
+                {user?.email ?? ""}
+              </Text>
+            </View>
+            <Pressable
+              onPress={() => {
+                setShowDropdown(false);
+                setShowProfileModal(true);
+              }}
+              className="flex-row items-center gap-3 px-4 py-2.5"
+            >
+              <View className="h-7 w-7 items-center justify-center rounded-lg bg-amber-50">
+                <Ionicons name="settings-outline" size={14} color="#b45309" />
+              </View>
+              <Text className="text-sm text-gray-700">Profile Settings</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => {
+                setShowDropdown(false);
+                signOut();
+              }}
+              className="flex-row items-center gap-3 px-4 py-2.5"
+            >
+              <View className="h-7 w-7 items-center justify-center rounded-lg bg-red-50">
+                <Ionicons name="log-out-outline" size={14} color="#ef4444" />
+              </View>
+              <Text className="text-sm text-red-600">Log Out</Text>
+            </Pressable>
+          </Animated.View>
+        </View>
+      </Modal>
+
+      <Modal visible={showProfileModal} animationType="slide" onRequestClose={() => setShowProfileModal(false)}>
+        <SafeAreaView className="flex-1 bg-gray-50" edges={["top"]}>
+          <View className="flex-row items-center gap-3 border-b border-gray-200 bg-white px-5 py-4">
+            <View className="h-11 w-11 items-center justify-center rounded-xl bg-amber-500">
+              <Ionicons name="person" size={20} color="#ffffff" />
+            </View>
+            <View className="flex-1">
+              <Text className="text-sm font-bold text-gray-900">{user?.name}</Text>
+              <Text className="text-xs text-gray-400">{user?.email}</Text>
+            </View>
+            <Pressable
+              onPress={() => setShowProfileModal(false)}
+              hitSlop={10}
+              className="h-8 w-8 items-center justify-center rounded-full bg-gray-100"
+            >
+              <Ionicons name="close" size={16} color="#4b5563" />
+            </Pressable>
+          </View>
+
+          <View className="p-5">
+            <Text className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-400">Account Info</Text>
+            <View className="gap-3">
+              <InfoRow label="Full Name" value={user?.name} />
+              <InfoRow label="Email Address" value={user?.email} />
+              <InfoRow label="Role" value="Officer" />
+            </View>
+          </View>
+        </SafeAreaView>
+      </Modal>
     </View>
   );
 }

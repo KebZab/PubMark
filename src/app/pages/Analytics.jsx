@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { BarChart3, Users, Store, FileText, AlertTriangle } from "lucide-react";
 import { useApplications } from "../hooks/useApplications";
 import { useStalls } from "../hooks/useStalls";
+import { usePendingReceiptsBadge } from "../hooks/useReceipts";
 import { getSession } from "../components/authStorage";
 import { listUsers } from "../services/api";
 import { getViolations } from "../components/violationsStore";
@@ -160,6 +161,7 @@ export function Analytics() {
 
   const { applications, loading: applicationsLoading } = useApplications();
   const { stalls, loading: stallsLoading } = useStalls();
+  const navBadges = usePendingReceiptsBadge();
   // Was reading a browser localStorage cache left over from before user
   // accounts moved to the API — empty in every real browser, which is why
   // "Total Users" and "Users by Role" always showed zero. Real data, admin-only.
@@ -333,6 +335,7 @@ export function Analytics() {
       session={session}
       title="Analytics"
       subtitle="Market performance overview and reports"
+      navBadges={navBadges}
       actions={
         <div className="flex bg-gray-100 rounded-lg p-0.5">
           {["6m", "12m"].map((p) => (
