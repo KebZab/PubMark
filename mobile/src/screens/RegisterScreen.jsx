@@ -126,7 +126,8 @@ export default function RegisterScreen({ navigation }) {
   return (
     <KeyboardAvoidingView
       className="flex-1 bg-white"
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      keyboardVerticalOffset={20}
     >
       <StatusBar style="light" />
       <ScrollView

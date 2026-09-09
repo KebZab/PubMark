@@ -2,7 +2,9 @@ import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -202,8 +204,12 @@ export default function ViolationsScreen() {
         }
       />
 
-      <View className="border-b border-gray-200 bg-white px-5 pb-3">
-        <View className="flex-row gap-2">
+      <View className="border-b border-gray-200 bg-white pb-3 pt-3">
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: 20, gap: 8 }}
+        >
           {["all", "open", "reviewed", "resolved", "dismissed"].map((f) => {
             const active = filter === f;
             const label =
@@ -222,7 +228,7 @@ export default function ViolationsScreen() {
               </Pressable>
             );
           })}
-        </View>
+        </ScrollView>
       </View>
 
       <ScrollView
@@ -303,6 +309,11 @@ export default function ViolationsScreen() {
             <Text className="flex-1 text-base font-semibold text-gray-900">Report a violation</Text>
           </View>
 
+          <KeyboardAvoidingView
+            className="flex-1"
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            keyboardVerticalOffset={20}
+          >
           <ScrollView
             className="flex-1"
             contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
@@ -506,6 +517,7 @@ export default function ViolationsScreen() {
               )}
             </Pressable>
           </ScrollView>
+          </KeyboardAvoidingView>
         </SafeAreaView>
       </Modal>
     </SafeAreaView>
