@@ -1208,7 +1208,7 @@ export function AdminMapView() {
       {/* ── Map (full area) ──────────────────────────── */}
       <div className="flex-1 relative">
         {mapDataLoading && (
-          <div className="absolute inset-0 z-[1100] flex items-center justify-center bg-white/70 backdrop-blur-[1px]">
+          <div className="absolute inset-0 z-[1100] flex items-center justify-center bg-white/70 backdrop-blur-[1px] pointer-events-none">
             <div className="flex flex-col items-center gap-3">
               <Loader2 className="w-7 h-7 text-teal-600 animate-spin" />
               <p className="text-sm font-medium text-gray-600">Loading stalls…</p>
