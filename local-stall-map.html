@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PubMark Local Stall Mapper</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" crossorigin="" />
+  <style>
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #172033; background: #f6f8fb; }
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; }
+    .app { height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+    header { min-height: 64px; padding: 10px 18px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; background: #fff; border-bottom: 1px solid #e5e7eb; z-index: 1001; }
+    .brand { display: flex; align-items: center; gap: 11px; margin-right: auto; }
+    .logo { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 12px; color: #fff; background: linear-gradient(135deg, #14b8a6, #0f766e); font-weight: 900; box-shadow: 0 5px 14px #14b8a633; }
+    h1 { margin: 0; font-size: 16px; line-height: 1.1; }
+    .subtitle { color: #64748b; font-size: 11px; margin-top: 3px; }
+    .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .btn { border: 1px solid #d7dee8; border-radius: 10px; padding: 9px 12px; background: #fff; color: #334155; font-size: 12px; font-weight: 700; }
+    .btn:hover { background: #f8fafc; border-color: #b6c1d1; }
+    .btn.primary { background: #0f9f91; color: #fff; border-color: #0f9f91; }
+    .btn.primary:hover { background: #0d887c; }
+    .btn.active { color: #0f766e; border-color: #5eead4; background: #f0fdfa; }
+    .btn.danger { color: #dc2626; }
+    .floor-tabs { display: inline-flex; padding: 3px; background: #eef2f7; border-radius: 11px; }
+    .floor-tabs button { border: 0; padding: 7px 11px; border-radius: 8px; background: transparent; color: #64748b; font-size: 12px; font-weight: 700; }
+    .floor-tabs button.active { background: #fff; color: #0f766e; box-shadow: 0 1px 5px #0f172a18; }
+    main { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 330px; }
+    #map { width: 100%; height: 100%; background: #dce7e5; }
+    .map-wrap { position: relative; min-width: 0; }
+    .hint { position: absolute; z-index: 800; top: 12px; left: 50%; transform: translateX(-50%); background: #fffffff2; border: 1px solid #bde9e2; border-radius: 11px; padding: 8px 12px; box-shadow: 0 5px 18px #0f172a18; color: #0f766e; font-size: 12px; font-weight: 700; pointer-events: none; white-space: nowrap; }
+    aside { background: #fff; border-left: 1px solid #e5e7eb; min-height: 0; display: flex; flex-direction: column; }
+    .side-head { padding: 15px; border-bottom: 1px solid #e5e7eb; }
+    .side-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .side-title strong { font-size: 14px; }
+    .count { background: #ccfbf1; color: #0f766e; border-radius: 999px; padding: 3px 8px; font-size: 11px; font-weight: 800; }
+    .search { width: 100%; border: 1px solid #dbe2ea; background: #f8fafc; border-radius: 10px; padding: 9px 11px; outline: none; font-size: 12px; }
+    .search:focus { border-color: #14b8a6; box-shadow: 0 0 0 3px #14b8a622; }
+    #stallList { padding: 12px; overflow: auto; flex: 1; }
+    .stall-card { padding: 12px; border: 1px solid #e6ebf1; border-radius: 12px; margin-bottom: 9px; cursor: pointer; transition: .15s; }
+    .stall-card:hover, .stall-card.selected { border-color: #2dd4bf; background: #f0fdfa; transform: translateY(-1px); }
+    .stall-card .row { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
+    .stall-name { font-size: 13px; font-weight: 800; color: #172033; }
+    .section { font-size: 11px; color: #64748b; margin-top: 4px; }
+    .area { color: #0f766e; background: #ccfbf1; border-radius: 999px; padding: 3px 7px; font-size: 10px; font-weight: 800; white-space: nowrap; }
+    .empty { text-align: center; padding: 50px 15px; color: #94a3b8; font-size: 12px; line-height: 1.6; }
+    dialog { border: 0; padding: 0; border-radius: 18px; width: min(440px, calc(100vw - 28px)); box-shadow: 0 24px 80px #0f172a55; }
+    dialog::backdrop { background: #0f172a77; backdrop-filter: blur(2px); }
+    .modal-head { padding: 17px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e5e7eb; }
+    .modal-head h2 { margin: 0; font-size: 16px; }
+    .close { border: 0; background: transparent; font-size: 22px; color: #64748b; line-height: 1; }
+    form { padding: 18px 20px 20px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    label { display: block; color: #475569; font-size: 11px; font-weight: 800; margin-bottom: 5px; }
+    .field { margin-bottom: 13px; }
+    .field input, .field select, .field textarea { width: 100%; border: 1px solid #dbe2ea; border-radius: 10px; padding: 10px 11px; outline: none; background: #fff; font-size: 13px; }
+    .field input:focus, .field select:focus, .field textarea:focus { border-color: #14b8a6; box-shadow: 0 0 0 3px #14b8a622; }
+    textarea { resize: vertical; min-height: 72px; }
+    .actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 5px; }
+    .leaflet-tooltip.stall-label { border: 0; border-radius: 2px; background: #ffffffcc; color: #064e3b; box-shadow: none; font-size: 10px; line-height: 12px; font-weight: 800; padding: 0 2px; pointer-events: none; }
+    .hide-stall-labels .stall-label { visibility: hidden; }
+    .leaflet-tooltip.stall-label::before { display: none; }
+    .leaflet-draw-toolbar a { background-color: #fff; }
+    #fileInput { display: none; }
+    .toast { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 20px); z-index: 2000; opacity: 0; pointer-events: none; background: #172033; color: #fff; border-radius: 10px; padding: 10px 15px; font-size: 12px; font-weight: 700; transition: .2s; }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    @media (max-width: 760px) { main { grid-template-columns: 1fr; grid-template-rows: minmax(420px, 65vh) auto; overflow: auto; } aside { min-height: 280px; border-left: 0; border-top: 1px solid #e5e7eb; } .app { height: auto; min-height: 100vh; } header { align-items: flex-start; } .hint { white-space: normal; width: calc(100% - 130px); text-align: center; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="brand"><div class="logo">P</div><div><h1>Local Stall Mapper</h1><div class="subtitle">Independent browser copy · no Supabase</div></div></div>
+      <div class="toolbar">
+        <div class="floor-tabs"><button data-floor="1" class="active">1st Floor</button><button data-floor="2">2nd Floor</button></div>
+        <button class="btn" id="exportBtn">Export JSON</button>
+        <button class="btn" id="exportMarkdownBtn">Export Markdown</button>
+        <button class="btn" id="importBtn">Import JSON</button>
+        <button class="btn" id="resetPlanBtn">Restore full layout</button>
+        <button class="btn danger" id="clearBtn">Clear local data</button>
+        <input id="fileInput" type="file" accept="application/json,.json" />
+      </div>
+    </header>
+    <main>
+      <section class="map-wrap">
+        <div id="map"></div>
+        <div class="hint">Use the tools at top-left to draw, edit, or delete stalls</div>
+      </section>
+      <aside>
+        <div class="side-head"><div class="side-title"><strong>Mapped stalls</strong><span class="count" id="count">0</span></div><input class="search" id="search" placeholder="Search stall name or section…" /></div>
+        <div id="stallList"></div>
+      </aside>
+    </main>
+  </div>
+
+  <dialog id="stallDialog">
+    <div class="modal-head"><h2 id="dialogTitle">Save stall</h2><button class="close" id="closeDialog" type="button">×</button></div>
+    <form id="stallForm">
+      <div class="grid">
+        <div class="field"><label for="stallName">Stall name *</label><input id="stallName" required maxlength="80" placeholder="e.g. Stall A-01" /></div>
+        <div class="field"><label for="stallFloor">Floor *</label><select id="stallFloor"><option value="1">1st Floor</option><option value="2">2nd Floor</option></select></div>
+      </div>
+      <div class="grid">
+        <div class="field"><label for="stallSection">Section</label><input id="stallSection" maxlength="80" placeholder="e.g. Dry Goods" /></div>
+        <div class="field"><label for="stallBusiness">Business type</label><input id="stallBusiness" maxlength="80" placeholder="e.g. Produce" /></div>
+      </div>
+      <div class="field"><label for="stallNotes">Notes</label><textarea id="stallNotes" maxlength="500" placeholder="Optional notes"></textarea></div>
+      <div class="actions"><button class="btn" id="cancelDialog" type="button">Cancel</button><button class="btn danger" id="deleteOneBtn" type="button" hidden>Delete</button><button class="btn primary" type="submit">Save stall</button></div>
+    </form>
+  </dialog>
+  <div class="toast" id="toast"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js" crossorigin=""></script>
+  <script>
+    (() => {
+      'use strict';
+      const STORAGE_KEY = 'pubmark_local_stall_mapper_v1';
+      const PLAN_SEED_KEY = 'pubmark_local_stall_mapper_plan_seed_v1';
+      const MAP_CENTER = [10.6054, 123.0413];
+      let activeFloor = '1', stalls, pendingLayer = null, editingId = null, toastTimer;
+      const map = L.map('map', { center: MAP_CENTER, zoom: 18, maxZoom: 22 });
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>', maxNativeZoom: 19, maxZoom: 22 }).addTo(map);
+      // OSM building way 365630350: the middle strip in the supplied mock-up.
+      const PLAN_TOP_LEFT = L.latLng(10.6057458, 123.0409892);
+      const PLAN_TOP_RIGHT = L.latLng(10.6055637, 123.0416404);
+      const PLAN_BOTTOM_LEFT = L.latLng(10.6055628, 123.0409363);
+      const PLAN_REVISION = 'aligned-middle-building-v2';
+      const drawnItems = new L.FeatureGroup().addTo(map);
+      const drawControl = new L.Control.Draw({ position: 'topleft', draw: { polygon: { allowIntersection: false, showArea: true, shapeOptions: style(false) }, rectangle: { shapeOptions: style(false) }, polyline: false, circle: false, circlemarker: false, marker: false }, edit: { featureGroup: drawnItems } });
+      map.addControl(drawControl);
+
+      function style(selected, kind) {
+        const color = kind === 'technical_room' ? '#7c3aed' : kind === 'table_stall' ? '#2563eb' : '#0f9f91';
+        return { color: selected ? '#f59e0b' : color, weight: selected ? 4 : 2, fillColor: selected ? '#fbbf24' : color, fillOpacity: selected ? .4 : .28 };
+      }
+      function planPoint(x, y) {
+        // Blueprint is upside down in the user's placed/cropped reference.
+        x = 1 - x; y = 1 - y;
+        const a = map.project(PLAN_TOP_LEFT, 22), b = map.project(PLAN_TOP_RIGHT, 22), c = map.project(PLAN_BOTTOM_LEFT, 22);
+        const p = map.unproject(L.point(a.x + x*(b.x-a.x) + y*(c.x-a.x), a.y + x*(b.y-a.y) + y*(c.y-a.y)), 22);
+        return [p.lng, p.lat];
+      }
+      function planStall(number, x1, y1, x2, y2) {
+        const ring = [planPoint(x1,y1), planPoint(x2,y1), planPoint(x2,y2), planPoint(x1,y2), planPoint(x1,y1)];
+        const now = new Date().toISOString();
+        return { id: 'plan_' + number, stall_name: 'Stall ' + number, floor: '1', section: number <= 44 ? 'North Wing' : 'South Wing', business_type: '', notes: 'Pre-drawn from the Murcia Dry Market floor plan.', geometry: { type: 'Polygon', coordinates: [ring] }, created_at: now, updated_at: now };
+      }
+      function makePlanStalls() {
+        const result = [];
+        const block = (start, columns, x1, x2, y1, mid, y2) => {
+          const w = (x2 - x1) / columns;
+          for (let col = 0; col < columns; col++) {
+            const left = (x1 + col*w - 498)/928, right = (x1 + (col+1)*w - 498)/928;
+            result.push(planStall(start + col * 2, left, (y1-248)/264, right, (mid-248)/264));
+            result.push(planStall(start + col * 2 + 1, left, (mid-248)/264, right, (y2-248)/264));
+          }
+        };
+        // Wall coordinates measured on the 1888 x 1334 reference photograph.
+        block(1, 11, 498, 924, 248, 286, 326);
+        block(23, 11, 1000, 1426, 248, 287, 326);
+        block(45, 9, 577, 924, 433, 472, 512);
+        block(63, 11, 1000, 1426, 433, 472, 512);
+        result.push(...makeMiddleFeatures());
+        return result;
+      }
+      function makeMiddleFeatures() {
+        const result = [];
+        function feature(id, name, kind, x1, y1, x2, y2) {
+          const shape = planStall(0, (x1-498)/928, (y1-248)/264, (x2-498)/928, (y2-248)/264);
+          return { ...shape, id, stall_name: name, kind, section: kind === 'technical_room' ? 'Facilities' : 'Middle aisle', notes: kind === 'technical_room' ? 'Technical room, located in the electrical-room space on the reference plan.' : 'Table stall traced from the middle islands on the reference plan.' };
+        }
+        // Eleven islands, each divided into two individually editable tables.
+        const islands = [[558,597],[636,675],[714,753],[789,828],[866,905],[945,978],[1019,1057],[1093,1131],[1172,1211],[1250,1288],[1326,1363]];
+        islands.forEach(([left, right], index) => {
+          const middle = (left + right)/2;
+          for (let half = 0; half < 2; half++) {
+            const number = index*2 + half + 1;
+            result.push(feature('plan_table_' + number, 'Table Stall ' + number, 'table_stall', half ? middle : left, 361, half ? right : middle, 393));
+          }
+        });
+        result.push(feature('plan_technical_room', 'Technical Room', 'technical_room', 498, 433, 577, 512));
+        return result;
+      }
+      function load() {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          const value = raw === null ? [] : JSON.parse(raw);
+          let valid = Array.isArray(value) ? value : [];
+          if (localStorage.getItem(STORAGE_KEY + '_alignment') !== PLAN_REVISION) {
+            const corrected = new Map(makePlanStalls().map(s => [s.id, s]));
+            if (valid.some(s => corrected.has(s.id))) {
+              localStorage.setItem(STORAGE_KEY + '_before_alignment_v2', JSON.stringify(valid));
+              valid = valid.map(s => corrected.has(s.id) ? { ...s, geometry: corrected.get(s.id).geometry } : s);
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(valid));
+            }
+            localStorage.setItem(STORAGE_KEY + '_alignment', PLAN_REVISION);
+          }
+          if (!localStorage.getItem(PLAN_SEED_KEY) && valid.length === 0) {
+            const seeded = makePlanStalls();
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(seeded));
+            localStorage.setItem(PLAN_SEED_KEY, 'done');
+            localStorage.setItem(STORAGE_KEY + '_middle_features_v1', 'done');
+            return seeded;
+          }
+          localStorage.setItem(PLAN_SEED_KEY, 'done');
+          // Add only the new shapes once; keep all existing stall edits/deletions.
+          if (!localStorage.getItem(STORAGE_KEY + '_middle_features_v1')) {
+            const ids = new Set(valid.map(s => s.id));
+            valid.push(...makeMiddleFeatures().filter(s => !ids.has(s.id)));
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(valid));
+            localStorage.setItem(STORAGE_KEY + '_middle_features_v1', 'done');
+          }
+          return valid;
+        } catch (_) { return makePlanStalls(); }
+      }
+      stalls = load();
+      function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(stalls)); }
+      function uid() { return 'local_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8); }
+      function escapeHtml(value) { return String(value || '').replace(/[&<>'"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[c])); }
+      function areaOf(geometry) { try { return L.GeometryUtil.geodesicArea(geometry.coordinates[0].map(c => L.latLng(c[1], c[0]))); } catch (_) { return 0; } }
+      function notify(message) { const el = document.getElementById('toast'); el.textContent = message; el.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 2300); }
+
+      function render() {
+        drawnItems.clearLayers();
+        stalls.filter(s => s.floor === activeFloor).forEach(stall => {
+          const geo = L.geoJSON({ type: 'Feature', geometry: stall.geometry, properties: {} }, { style: style(stall.id === editingId, stall.kind) });
+          geo.eachLayer(layer => {
+            layer.stallId = stall.id;
+            const label = stall.stall_name.replace(/^Table Stall\s+/i, 'T').replace(/^Stall\s+/i, '');
+            layer.bindTooltip(escapeHtml(label), { permanent: true, direction: 'center', className: 'stall-label' });
+            layer.on('click', () => { if (!layer.editing?.enabled() && !geometryMode) openEdit(stall.id); });
+            drawnItems.addLayer(layer);
+          });
+        });
+        renderList();
+      }
+      function renderList() {
+        const q = document.getElementById('search').value.trim().toLowerCase();
+        const visible = stalls.filter(s => s.floor === activeFloor && (!q || [s.stall_name, s.section, s.business_type].some(v => String(v || '').toLowerCase().includes(q))));
+        document.getElementById('count').textContent = stalls.filter(s => s.floor === activeFloor).length;
+        const list = document.getElementById('stallList');
+        if (!visible.length) { list.innerHTML = '<div class="empty">No stalls found on this floor.<br>Draw a rectangle or polygon on the map to add one.</div>'; return; }
+        list.innerHTML = visible.map(s => `<article class="stall-card ${s.id === editingId ? 'selected' : ''}" data-id="${s.id}"><div class="row"><div><div class="stall-name">${escapeHtml(s.stall_name)}</div><div class="section">${escapeHtml(s.section || s.business_type || 'No section')}</div></div><span class="area">${Math.round(areaOf(s.geometry))} m²</span></div></article>`).join('');
+        list.querySelectorAll('[data-id]').forEach(el => el.addEventListener('click', () => openEdit(el.dataset.id)));
+      }
+      function resetDialog() { document.getElementById('stallForm').reset(); document.getElementById('stallFloor').value = activeFloor; document.getElementById('deleteOneBtn').hidden = true; editingId = null; }
+      function closeDialog(removePending = true) { document.getElementById('stallDialog').close(); if (removePending && pendingLayer) drawnItems.removeLayer(pendingLayer); pendingLayer = null; editingId = null; render(); }
+      function openNew(layer) { resetDialog(); pendingLayer = layer; drawnItems.addLayer(layer); document.getElementById('dialogTitle').textContent = 'Save new stall'; document.getElementById('stallDialog').showModal(); }
+      function openEdit(id) {
+        const stall = stalls.find(s => s.id === id); if (!stall) return;
+        editingId = id; pendingLayer = null;
+        document.getElementById('dialogTitle').textContent = 'Edit stall details';
+        document.getElementById('stallName').value = stall.stall_name || '';
+        document.getElementById('stallFloor').value = stall.floor;
+        document.getElementById('stallSection').value = stall.section || '';
+        document.getElementById('stallBusiness').value = stall.business_type || '';
+        document.getElementById('stallNotes').value = stall.notes || '';
+        document.getElementById('deleteOneBtn').hidden = false;
+        render();
+        const layer = [...drawnItems.getLayers()].find(l => l.stallId === id); if (layer) map.fitBounds(layer.getBounds(), { padding: [70, 70], maxZoom: 21 });
+        document.getElementById('stallDialog').showModal();
+      }
+
+      map.on(L.Draw.Event.CREATED, e => openNew(e.layer));
+      let geometryMode = false;
+      map.on('draw:editstart draw:deletestart', () => { geometryMode = true; });
+      map.on('draw:editstop draw:deletestop', () => { geometryMode = false; });
+      map.on('zoomend', () => map.getContainer().classList.toggle('hide-stall-labels', map.getZoom() < 20));
+      map.on(L.Draw.Event.EDITED, e => {
+        e.layers.eachLayer(layer => { const stall = stalls.find(s => s.id === layer.stallId); if (stall) { stall.geometry = layer.toGeoJSON().geometry; stall.updated_at = new Date().toISOString(); } });
+        save(); render(); notify('Stall geometry saved locally.');
+      });
+      map.on(L.Draw.Event.DELETED, e => {
+        const ids = []; e.layers.eachLayer(layer => { if (layer.stallId) ids.push(layer.stallId); });
+        stalls = stalls.filter(s => !ids.includes(s.id)); save(); render(); notify(`${ids.length} stall${ids.length === 1 ? '' : 's'} deleted.`);
+      });
+
+      document.getElementById('stallForm').addEventListener('submit', e => {
+        e.preventDefault();
+        const fields = { stall_name: document.getElementById('stallName').value.trim(), floor: document.getElementById('stallFloor').value, section: document.getElementById('stallSection').value.trim(), business_type: document.getElementById('stallBusiness').value.trim(), notes: document.getElementById('stallNotes').value.trim() };
+        if (!fields.stall_name) return;
+        if (editingId) { const stall = stalls.find(s => s.id === editingId); Object.assign(stall, fields, { updated_at: new Date().toISOString() }); }
+        else { const now = new Date().toISOString(); stalls.push({ id: uid(), ...fields, geometry: pendingLayer.toGeoJSON().geometry, created_at: now, updated_at: now }); }
+        activeFloor = fields.floor; save(); closeDialog(false); syncFloorButtons(); notify('Stall saved in this browser.');
+      });
+      document.getElementById('deleteOneBtn').addEventListener('click', () => { if (!editingId || !confirm('Delete this stall from local storage?')) return; stalls = stalls.filter(s => s.id !== editingId); save(); closeDialog(false); notify('Stall deleted.'); });
+      document.getElementById('closeDialog').addEventListener('click', () => closeDialog());
+      document.getElementById('cancelDialog').addEventListener('click', () => closeDialog());
+      document.getElementById('stallDialog').addEventListener('cancel', e => { e.preventDefault(); closeDialog(); });
+      document.getElementById('search').addEventListener('input', renderList);
+      document.querySelectorAll('[data-floor]').forEach(btn => btn.addEventListener('click', () => { activeFloor = btn.dataset.floor; editingId = null; syncFloorButtons(); render(); }));
+      function syncFloorButtons() { document.querySelectorAll('[data-floor]').forEach(btn => btn.classList.toggle('active', btn.dataset.floor === activeFloor)); }
+
+      document.getElementById('exportBtn').addEventListener('click', () => {
+        const blob = new Blob([JSON.stringify({ version: 1, exported_at: new Date().toISOString(), stalls }, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `pubmark-local-stalls-${new Date().toISOString().slice(0,10)}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); notify('Backup downloaded.');
+      });
+      // Shared by the browser export and the checked-in layout snapshot generator.
+      function buildLayoutMarkdown(records, storageSnapshot, source) {
+        const fence = '`'.repeat(3);
+        const json = value => fence + 'json\n' + JSON.stringify(value, null, 2) + '\n' + fence;
+        const cell = value => String(value ?? '').replace(/\|/g, '&#124;').replace(/[\r\n]/g, ' ');
+        const tables = records.filter(s => s.kind === 'table_stall').length;
+        const rooms = records.filter(s => s.kind === 'technical_room').length;
+        const lines = [
+          '# Murcia market — local map data', '',
+          'Exported: ' + new Date().toISOString(), '',
+          'Source: ' + source, '',
+          `${records.length} mapped objects: ${records.length-tables-rooms} regular stalls, ${tables} table stalls, ${rooms} technical rooms. Includes all floors, regardless of the displayed floor or search.`, '',
+          '## Coordinates and restore format', '',
+          'Coordinates are WGS 84 (EPSG:4326). GeoJSON positions are [longitude, latitude], while Leaflet uses [latitude, longitude]. Each Polygon ring lists its corners in order, with the first point repeated at the end to close it. Preserve the full numeric precision in the JSON below.', '',
+          'The complete JSON payload below can be copied into a .json file and opened with Import JSON in local-stall-map.html. This restores the mapped objects; the separate storage snapshot records flags and historical backups for reference.', '',
+          '## Database handoff notes', '',
+          'This is a data backup, not executable SQL, and it has not uploaded anything. Local IDs (plan_1, plan_table_1, etc.) are not database UUIDs: retain them as source IDs and map them to generated database IDs during import.', '',
+          'The current server stall API uses stall_name, business_type, section, floor, floor_area, notes, and geometry. The local mapper does not set floor_area or status by default, and business_type can be blank. These missing values have not been invented here; resolve required fields before database import. Displayed map areas are calculated, not stored floor_area values.', '',
+          'Preserve kind for table_stall and technical_room in an appropriate schema field or separate facilities model. The current stall insert route does not persist kind; do not silently turn the Technical Room into a rentable stall. Local created_at/updated_at values are local timestamps, not existing database audit timestamps.', '',
+          '## Map anchors', '',
+          json({ revision: PLAN_REVISION, top_left: [PLAN_TOP_LEFT.lng, PLAN_TOP_LEFT.lat], top_right: [PLAN_TOP_RIGHT.lng, PLAN_TOP_RIGHT.lat], bottom_left: [PLAN_BOTTOM_LEFT.lng, PLAN_BOTTOM_LEFT.lat], reference_building: 'OpenStreetMap way 365630350', floor_plan_rotation_degrees: 180 }), '',
+          '## Point-by-point map locations', '',
+          '| Object | Local ID | Floor | Ring | Point | Longitude | Latitude |',
+          '| --- | --- | --- | --- | --- | --- | --- |'
+        ];
+        for (const record of records) {
+          (record.geometry?.coordinates || []).forEach((ring, ringIndex) => {
+            ring.forEach((point, pointIndex) => lines.push(`| ${cell(record.stall_name)} | ${cell(record.id)} | ${cell(record.floor)} | ${ringIndex+1} | ${pointIndex+1}${pointIndex === ring.length-1 ? ' (close)' : ''} | ${point[0]} | ${point[1]} |`));
+          });
+        }
+        lines.push('', '## Complete object data (JSON)', '', json({ version: 1, exported_at: new Date().toISOString(), source, stalls: records }), '',
+          '## Mapper localStorage snapshot (JSON)', '',
+          'Values below are the raw strings stored under this mapper\'s keys. Only this mapper\'s current data, migration flags, and historical alignment backup are included. A null value means the key was absent. Browser snapshots reflect saved data at export time; unsaved drawings or edit-tool changes are not included.', '',
+          json(storageSnapshot), '');
+        return lines.join('\n');
+      }
+      document.getElementById('exportMarkdownBtn').addEventListener('click', () => {
+        try {
+          const keys = [STORAGE_KEY, PLAN_SEED_KEY, STORAGE_KEY + '_alignment', STORAGE_KEY + '_before_alignment_v2', STORAGE_KEY + '_middle_features_v1'];
+          const snapshot = Object.fromEntries(keys.map(key => [key, localStorage.getItem(key)]));
+          const saved = JSON.parse(snapshot[STORAGE_KEY] || '[]');
+          if (!Array.isArray(saved)) throw new Error('Saved map data is not an array.');
+          const markdown = buildLayoutMarkdown(saved, snapshot, 'Exact saved browser localStorage snapshot.');
+          const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+          const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+          a.download = `murcia-stall-locations-${new Date().toISOString().slice(0,10)}.md`;
+          a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+          notify('Markdown backup downloaded with all saved points and fields.');
+        } catch (error) { alert('Could not export saved map data: ' + error.message); }
+      });
+      document.getElementById('importBtn').addEventListener('click', () => document.getElementById('fileInput').click());
+      document.getElementById('resetPlanBtn').addEventListener('click', () => {
+        if (!confirm('Replace the local layout with 84 stalls, 22 table stalls, and the technical room?')) return;
+        stalls = makePlanStalls(); activeFloor = '1'; editingId = null; save(); syncFloorButtons(); render(); notify('Full layout restored: 106 stalls and 1 technical room.');
+      });
+      document.getElementById('fileInput').addEventListener('change', async e => {
+        const file = e.target.files[0]; if (!file) return;
+        try { const data = JSON.parse(await file.text()); const incoming = Array.isArray(data) ? data : data.stalls; if (!Array.isArray(incoming) || incoming.some(s => !s.id || !s.geometry || !['1','2'].includes(String(s.floor)))) throw new Error('Invalid stall backup'); stalls = incoming.map(s => ({ ...s, floor: String(s.floor) })); save(); render(); notify(`${stalls.length} stalls imported.`); } catch (err) { alert('Could not import this file: ' + err.message); } finally { e.target.value = ''; }
+      });
+      document.getElementById('clearBtn').addEventListener('click', () => { if (!stalls.length || !confirm(`Permanently remove all ${stalls.length} locally saved stalls? Export a backup first if needed.`)) return; stalls = []; save(); render(); notify('Local stall data cleared.'); });
+      render();
+      map.fitBounds([PLAN_TOP_LEFT, PLAN_TOP_RIGHT, PLAN_BOTTOM_LEFT, L.latLng(10.6053807, 123.0415875)], { padding: [60, 60], maxZoom: 21 });
+      map.getContainer().classList.toggle('hide-stall-labels', map.getZoom() < 20);
+    })();
+  </script>
+</body>
+</html>

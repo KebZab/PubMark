@@ -7,7 +7,7 @@
     "build": "vite build",
     "dev": "concurrently -n web,server,tunnel -c blue,green,magenta \"npm run dev:web\" \"npm run dev:server\" \"npm run dev:tunnel\"",
     "dev:web": "vite",
-    "dev:server": "npm run dev --prefix server",
+    "dev:server": "npm run dev:no-tunnel --prefix server",
     "dev:tunnel": "npx --yes cloudflared tunnel --url http://localhost:5173"
   },
   "dependencies": {

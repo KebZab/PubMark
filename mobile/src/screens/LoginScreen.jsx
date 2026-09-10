@@ -66,14 +66,11 @@ export default function LoginScreen({ navigation }) {
       >
         <View
           className="w-full self-center rounded-3xl bg-white px-6 py-8"
-          style={{
-            maxWidth: 448,
-            shadowColor: "#0f766e",
-            shadowOffset: { width: 0, height: 12 },
-            shadowOpacity: 0.12,
-            shadowRadius: 24,
-            elevation: 6,
-          }}
+          style={Platform.select({
+            web: { maxWidth: 448, boxShadow: "0 12px 24px rgba(15, 118, 110, 0.12)" },
+            ios: { maxWidth: 448, shadowColor: "#0f766e", shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.12, shadowRadius: 24 },
+            default: { maxWidth: 448, elevation: 6 },
+          })}
         >
           <View className="mb-6 flex-row items-center gap-2">
             <View className="h-9 w-9 items-center justify-center rounded-xl bg-primary">
@@ -145,7 +142,11 @@ export default function LoginScreen({ navigation }) {
             disabled={loading}
             accessibilityRole="button"
             accessibilityState={{ disabled: loading, busy: loading }}
-            style={{ shadowColor: "#14B8A6", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 3 }}
+            style={Platform.select({
+              web: { boxShadow: "0 4px 8px rgba(20, 184, 166, 0.25)" },
+              ios: { shadowColor: "#14B8A6", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8 },
+              default: { elevation: 3 },
+            })}
             className={`mt-4 flex-row items-center justify-center gap-2 rounded-xl py-3.5 ${
               loading ? "bg-primary/60" : "bg-primary"
             }`}

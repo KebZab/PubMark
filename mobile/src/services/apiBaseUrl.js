@@ -1,4 +1,5 @@
 import Constants from "expo-constants";
+import { Platform } from "react-native";
 
 // Works out where the API server is, so the LAN IP doesn't have to be
 // hand-edited every time the router hands out a new one.
@@ -26,11 +27,28 @@ function hostFromExpo() {
   return host ? host : null;
 }
 
+function apiUrlFromBrowser() {
+  if (Platform.OS !== "web" || typeof window === "undefined") return null;
+
+  // Expo's hostUri can retain an old LAN address after changing networks.
+  // The browser's own URL is necessarily reachable, so use its hostname and
+  // point it at the API port instead.
+  const url = new URL(window.location.href);
+  url.port = String(API_PORT);
+  url.pathname = "/api";
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/$/, "");
+}
+
 export function resolveApiBaseUrl() {
   const explicit = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
 
   // Development: follow whatever host Expo is being served from.
   if (__DEV__) {
+    const browserUrl = apiUrlFromBrowser();
+    if (browserUrl) return browserUrl;
+
     const host = hostFromExpo();
     if (host) return `http://${host}:${API_PORT}/api`;
   }
