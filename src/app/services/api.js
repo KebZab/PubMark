@@ -57,6 +57,21 @@ export async function registerVendor(input) {
   return apiFetch("/auth/register", { method: "POST", body: JSON.stringify(input) });
 }
 
+// `credential` is the raw Google ID token from <GoogleLogin>'s onSuccess.
+// Response is one of: { profile, token } (existing confirmed account —
+// same shape as login()), a thrown ApiError with code "pending_confirmation"
+// (existing but unconfirmed), or { needsSignup: true, email, name }.
+export async function loginWithGoogle(credential) {
+  return apiFetch("/auth/google/login", { method: "POST", body: JSON.stringify({ credential }) });
+}
+
+// `credential` must be the same ID token passed to loginWithGoogle() — the
+// server re-verifies it to derive the email, so there's no email field
+// here to send. `fields` is { name, phone, address, password }.
+export async function completeGoogleSignup(credential, fields) {
+  return apiFetch("/auth/google/register", { method: "POST", body: JSON.stringify({ credential, ...fields }) });
+}
+
 export async function logout() {
   return apiFetch("/auth/logout", { method: "POST" });
 }

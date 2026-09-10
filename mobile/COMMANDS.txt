@@ -1,0 +1,50 @@
+PubMark Mobile — commands you'll actually use
+(run all of these inside the mobile/ folder)
+
+===========================================
+DAILY DEV LOOP (use this almost every time)
+===========================================
+npx expo start --dev-client
+
+  Starts the dev server. Open the PubMark dev-client app already
+  installed on your phone — it connects automatically. Save any code
+  change and it updates on the phone instantly, same as Expo Go.
+
+  NOTE: use --dev-client, not plain "npx expo start" — plain Expo Go
+  cannot run this app anymore now that Google Sign-In's native code
+  is in it.
+
+===========================================
+ONLY WHEN YOU ADD ANOTHER NATIVE FEATURE
+===========================================
+(regular screens/UI/logic changes do NOT need this — see above)
+
+npx eas-cli build --profile development --platform android
+
+  Rebuilds the installable dev-client app in the cloud (~10-15 min).
+  Takes a few minutes to start streaming logs. When it finishes, it
+  gives you a link/QR to install the new build on your phone, then go
+  back to the daily dev loop above.
+
+===========================================
+CHECKING THINGS
+===========================================
+npx eas-cli whoami
+  Shows which Expo account is currently logged in.
+
+npx eas-cli login
+  Logs into your Expo/EAS account (opens a browser).
+
+npx eas-cli logout
+  Logs out — use before switching to a different Expo account.
+
+npx eas-cli build:list --limit 5
+  Shows your most recent builds and their status.
+
+===========================================
+AFTER PULLING NEW CHANGES FROM GIT
+===========================================
+npm install
+
+  Run this whenever package.json changed (new dependency added) —
+  otherwise the app may error on a missing package.

@@ -236,7 +236,11 @@ export default function ApplicationFormScreen({ route, navigation, pendingApplic
         </View>
       ) : null}
 
-      <KeyboardAvoidingView className="flex-1" behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <KeyboardAvoidingView
+        className="flex-1"
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={20}
+      >
         <ScrollView
           className="flex-1"
           contentContainerStyle={{ padding: 16, paddingBottom: 40 }}

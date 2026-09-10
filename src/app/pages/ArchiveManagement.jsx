@@ -19,6 +19,7 @@ import {
 } from "../services/archiveApi";
 import { getSession } from "../components/authStorage";
 import { DashboardLayout } from "../components/DashboardLayout";
+import { usePendingReceiptsBadge } from "../hooks/useReceipts";
 import { showToast } from "../components/Toast";
 
 const TYPE_CONFIG = {
@@ -48,6 +49,7 @@ export function ArchiveManagement() {
   const [selectedRecord, setSelectedRecord] = useState(null);
   const [restoreConfirm, setRestoreConfirm] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const navBadges = usePendingReceiptsBadge();
 
   // Archive records come from the API now, so this loads asynchronously.
   useEffect(() => {
@@ -119,6 +121,7 @@ export function ArchiveManagement() {
       session={session}
       title="Archive"
       subtitle="Archived records — applications, vendors, and stalls"
+      navBadges={navBadges}
     >
       <div className="p-6 space-y-5">
         {/* Summary cards */}

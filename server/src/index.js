@@ -6,6 +6,7 @@ import jwt from "jsonwebtoken";
 import pg from "pg";
 import crypto from "node:crypto";
 import nodemailer from "nodemailer";
+import { OAuth2Client } from "google-auth-library";
 import { createClient } from "@supabase/supabase-js";
 
 const app = express();
@@ -83,6 +84,39 @@ async function sendUserConfirmationEmail(email, token) {
     subject: "Confirm your PubMark account",
     html: `<p>An administrator created a PubMark account for you.</p><p>Click the link below to confirm your email and activate the account:</p><p><a href="${url}">${url}</a></p><p>This link expires in 24 hours. If you weren't expecting this, you can ignore this email.</p>`,
   });
+}
+
+// ── Google Sign-In (ID token verification only — no client secret, no
+// server-side authorization-code exchange) ─────────────────────────────────
+class GoogleAuthError extends Error {
+  constructor(message, status = 401, code = "google_token_invalid") {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+const googleClient = process.env.GOOGLE_CLIENT_ID ? new OAuth2Client(process.env.GOOGLE_CLIENT_ID) : null;
+
+// Verifies a Google ID token's signature/issuer/audience/expiry against
+// Google's own JWKS (handled internally by google-auth-library) and returns
+// only the fields this app actually trusts from the payload. Called twice
+// per signup (once at the login-check step, once again at fill-up-form
+// submit) rather than threading server-side state between the two — an ID
+// token is a self-contained, Google-signed JWT, so re-verifying is cheap
+// and avoids needing a session/nonce store for a two-step flow.
+async function verifyGoogleIdToken(idToken) {
+  if (!googleClient) throw new GoogleAuthError("Google sign-in is not configured on this server.", 500, "google_not_configured");
+  let ticket;
+  try {
+    ticket = await googleClient.verifyIdToken({ idToken: String(idToken || ""), audience: process.env.GOOGLE_CLIENT_ID });
+  } catch {
+    throw new GoogleAuthError("Google sign-in failed. Please try again.", 401, "google_token_invalid");
+  }
+  const payload = ticket.getPayload();
+  if (!payload?.email) throw new GoogleAuthError("Google sign-in failed. Please try again.", 401, "google_token_invalid");
+  if (!payload.email_verified) throw new GoogleAuthError("Your Google account's email isn't verified with Google.", 403, "google_email_unverified");
+  return { email: String(payload.email).toLowerCase(), name: payload.name || "" };
 }
 
 class AttachmentError extends Error {
@@ -829,6 +863,80 @@ app.post("/api/auth/register", async (req, res, next) => {
     await db.query("INSERT INTO profiles (id, email, password_hash, name, phone, address, role) VALUES ($1, $2, $3, $4, $5, $6, 'vendor')", [id, String(email).toLowerCase(), passwordHash, name, phone, address]);
     const result = { id, email: String(email).toLowerCase(), name, phone, address, role: "vendor" }; const token = setSession(res, result); res.status(201).json({ profile: result, token });
   } catch (error) { if (error?.code === "23505") return res.status(409).json({ message: "This email is already in use." }); next(error); }
+});
+
+// Verified Google email matched against `profiles` first, then
+// `pending_user_creations` — an existing confirmed account logs straight
+// in (regardless of whether it was originally created via Google or a
+// password), a pending one returns the exact same pending_confirmation
+// shape the password-login route uses below, and a brand-new email tells
+// the client to show the fill-up form instead of creating anything yet.
+app.post("/api/auth/google/login", async (req, res, next) => {
+  try {
+    const { email, name } = await verifyGoogleIdToken(req.body.credential);
+    const { rows } = await db.query("SELECT * FROM profiles WHERE email = $1 LIMIT 1", [email]);
+    const user = rows[0];
+    if (user) {
+      if (user.is_archived) return res.status(403).json({ message: "This account has been terminated.", code: "account_terminated" });
+      const result = profile(user);
+      const token = setSession(res, result);
+      return res.json({ profile: result, token });
+    }
+    const { rows: pendingRows } = await db.query(
+      "SELECT 1 FROM pending_user_creations WHERE email = $1 AND expires_at > now() LIMIT 1",
+      [email]
+    );
+    if (pendingRows[0]) return res.status(403).json({ message: "Please confirm your email before signing in.", code: "pending_confirmation" });
+    return res.json({ needsSignup: true, email, name });
+  } catch (error) {
+    if (error instanceof GoogleAuthError) return res.status(error.status).json({ message: error.message, code: error.code });
+    next(error);
+  }
+});
+
+// Completes a Google-initiated signup — mirrors POST /api/users almost
+// exactly (same pending_user_creations upsert + confirmation email), but
+// public, role hardcoded to vendor, and created_by NULL since there's no
+// authenticated admin behind a self-service signup. The email is never
+// read from the request body — it's re-derived by re-verifying the same
+// Google credential the client already used for the login check, so there
+// is nothing here a client could spoof.
+app.post("/api/auth/google/register", async (req, res, next) => {
+  try {
+    const { email } = await verifyGoogleIdToken(req.body.credential);
+    const { name, phone, address, password } = req.body;
+    if (!name || !phone || !address || !password || String(password).length < 6) {
+      return res.status(400).json({ message: "Complete all fields and use a password with at least 6 characters." });
+    }
+    const { rows: existing } = await db.query("SELECT id FROM profiles WHERE email = $1", [email]);
+    if (existing[0]) return res.status(409).json({ message: "This email is already in use." });
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    await db.query(
+      `INSERT INTO pending_user_creations (email, name, password_hash, role, phone, address, department, created_by, token_hash, expires_at)
+       VALUES ($1, $2, $3, 'vendor', $4, $5, NULL, NULL, $6, $7)
+       ON CONFLICT (email) DO UPDATE SET
+         name = EXCLUDED.name, password_hash = EXCLUDED.password_hash, role = 'vendor',
+         phone = EXCLUDED.phone, address = EXCLUDED.address, department = NULL,
+         created_by = NULL, token_hash = EXCLUDED.token_hash, expires_at = EXCLUDED.expires_at, created_at = now()`,
+      [email, name, passwordHash, phone, address, tokenHash, expiresAt]
+    );
+    try {
+      await sendUserConfirmationEmail(email, rawToken);
+    } catch (sendError) {
+      await db.query("DELETE FROM pending_user_creations WHERE email = $1", [email]).catch(() => {});
+      return res.status(502).json({ message: `The confirmation email could not be sent: ${sendError.message}` });
+    }
+    res.json({ pendingConfirmation: true, email });
+  } catch (error) {
+    if (error instanceof GoogleAuthError) return res.status(error.status).json({ message: error.message, code: error.code });
+    if (error?.code === "23505") return res.status(409).json({ message: "This email is already in use." });
+    next(error);
+  }
 });
 
 app.get("/api/auth/me", requireAuth, async (req, res, next) => {
@@ -2936,6 +3044,9 @@ app.use((error, _req, res, _next) => {
   // flattening it into a generic 500 they cannot act on.
   if (error instanceof AttachmentError) {
     return res.status(error.status || 400).json({ message: error.message });
+  }
+  if (error instanceof GoogleAuthError) {
+    return res.status(error.status).json({ message: error.message, code: error.code });
   }
   // express.json() rejects bodies over its limit before any route runs.
   if (error?.type === "entity.too.large") {

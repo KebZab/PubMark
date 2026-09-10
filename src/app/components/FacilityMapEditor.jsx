@@ -148,7 +148,7 @@ export function FacilityMapEditor() {
   return (
     <div className="flex h-full min-h-0">
       <div className="relative flex-1">
-        {(loading || stallsLoading) && <div className="absolute inset-0 z-[1100] grid place-items-center bg-white/60"><Loader2 className="h-7 w-7 animate-spin text-blue-600" /></div>}
+        {(loading || stallsLoading) && <div className="absolute inset-0 z-[1100] grid place-items-center bg-white/60 pointer-events-none"><Loader2 className="h-7 w-7 animate-spin text-blue-600" /></div>}
         <MapContainer center={[10.6054, 123.0413]} zoom={18} maxZoom={22} scrollWheelZoom style={{ height: "100%", width: "100%" }}>
           <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap" maxNativeZoom={19} maxZoom={22} />
           <StallContextLayer stalls={stalls} floor={floor} />

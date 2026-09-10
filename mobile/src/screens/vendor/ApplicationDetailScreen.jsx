@@ -1,5 +1,17 @@
 import { useCallback, useState } from "react";
-import { ActivityIndicator, Alert, Linking, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Linking,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
@@ -576,7 +588,11 @@ export default function ApplicationDetailScreen({ route, navigation }) {
         animationType="fade"
         onRequestClose={() => setReceiptOpen(false)}
       >
-        <View className="flex-1 justify-center bg-black/50 px-5">
+        <KeyboardAvoidingView
+          className="flex-1 justify-center bg-black/50 px-5"
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={20}
+        >
           <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: "center", paddingVertical: 24 }}>
             <View className="rounded-2xl bg-white p-5">
               <View className="flex-row items-start justify-between">
@@ -655,7 +671,7 @@ export default function ApplicationDetailScreen({ route, navigation }) {
               </View>
             </View>
           </ScrollView>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal
@@ -714,7 +730,11 @@ export default function ApplicationDetailScreen({ route, navigation }) {
         animationType="fade"
         onRequestClose={() => !terminationSending && setTerminationOpen(false)}
       >
-        <View className="flex-1 justify-center bg-black/50 px-5">
+        <KeyboardAvoidingView
+          className="flex-1 justify-center bg-black/50 px-5"
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={20}
+        >
           <View className="overflow-hidden rounded-2xl bg-white">
             <View className="flex-row items-center justify-between bg-red-600 px-5 py-4">
               <View>
@@ -750,7 +770,7 @@ export default function ApplicationDetailScreen({ route, navigation }) {
               </View>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal
@@ -759,7 +779,11 @@ export default function ApplicationDetailScreen({ route, navigation }) {
         animationType="fade"
         onRequestClose={() => setTransferOpen(false)}
       >
-        <View className="flex-1 justify-center bg-black/50 px-6">
+        <KeyboardAvoidingView
+          className="flex-1 justify-center bg-black/50 px-6"
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={20}
+        >
           <View className="rounded-2xl bg-white p-5">
             <Text className="text-base font-semibold text-gray-900">Transfer {app.stallName}</Text>
             <Text className="mt-1 text-xs leading-5 text-gray-500">
@@ -809,7 +833,7 @@ export default function ApplicationDetailScreen({ route, navigation }) {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );

@@ -2,7 +2,9 @@ import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -222,7 +224,7 @@ export default function ChecksScreen() {
     <SafeAreaView className="flex-1 bg-gray-50" edges={["top"]}>
       <OfficerHeader title="Check Requests" subtitle={`${pendingCount} awaiting inspection`} />
 
-      <View className="border-b border-gray-200 bg-white px-5 pb-3">
+      <View className="border-b border-gray-200 bg-white px-5 pb-3 pt-3">
         <View className="flex-row gap-2">
           {["pending", "completed", "all"].map((f) => {
             const activeF = filter === f;
@@ -279,28 +281,24 @@ export default function ChecksScreen() {
                         Requested by {r.requestedByName ?? "admin"}
                       </Text>
                     </View>
-                    <View className="items-end gap-1.5">
-                      <View
-                        className={`self-start rounded-full px-2.5 py-1 ${status.bg}`}
-                      >
+                    <View className="flex-row items-center gap-1.5">
+                      <View className={`rounded-full px-2.5 py-1 ${status.bg}`}>
                         <Text className={`text-[10px] font-semibold ${status.text}`}>
                           {status.label}
                         </Text>
                       </View>
-                      <View className="flex-row items-center gap-1.5">
-                        <View className={`rounded-full px-2.5 py-1 ${isFollowup ? "bg-blue-100" : p.bg}`}>
-                          <Text
-                            className={`text-[10px] font-semibold capitalize ${isFollowup ? "text-blue-700" : p.text}`}
-                          >
-                            {isFollowup ? "Follow-up" : `${r.priority} priority`}
-                          </Text>
-                        </View>
-                        <Ionicons
-                          name={expanded ? "chevron-up" : "chevron-down"}
-                          size={16}
-                          color="#9ca3af"
-                        />
+                      <View className={`rounded-full px-2.5 py-1 ${isFollowup ? "bg-blue-100" : p.bg}`}>
+                        <Text
+                          className={`text-[10px] font-semibold capitalize ${isFollowup ? "text-blue-700" : p.text}`}
+                        >
+                          {isFollowup ? "Follow-up" : `${r.priority} priority`}
+                        </Text>
                       </View>
+                      <Ionicons
+                        name={expanded ? "chevron-up" : "chevron-down"}
+                        size={16}
+                        color="#9ca3af"
+                      />
                     </View>
                   </Pressable>
 
@@ -375,6 +373,11 @@ export default function ChecksScreen() {
             </View>
           </View>
 
+          <KeyboardAvoidingView
+            className="flex-1"
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            keyboardVerticalOffset={20}
+          >
           <ScrollView
             className="flex-1"
             contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
@@ -462,6 +465,7 @@ export default function ChecksScreen() {
               )}
             </Pressable>
           </ScrollView>
+          </KeyboardAvoidingView>
         </SafeAreaView>
       </Modal>
 
@@ -481,6 +485,11 @@ export default function ChecksScreen() {
             </View>
           </View>
 
+          <KeyboardAvoidingView
+            className="flex-1"
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            keyboardVerticalOffset={20}
+          >
           <ScrollView
             className="flex-1"
             contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
@@ -589,6 +598,7 @@ export default function ChecksScreen() {
               )}
             </Pressable>
           </ScrollView>
+          </KeyboardAvoidingView>
         </SafeAreaView>
       </Modal>
     </SafeAreaView>
