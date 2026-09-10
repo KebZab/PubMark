@@ -76,6 +76,7 @@
       <div class="brand"><div class="logo">P</div><div><h1>Local Stall Mapper</h1><div class="subtitle">Independent browser copy · no Supabase</div></div></div>
       <div class="toolbar">
         <div class="floor-tabs"><button data-floor="1" class="active">1st Floor</button><button data-floor="2">2nd Floor</button></div>
+        <select class="btn" id="buildingFilter" aria-label="Filter building"><option value="all">All buildings</option><option>Main Building</option><option>Dry Store Building</option><option>Wet Store Building</option></select>
         <button class="btn" id="exportBtn">Export JSON</button>
         <button class="btn" id="exportMarkdownBtn">Export Markdown</button>
         <button class="btn" id="importBtn">Import JSON</button>
@@ -92,6 +93,7 @@
       <aside>
         <div class="side-head"><div class="side-title"><strong>Mapped stalls</strong><span class="count" id="count">0</span></div><input class="search" id="search" placeholder="Search stall name or section…" /></div>
         <div id="stallList"></div>
+        <p style="margin:0;padding:12px;font-size:11px;color:#475569;background:#f8fafc">Wet layout traced from the supplied wet-market plan. Table labels are local identifiers where the printed counter numbers are unreadable.</p>
       </aside>
     </main>
   </div>
@@ -102,6 +104,9 @@
       <div class="grid">
         <div class="field"><label for="stallName">Stall name *</label><input id="stallName" required maxlength="80" placeholder="e.g. Stall A-01" /></div>
         <div class="field"><label for="stallFloor">Floor *</label><select id="stallFloor"><option value="1">1st Floor</option><option value="2">2nd Floor</option></select></div>
+      </div>
+      <div class="grid">
+        <div class="field"><label for="stallBuilding">Building</label><select id="stallBuilding"><option>Main Building</option><option selected>Dry Store Building</option><option>Wet Store Building</option></select></div>
       </div>
       <div class="grid">
         <div class="field"><label for="stallSection">Section</label><input id="stallSection" maxlength="80" placeholder="e.g. Dry Goods" /></div>
@@ -128,18 +133,28 @@
       const PLAN_TOP_LEFT = L.latLng(10.6057458, 123.0409892);
       const PLAN_TOP_RIGHT = L.latLng(10.6055637, 123.0416404);
       const PLAN_BOTTOM_LEFT = L.latLng(10.6055628, 123.0409363);
-      const PLAN_REVISION = 'aligned-middle-building-v2';
+      const PLAN_REVISION = 'three-buildings-upright-v3';
+      const BUILDINGS = {
+        'Main Building': [[10.6059207,123.0410153],[10.6057245,123.0417015],[10.6057703,123.0409708]],
+        'Dry Store Building': [[10.6057458,123.0409892],[10.6055637,123.0416404],[10.6055628,123.0409363]],
+        'Wet Store Building': [[10.6055552,123.0409234],[10.6053677,123.0415861],[10.6053568,123.0408653]]
+      };
       const drawnItems = new L.FeatureGroup().addTo(map);
+      Object.entries(BUILDINGS).forEach(([name, corners]) => {
+        const [a,b,c] = corners;
+        const d = [b[0]+c[0]-a[0],b[1]+c[1]-a[1]];
+        L.polygon([a,b,d,c], {color:'#475569',weight:1,dashArray:'4 4',fill:false,interactive:false})
+          .bindTooltip(name,{permanent:true,direction:'top',className:'stall-label'}).addTo(map);
+      });
       const drawControl = new L.Control.Draw({ position: 'topleft', draw: { polygon: { allowIntersection: false, showArea: true, shapeOptions: style(false) }, rectangle: { shapeOptions: style(false) }, polyline: false, circle: false, circlemarker: false, marker: false }, edit: { featureGroup: drawnItems } });
       map.addControl(drawControl);
 
       function style(selected, kind) {
-        const color = kind === 'technical_room' ? '#7c3aed' : kind === 'table_stall' ? '#2563eb' : '#0f9f91';
+        const color = kind === 'technical_room' || kind === 'comfort_room' ? '#7c3aed' : kind === 'table_stall' ? '#2563eb' : '#0f9f91';
         return { color: selected ? '#f59e0b' : color, weight: selected ? 4 : 2, fillColor: selected ? '#fbbf24' : color, fillOpacity: selected ? .4 : .28 };
       }
       function planPoint(x, y) {
-        // Blueprint is upside down in the user's placed/cropped reference.
-        x = 1 - x; y = 1 - y;
+        // Upright in the corrected reference: 1 upper-left, technical room lower-left.
         const a = map.project(PLAN_TOP_LEFT, 22), b = map.project(PLAN_TOP_RIGHT, 22), c = map.project(PLAN_BOTTOM_LEFT, 22);
         const p = map.unproject(L.point(a.x + x*(b.x-a.x) + y*(c.x-a.x), a.y + x*(b.y-a.y) + y*(c.y-a.y)), 22);
         return [p.lng, p.lat];
@@ -147,7 +162,7 @@
       function planStall(number, x1, y1, x2, y2) {
         const ring = [planPoint(x1,y1), planPoint(x2,y1), planPoint(x2,y2), planPoint(x1,y2), planPoint(x1,y1)];
         const now = new Date().toISOString();
-        return { id: 'plan_' + number, stall_name: 'Stall ' + number, floor: '1', section: number <= 44 ? 'North Wing' : 'South Wing', business_type: '', notes: 'Pre-drawn from the Murcia Dry Market floor plan.', geometry: { type: 'Polygon', coordinates: [ring] }, created_at: now, updated_at: now };
+        return { id: 'plan_' + number, stall_name: 'Stall ' + number, building: 'Dry Store Building', floor: '1', section: number <= 44 ? 'North Wing' : 'South Wing', business_type: '', notes: 'Pre-drawn from the Murcia Dry Market floor plan.', geometry: { type: 'Polygon', coordinates: [ring] }, created_at: now, updated_at: now };
       }
       function makePlanStalls() {
         const result = [];
@@ -165,6 +180,81 @@
         block(45, 9, 577, 924, 433, 472, 512);
         block(63, 11, 1000, 1426, 433, 472, 512);
         result.push(...makeMiddleFeatures());
+        result.push(...makeOtherBuildings());
+        return result;
+      }
+      function buildingPoint(building, x, y) {
+        const [a,b,c] = BUILDINGS[building].map(p => map.project(L.latLng(p[0],p[1]),22));
+        const p = map.unproject(L.point(a.x+x*(b.x-a.x)+y*(c.x-a.x), a.y+x*(b.y-a.y)+y*(c.y-a.y)),22);
+        return [p.lng,p.lat];
+      }
+      function makeOtherBuildings() {
+        const result = [];
+        function box(building, id, name, section, x1,y1,x2,y2, kind = 'stall', provisional = false) {
+          const ring = [[x1,y1],[x2,y1],[x2,y2],[x1,y2],[x1,y1]].map(([x,y])=>buildingPoint(building,x,y));
+          const now = new Date().toISOString();
+          result.push({ id, stall_name:name, building, floor:'1', section, business_type:'', kind,
+            numbering_verified: false, notes: provisional ? 'Approximate trace from the supplied composite image. Temporary identifier; original stall number is not legible and must be verified from a clearer wet-market plan.' : 'Traced from the supplied three-building reference. Main building labels are assigned locally because its boxes have no numbers.',
+            geometry:{type:'Polygon',coordinates:[ring]},created_at:now,updated_at:now });
+        }
+        // Main building: nine columns each side, two rows, open central hallway.
+        let number = 1;
+        for (const [left,right] of [[0,.44],[.56,1]]) {
+          for (let column=0;column<9;column++) {
+            for (let row=0;row<2;row++) {
+              box('Main Building','main_'+number,'Stall '+number,'Main stalls',left+(right-left)*column/9,row/2,left+(right-left)*(column+1)/9,(row+1)/2);
+              number++;
+            }
+          }
+        }
+        result.push(...makeWetBuilding());
+        return result;
+      }
+      function makeWetBuilding() {
+        // Reference: 775047548_1355790473373932_7238331607465683801_n.jpg.
+        // Wall coordinates on its 1824x1359 display, clipped to x414..1343,
+        // y245..513. Upright matches the new Dinsay Street placement.
+        const result = [];
+        function box(id,name,section,x1,y1,x2,y2,kind='stall',printedNumber=null) {
+          const ring = [[x1,y1],[x2,y1],[x2,y2],[x1,y2],[x1,y1]].map(([x,y])=>buildingPoint('Wet Store Building',(x-414)/929,(y-245)/268));
+          const now = new Date().toISOString();
+          result.push({id:'wet_v5_'+id,stall_name:name,building:'Wet Store Building',floor:'1',section,business_type:'',kind,
+            source_plan:'775047548_1355790473373932_7238331607465683801_n.jpg',source_stall_number:printedNumber,
+            numbering_verified:printedNumber!==null,
+            notes: printedNumber!==null ? 'Perimeter numbering repeats by wing on the source plan; the wing prefix identifies the stall uniquely.' : 'Traced from the supplied wet-market floor plan. Table identifiers are assigned locally; tiny printed counter numbers are not verified.',
+            geometry:{type:'Polygon',coordinates:[ring]},created_at:now,updated_at:now});
+        }
+        // Four perimeter wings: 11 outside stalls plus stall 1 on each end return.
+        for(const [wing,section,left,right,top,bottom,reverse,returnTop,returnBottom] of [
+          ['NW','Meat section',414,841,245,301,false,301,354],
+          ['NE','Vegetable section',919,1343,245,301,true,301,354],
+          ['SW','Meat section',414,841,459,513,false,406,459],
+          ['SE','Vegetable section',919,1343,459,513,true,406,459]
+        ]) {
+          const w=(right-left)/11;
+          for(let i=0;i<11;i++) {
+            const n=reverse?12-i:i+2;
+            box(wing+'_'+n,wing+' Stall '+n,section,left+i*w,top,left+(i+1)*w,bottom,'stall',n);
+          }
+          box(wing+'_1',wing+' Stall 1',section,reverse?1304:414,returnTop,reverse?1343:453,returnBottom,'stall',1);
+        }
+        let table=1;
+        function counter(section,left,right,top,bottom,cells) {
+          for(let i=0;i<cells;i++) {
+            box('table_'+table,'Table Stall W'+table,section,left+(right-left)*i/cells,top,left+(right-left)*(i+1)/cells,bottom,'table_stall');
+            table++;
+          }
+        }
+        // The left meat stalls mirror the large right vegetable stalls.
+        counter('Meat section',453,841,301,342,10);
+        counter('Meat section',453,841,419,459,10);
+        counter('Vegetable section',919,1304,301,342,10);
+        counter('Vegetable section',919,1304,419,459,10);
+        // Fish section: two rows of five separated counter banks.
+        for(const [top,bottom] of [[357,371],[389,403]]) {
+          for(const [left,right] of [[519,655],[668,802],[816,950],[964,1097],[1111,1244]]) counter('Fish section',left,right,top,bottom,7);
+        }
+        box('comfort_room','Comfort Room (CR)','Facilities',841,245,919,345,'comfort_room');
         return result;
       }
       function makeMiddleFeatures() {
@@ -193,8 +283,8 @@
           if (localStorage.getItem(STORAGE_KEY + '_alignment') !== PLAN_REVISION) {
             const corrected = new Map(makePlanStalls().map(s => [s.id, s]));
             if (valid.some(s => corrected.has(s.id))) {
-              localStorage.setItem(STORAGE_KEY + '_before_alignment_v2', JSON.stringify(valid));
-              valid = valid.map(s => corrected.has(s.id) ? { ...s, geometry: corrected.get(s.id).geometry } : s);
+              localStorage.setItem(STORAGE_KEY + '_before_buildings_v3', JSON.stringify(valid));
+              valid = valid.map(s => corrected.has(s.id) ? { ...s, building: corrected.get(s.id).building, geometry: corrected.get(s.id).geometry } : s);
               localStorage.setItem(STORAGE_KEY, JSON.stringify(valid));
             }
             localStorage.setItem(STORAGE_KEY + '_alignment', PLAN_REVISION);
@@ -204,15 +294,52 @@
             localStorage.setItem(STORAGE_KEY, JSON.stringify(seeded));
             localStorage.setItem(PLAN_SEED_KEY, 'done');
             localStorage.setItem(STORAGE_KEY + '_middle_features_v1', 'done');
+            localStorage.setItem(STORAGE_KEY + '_buildings_v3', 'done');
+            localStorage.setItem(STORAGE_KEY + '_wet_reference_v4', 'done');
+            localStorage.setItem(STORAGE_KEY + '_wet_mirrored_v5', 'done');
+            localStorage.setItem(STORAGE_KEY + '_wet_cr_v6', 'done');
             return seeded;
           }
           localStorage.setItem(PLAN_SEED_KEY, 'done');
+          if (!localStorage.getItem(STORAGE_KEY + '_buildings_v3')) {
+            const ids = new Set(valid.map(s=>s.id));
+            valid.push(...makeOtherBuildings().filter(s=>!ids.has(s.id)));
+            localStorage.setItem(STORAGE_KEY,JSON.stringify(valid));
+            localStorage.setItem(STORAGE_KEY + '_buildings_v3','done');
+          }
           // Add only the new shapes once; keep all existing stall edits/deletions.
           if (!localStorage.getItem(STORAGE_KEY + '_middle_features_v1')) {
             const ids = new Set(valid.map(s => s.id));
             valid.push(...makeMiddleFeatures().filter(s => !ids.has(s.id)));
             localStorage.setItem(STORAGE_KEY, JSON.stringify(valid));
             localStorage.setItem(STORAGE_KEY + '_middle_features_v1', 'done');
+          }
+          if (!localStorage.getItem(STORAGE_KEY + '_wet_reference_v4')) {
+            localStorage.setItem(STORAGE_KEY + '_before_wet_reference_v4', JSON.stringify(valid));
+            // Replace only the generated provisional draft. User-created shapes
+            // and every other building stay intact; the full prior data is backed up.
+            valid = valid.filter(s=>!/^wet_(?:[ABCD]_\d+|table_\d+)$/.test(s.id));
+            const ids = new Set(valid.map(s=>s.id));
+            valid.push(...makeWetBuilding().filter(s=>!ids.has(s.id)));
+            localStorage.setItem(STORAGE_KEY,JSON.stringify(valid));
+            localStorage.setItem(STORAGE_KEY + '_wet_reference_v4','done');
+          }
+          if (!localStorage.getItem(STORAGE_KEY + '_wet_mirrored_v5')) {
+            localStorage.setItem(STORAGE_KEY + '_before_wet_mirrored_v5', JSON.stringify(valid));
+            valid = valid.filter(s=>!/^wet_v4_/.test(s.id));
+            const ids = new Set(valid.map(s=>s.id));
+            valid.push(...makeWetBuilding().filter(s=>!ids.has(s.id)));
+            localStorage.setItem(STORAGE_KEY,JSON.stringify(valid));
+            localStorage.setItem(STORAGE_KEY + '_wet_mirrored_v5','done');
+          }
+          if (!localStorage.getItem(STORAGE_KEY + '_wet_cr_v6')) {
+            const oldRoom = valid.find(s=>s.id==='wet_v5_stairs');
+            if (oldRoom) localStorage.setItem(STORAGE_KEY + '_before_wet_cr_v6',JSON.stringify(oldRoom));
+            valid = valid.filter(s=>s.id!=='wet_v5_stairs');
+            const room = makeWetBuilding().find(s=>s.id==='wet_v5_comfort_room');
+            if (room && !valid.some(s=>s.id===room.id)) valid.push(room);
+            localStorage.setItem(STORAGE_KEY,JSON.stringify(valid));
+            localStorage.setItem(STORAGE_KEY + '_wet_cr_v6','done');
           }
           return valid;
         } catch (_) { return makePlanStalls(); }
@@ -226,7 +353,7 @@
 
       function render() {
         drawnItems.clearLayers();
-        stalls.filter(s => s.floor === activeFloor).forEach(stall => {
+        stalls.filter(inCurrentBuilding).forEach(stall => {
           const geo = L.geoJSON({ type: 'Feature', geometry: stall.geometry, properties: {} }, { style: style(stall.id === editingId, stall.kind) });
           geo.eachLayer(layer => {
             layer.stallId = stall.id;
@@ -240,14 +367,18 @@
       }
       function renderList() {
         const q = document.getElementById('search').value.trim().toLowerCase();
-        const visible = stalls.filter(s => s.floor === activeFloor && (!q || [s.stall_name, s.section, s.business_type].some(v => String(v || '').toLowerCase().includes(q))));
-        document.getElementById('count').textContent = stalls.filter(s => s.floor === activeFloor).length;
+        const visible = stalls.filter(s => inCurrentBuilding(s) && (!q || [s.stall_name, s.section, s.business_type, s.building].some(v => String(v || '').toLowerCase().includes(q))));
+        document.getElementById('count').textContent = stalls.filter(inCurrentBuilding).length;
         const list = document.getElementById('stallList');
         if (!visible.length) { list.innerHTML = '<div class="empty">No stalls found on this floor.<br>Draw a rectangle or polygon on the map to add one.</div>'; return; }
-        list.innerHTML = visible.map(s => `<article class="stall-card ${s.id === editingId ? 'selected' : ''}" data-id="${s.id}"><div class="row"><div><div class="stall-name">${escapeHtml(s.stall_name)}</div><div class="section">${escapeHtml(s.section || s.business_type || 'No section')}</div></div><span class="area">${Math.round(areaOf(s.geometry))} m²</span></div></article>`).join('');
+        list.innerHTML = visible.map(s => `<article class="stall-card ${s.id === editingId ? 'selected' : ''}" data-id="${s.id}"><div class="row"><div><div class="stall-name">${escapeHtml(s.stall_name)}</div><div class="section">${escapeHtml(s.building || 'Uncategorized')} · ${escapeHtml(s.section || s.business_type || 'No section')}</div></div><span class="area">${Math.round(areaOf(s.geometry))} m²</span></div></article>`).join('');
         list.querySelectorAll('[data-id]').forEach(el => el.addEventListener('click', () => openEdit(el.dataset.id)));
       }
-      function resetDialog() { document.getElementById('stallForm').reset(); document.getElementById('stallFloor').value = activeFloor; document.getElementById('deleteOneBtn').hidden = true; editingId = null; }
+      function resetDialog() { document.getElementById('stallForm').reset(); document.getElementById('stallFloor').value = activeFloor; document.getElementById('stallBuilding').value = document.getElementById('buildingFilter').value === 'all' ? 'Dry Store Building' : document.getElementById('buildingFilter').value; document.getElementById('deleteOneBtn').hidden = true; editingId = null; }
+      function inCurrentBuilding(stall) {
+        const building = document.getElementById('buildingFilter').value;
+        return stall.floor === activeFloor && (building === 'all' || stall.building === building);
+      }
       function closeDialog(removePending = true) { document.getElementById('stallDialog').close(); if (removePending && pendingLayer) drawnItems.removeLayer(pendingLayer); pendingLayer = null; editingId = null; render(); }
       function openNew(layer) { resetDialog(); pendingLayer = layer; drawnItems.addLayer(layer); document.getElementById('dialogTitle').textContent = 'Save new stall'; document.getElementById('stallDialog').showModal(); }
       function openEdit(id) {
@@ -256,6 +387,7 @@
         document.getElementById('dialogTitle').textContent = 'Edit stall details';
         document.getElementById('stallName').value = stall.stall_name || '';
         document.getElementById('stallFloor').value = stall.floor;
+        document.getElementById('stallBuilding').value = stall.building || 'Dry Store Building';
         document.getElementById('stallSection').value = stall.section || '';
         document.getElementById('stallBusiness').value = stall.business_type || '';
         document.getElementById('stallNotes').value = stall.notes || '';
@@ -283,6 +415,7 @@
         e.preventDefault();
         const fields = { stall_name: document.getElementById('stallName').value.trim(), floor: document.getElementById('stallFloor').value, section: document.getElementById('stallSection').value.trim(), business_type: document.getElementById('stallBusiness').value.trim(), notes: document.getElementById('stallNotes').value.trim() };
         if (!fields.stall_name) return;
+        fields.building = document.getElementById('stallBuilding').value;
         if (editingId) { const stall = stalls.find(s => s.id === editingId); Object.assign(stall, fields, { updated_at: new Date().toISOString() }); }
         else { const now = new Date().toISOString(); stalls.push({ id: uid(), ...fields, geometry: pendingLayer.toGeoJSON().geometry, created_at: now, updated_at: now }); }
         activeFloor = fields.floor; save(); closeDialog(false); syncFloorButtons(); notify('Stall saved in this browser.');
@@ -292,6 +425,7 @@
       document.getElementById('cancelDialog').addEventListener('click', () => closeDialog());
       document.getElementById('stallDialog').addEventListener('cancel', e => { e.preventDefault(); closeDialog(); });
       document.getElementById('search').addEventListener('input', renderList);
+      document.getElementById('buildingFilter').addEventListener('change', () => { render(); if (drawnItems.getLayers().length) map.fitBounds(drawnItems.getBounds(), {padding:[45,45], maxZoom:21}); });
       document.querySelectorAll('[data-floor]').forEach(btn => btn.addEventListener('click', () => { activeFloor = btn.dataset.floor; editingId = null; syncFloorButtons(); render(); }));
       function syncFloorButtons() { document.querySelectorAll('[data-floor]').forEach(btn => btn.classList.toggle('active', btn.dataset.floor === activeFloor)); }
 
@@ -305,12 +439,12 @@
         const json = value => fence + 'json\n' + JSON.stringify(value, null, 2) + '\n' + fence;
         const cell = value => String(value ?? '').replace(/\|/g, '&#124;').replace(/[\r\n]/g, ' ');
         const tables = records.filter(s => s.kind === 'table_stall').length;
-        const rooms = records.filter(s => s.kind === 'technical_room').length;
+        const rooms = records.filter(s => s.kind === 'technical_room' || s.kind === 'comfort_room').length;
         const lines = [
           '# Murcia market — local map data', '',
           'Exported: ' + new Date().toISOString(), '',
           'Source: ' + source, '',
-          `${records.length} mapped objects: ${records.length-tables-rooms} regular stalls, ${tables} table stalls, ${rooms} technical rooms. Includes all floors, regardless of the displayed floor or search.`, '',
+          `${records.length} mapped objects: ${records.length-tables-rooms} regular stalls, ${tables} table stalls, ${rooms} facilities (technical room/comfort room). Includes all floors, regardless of the displayed floor or search.`, '',
           '## Coordinates and restore format', '',
           'Coordinates are WGS 84 (EPSG:4326). GeoJSON positions are [longitude, latitude], while Leaflet uses [latitude, longitude]. Each Polygon ring lists its corners in order, with the first point repeated at the end to close it. Preserve the full numeric precision in the JSON below.', '',
           'The complete JSON payload below can be copied into a .json file and opened with Import JSON in local-stall-map.html. This restores the mapped objects; the separate storage snapshot records flags and historical backups for reference.', '',
@@ -319,14 +453,14 @@
           'The current server stall API uses stall_name, business_type, section, floor, floor_area, notes, and geometry. The local mapper does not set floor_area or status by default, and business_type can be blank. These missing values have not been invented here; resolve required fields before database import. Displayed map areas are calculated, not stored floor_area values.', '',
           'Preserve kind for table_stall and technical_room in an appropriate schema field or separate facilities model. The current stall insert route does not persist kind; do not silently turn the Technical Room into a rentable stall. Local created_at/updated_at values are local timestamps, not existing database audit timestamps.', '',
           '## Map anchors', '',
-          json({ revision: PLAN_REVISION, top_left: [PLAN_TOP_LEFT.lng, PLAN_TOP_LEFT.lat], top_right: [PLAN_TOP_RIGHT.lng, PLAN_TOP_RIGHT.lat], bottom_left: [PLAN_BOTTOM_LEFT.lng, PLAN_BOTTOM_LEFT.lat], reference_building: 'OpenStreetMap way 365630350', floor_plan_rotation_degrees: 180 }), '',
+          json({ revision: PLAN_REVISION, buildings_latitude_longitude: BUILDINGS, floor_plan_rotation_degrees: 0 }), '',
           '## Point-by-point map locations', '',
-          '| Object | Local ID | Floor | Ring | Point | Longitude | Latitude |',
-          '| --- | --- | --- | --- | --- | --- | --- |'
+          '| Object | Building | Local ID | Floor | Ring | Point | Longitude | Latitude |',
+          '| --- | --- | --- | --- | --- | --- | --- | --- |'
         ];
         for (const record of records) {
           (record.geometry?.coordinates || []).forEach((ring, ringIndex) => {
-            ring.forEach((point, pointIndex) => lines.push(`| ${cell(record.stall_name)} | ${cell(record.id)} | ${cell(record.floor)} | ${ringIndex+1} | ${pointIndex+1}${pointIndex === ring.length-1 ? ' (close)' : ''} | ${point[0]} | ${point[1]} |`));
+            ring.forEach((point, pointIndex) => lines.push(`| ${cell(record.stall_name)} | ${cell(record.building)} | ${cell(record.id)} | ${cell(record.floor)} | ${ringIndex+1} | ${pointIndex+1}${pointIndex === ring.length-1 ? ' (close)' : ''} | ${point[0]} | ${point[1]} |`));
           });
         }
         lines.push('', '## Complete object data (JSON)', '', json({ version: 1, exported_at: new Date().toISOString(), source, stalls: records }), '',
@@ -337,7 +471,7 @@
       }
       document.getElementById('exportMarkdownBtn').addEventListener('click', () => {
         try {
-          const keys = [STORAGE_KEY, PLAN_SEED_KEY, STORAGE_KEY + '_alignment', STORAGE_KEY + '_before_alignment_v2', STORAGE_KEY + '_middle_features_v1'];
+          const keys = [STORAGE_KEY, PLAN_SEED_KEY, STORAGE_KEY + '_alignment', STORAGE_KEY + '_before_alignment_v2', STORAGE_KEY + '_middle_features_v1', STORAGE_KEY + '_before_buildings_v3', STORAGE_KEY + '_buildings_v3', STORAGE_KEY + '_wet_reference_v4', STORAGE_KEY + '_before_wet_reference_v4', STORAGE_KEY + '_wet_mirrored_v5', STORAGE_KEY + '_before_wet_mirrored_v5', STORAGE_KEY + '_wet_cr_v6', STORAGE_KEY + '_before_wet_cr_v6'];
           const snapshot = Object.fromEntries(keys.map(key => [key, localStorage.getItem(key)]));
           const saved = JSON.parse(snapshot[STORAGE_KEY] || '[]');
           if (!Array.isArray(saved)) throw new Error('Saved map data is not an array.');
@@ -351,8 +485,8 @@
       });
       document.getElementById('importBtn').addEventListener('click', () => document.getElementById('fileInput').click());
       document.getElementById('resetPlanBtn').addEventListener('click', () => {
-        if (!confirm('Replace the local layout with 84 stalls, 22 table stalls, and the technical room?')) return;
-        stalls = makePlanStalls(); activeFloor = '1'; editingId = null; save(); syncFloorButtons(); render(); notify('Full layout restored: 106 stalls and 1 technical room.');
+        if (!confirm('Replace the local layout with the three-building reference layout?')) return;
+        stalls = makePlanStalls(); activeFloor = '1'; editingId = null; save(); syncFloorButtons(); render(); notify('Three-building layout restored.');
       });
       document.getElementById('fileInput').addEventListener('change', async e => {
         const file = e.target.files[0]; if (!file) return;
@@ -360,7 +494,7 @@
       });
       document.getElementById('clearBtn').addEventListener('click', () => { if (!stalls.length || !confirm(`Permanently remove all ${stalls.length} locally saved stalls? Export a backup first if needed.`)) return; stalls = []; save(); render(); notify('Local stall data cleared.'); });
       render();
-      map.fitBounds([PLAN_TOP_LEFT, PLAN_TOP_RIGHT, PLAN_BOTTOM_LEFT, L.latLng(10.6053807, 123.0415875)], { padding: [60, 60], maxZoom: 21 });
+      map.fitBounds(Object.values(BUILDINGS).flat(), { padding: [60, 60], maxZoom: 21 });
       map.getContainer().classList.toggle('hide-stall-labels', map.getZoom() < 20);
     })();
   </script>

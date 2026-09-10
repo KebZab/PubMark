@@ -32,16 +32,51 @@ const geometry = code.slice(code.indexOf('function planPoint'), code.indexOf('fu
 const markdown = code.slice(code.indexOf('function buildLayoutMarkdown'), code.indexOf("document.getElementById('exportMarkdownBtn').addEventListener"));
 vm.runInContext(anchors + geometry + markdown, context);
 const records = vm.runInContext('makePlanStalls()', context);
-assert.equal(records.length, 107);
-assert.equal(new Set(records.map(s => s.id)).size, 107);
-assert.equal(records.filter(s => s.kind === 'table_stall').length, 22);
+// Check the browser's one-time migration without accessing browser storage.
+const storageValues = new Map();
+context.localStorage = {getItem:key=>storageValues.get(key) ?? null,setItem:(key,value)=>storageValues.set(key,value)};
+vm.runInContext("const STORAGE_KEY='test'; const PLAN_SEED_KEY='seed';" + code.slice(code.indexOf('function load()'),code.indexOf('stalls = load();')),context);
+storageValues.set('test',JSON.stringify([{...records[0],stall_name:'Keep my name'}, {id:'custom',floor:'1',notes:'Keep my custom record'}]));
+storageValues.set('seed','done');
+storageValues.set('test_alignment','aligned-middle-building-v2');
+storageValues.set('test_middle_features_v1','done');
+const migrated = context.load();
+assert.equal(migrated.find(s=>s.id==='plan_1').stall_name,'Keep my name');
+assert.equal(migrated.find(s=>s.id==='plan_1').building,'Dry Store Building');
+assert.equal(migrated.find(s=>s.id==='custom').notes,'Keep my custom record');
+assert.equal(context.load().length,migrated.length);
+assert(storageValues.has('test_before_buildings_v3'));
+storageValues.clear();
+assert.equal(context.load().length,302);
+storageValues.set('test','[]');
+assert.equal(context.load().length,0);
+const stallOne = records.find(s=>s.id==='plan_1');
+assert(Math.abs(stallOne.geometry.coordinates[0][0][1]-10.6057458)<1e-10);
+assert.equal(records.length, 302);
+assert.equal(new Set(records.map(s => s.id)).size, 302);
+assert.equal(records.filter(s => s.kind === 'table_stall').length, 132);
+assert.equal(records.filter(s => s.building === 'Main Building').length, 36);
+assert.equal(records.filter(s => s.building === 'Dry Store Building').length, 107);
+assert.equal(records.filter(s => s.building === 'Wet Store Building').length, 159);
+assert.equal(records.filter(s => s.kind === 'comfort_room').length, 1);
+assert.equal(records.find(s => s.kind === 'comfort_room').stall_name, 'Comfort Room (CR)');
+storageValues.set('test',JSON.stringify([{id:'wet_A_1',notes:'old draft'},{id:'wet_table_1'},{id:'wet_v4_table_1',notes:'old traced draft'},{id:'my_wet_stall',building:'Wet Store Building',notes:'custom'},records[0]]));
+storageValues.delete('test_wet_reference_v4');
+storageValues.delete('test_wet_mirrored_v5');
+const wetMigration=context.load();
+assert(!wetMigration.some(s=>s.id==='wet_A_1'||s.id==='wet_table_1'||s.id==='wet_v4_table_1'));
+assert.equal(wetMigration.find(s=>s.id==='my_wet_stall').notes,'custom');
+assert.equal(wetMigration.filter(s=>s.id.startsWith('wet_v5_')).length,159);
+assert.equal(context.load().length,wetMigration.length);
+assert(storageValues.has('test_before_wet_reference_v4'));
+assert(storageValues.has('test_before_wet_mirrored_v5'));
 assert.equal(records.filter(s => s.kind === 'technical_room').length, 1);
 for (const record of records) {
   const ring = record.geometry.coordinates[0];
   assert.deepEqual(ring[0], ring.at(-1));
   for (const [lng, lat] of ring) {
-    assert(lng > 123.0409 && lng < 123.0417);
-    assert(lat > 10.6053 && lat < 10.6058);
+    assert(lng > 123.0408 && lng < 123.0418);
+    assert(lat > 10.6051 && lat < 10.6060);
   }
 }
 const storage = {
@@ -52,8 +87,8 @@ const storage = {
   alignment_backup_key: 'pubmark_local_stall_mapper_v1_before_alignment_v2',
   middle_features_key: 'pubmark_local_stall_mapper_v1_middle_features_v1'
 };
-const output = context.buildLayoutMarkdown(records, storage, 'Reference layout generated from local-stall-map.html. Includes the approved 84 regular stalls, 22 table stalls, and Technical Room. Browser-only edits are not included. Timestamps were generated for this reference snapshot.');
+const output = context.buildLayoutMarkdown(records, storage, 'Three-building reference layout generated from local-stall-map.html. Wet Store Building traced from the supplied wet-market photograph: perimeter wings, meat counters, vegetable counters, fish counters and stairwell. Perimeter numbers repeat by wing; table labels are assigned locally where tiny printed labels remain unreadable. Geometry is an image trace, not survey measurements. Browser-only edits are not included. Timestamps were generated for this reference snapshot.');
 const payload = JSON.parse(output.split('## Complete object data (JSON)')[1].split('```json\n')[1].split('\n```')[0]);
-assert.equal(payload.stalls.length, 107);
-assert.equal(output.split('\n').filter(line => /^\| .* \| [0-9]+(?: \(close\))? \| 123\./.test(line)).length, 535);
+assert.equal(payload.stalls.length, 302);
+assert.equal(output.split('\n').filter(line => /^\| .* \| [0-9]+(?: \(close\))? \| 123\./.test(line)).length, 1510);
 process.stdout.write(output);
