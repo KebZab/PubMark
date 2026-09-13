@@ -14,15 +14,16 @@ import { StatusBar } from "expo-status-bar";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
-  GoogleSignin,
-  isSuccessResponse,
-  isErrorWithCode,
-  statusCodes,
-} from "@react-native-google-signin/google-signin";
+  isGoogleSignInInProgress,
+  isGoogleSuccess,
+  nativeGoogleSignInAvailable,
+  signOutGoogle,
+  startGoogleSignIn,
+} from "../services/googleSignIn";
 import { useAuth } from "../context/AuthContext";
 import GoogleSignupFillUpForm from "./GoogleSignupFillUpForm";
 
-const googleEnabled = Boolean(process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID);
+const googleEnabled = Boolean(process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID) && nativeGoogleSignInAvailable;
 
 export default function LoginScreen({ navigation }) {
   const insets = useSafeAreaInsets();
@@ -55,7 +56,7 @@ export default function LoginScreen({ navigation }) {
     // on the fill-up form for the previous email instead of showing the
     // account picker again.
     if (googleEnabled) {
-      GoogleSignin.signOut().catch(() => {});
+      signOutGoogle().catch(() => {});
     }
     setGoogleStep("login");
     setGoogleCredential(null);
@@ -97,9 +98,8 @@ export default function LoginScreen({ navigation }) {
     setError("");
     setGoogleLoading(true);
     try {
-      await GoogleSignin.hasPlayServices();
-      const response = await GoogleSignin.signIn();
-      if (!isSuccessResponse(response)) {
+      const response = await startGoogleSignIn();
+      if (!isGoogleSuccess(response)) {
         // user cancelled the picker — nothing to show
         return;
       }
@@ -114,7 +114,7 @@ export default function LoginScreen({ navigation }) {
       }
       await afterAuth(result);
     } catch (e) {
-      if (isErrorWithCode(e) && e.code === statusCodes.IN_PROGRESS) {
+      if (isGoogleSignInInProgress(e)) {
         // already mid sign-in, ignore the duplicate tap
         return;
       }

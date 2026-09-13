@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import pg from "pg";
 import crypto from "node:crypto";
+import { importStallRows } from './stallImport.js';
 import nodemailer from "nodemailer";
 import { OAuth2Client } from "google-auth-library";
 import { createClient } from "@supabase/supabase-js";
@@ -2189,10 +2190,9 @@ app.post("/api/stalls/import", requireAuth, requireRole("admin", "super_admin"),
     const { stalls } = req.body;
     if (!Array.isArray(stalls)) return res.status(400).json({ message: "Stalls array is required." });
     const conn = await db.connect();
-    const idMap = {};
     try { await conn.query("BEGIN");
-      for (const stall of stalls) { const newId = crypto.randomUUID(); idMap[stall.id] = newId; await conn.query("INSERT INTO stalls (id, stall_name, status, business_type, section, floor, floor_area, notes, geometry) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)", [newId, stall.stall_name, stall.status, stall.business_type, stall.section, stall.floor || "1", stall.floor_area, stall.notes || "", JSON.stringify(stall.geometry)]); }
-      await conn.query("COMMIT"); res.status(201).json({ ok: true, idMap });
+      const result = await importStallRows(conn, stalls.map(({ import_id, ...stall }) => stall));
+      await conn.query("COMMIT"); res.status(201).json({ ok: true, ...result });
     } catch (innerError) { await conn.query("ROLLBACK"); throw innerError; }
     finally { conn.release(); }
   } catch (error) { next(error); }

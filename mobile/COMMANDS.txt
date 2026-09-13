@@ -2,17 +2,13 @@ PubMark Mobile — commands you'll actually use
 (run all of these inside the mobile/ folder)
 
 ===========================================
-DAILY DEV LOOP (use this almost every time)
+EXPO GO ON IPHONE (current setup)
 ===========================================
-npx expo start --dev-client
+npx expo start --go
 
-  Starts the dev server. Open the PubMark dev-client app already
-  installed on your phone — it connects automatically. Save any code
-  change and it updates on the phone instantly, same as Expo Go.
-
-  NOTE: use --dev-client, not plain "npx expo start" — plain Expo Go
-  cannot run this app anymore now that Google Sign-In's native code
-  is in it.
+  Starts the SDK 57 dev server for Expo Go on iPhone. Scan the QR code
+  with the Camera app. Native Google Sign-In is hidden in Expo Go; use
+  email/password, registration, or guest browsing.
 
 ===========================================
 ONLY WHEN YOU ADD ANOTHER NATIVE FEATURE

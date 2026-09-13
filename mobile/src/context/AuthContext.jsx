@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { Alert } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
-import { GoogleSignin } from "@react-native-google-signin/google-signin";
+import { configureGoogleSignIn, nativeGoogleSignInAvailable, signOutGoogle } from "../services/googleSignIn";
 import {
   login as apiLogin,
   registerVendor,
@@ -24,8 +24,8 @@ export function AuthProvider({ children }) {
   // mirrors web hiding its Google button entirely when the env var is unset,
   // rather than crashing on a missing config.
   useEffect(() => {
-    if (googleWebClientId) {
-      GoogleSignin.configure({
+    if (googleWebClientId && nativeGoogleSignInAvailable) {
+      configureGoogleSignIn({
         webClientId: googleWebClientId,
         iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
       });
@@ -106,9 +106,9 @@ export function AuthProvider({ children }) {
     // the app's own session below. Without this call, a later "Continue
     // with Google" could silently reuse the last-picked account instead of
     // showing the picker again.
-    if (googleWebClientId) {
+    if (googleWebClientId && nativeGoogleSignInAvailable) {
       try {
-        await GoogleSignin.signOut();
+        await signOutGoogle();
       } catch {
         // no-op — see comment above
       }
