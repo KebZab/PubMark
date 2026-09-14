@@ -13,6 +13,8 @@ import { StatusBar } from "expo-status-bar";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import { tenantTermsIntro, tenantTermsSections, tenantTermsTitle } from "../content/tenantTerms";
+import AddressFields from '../components/AddressFields';
+import { emptyAddress, changeAddress, validateAddress, formatAddress } from '../shared/philippine-address.mjs';
 
 // Mirrors the web Register page (src/app/pages/Register.jsx): the same fields,
 // the same validation rules, and the same tenant policies that must be
@@ -42,10 +44,10 @@ export default function RegisterScreen({ navigation }) {
     name: "",
     email: "",
     phone: "",
-    address: "",
     password: "",
     confirmPassword: "",
   });
+  const [address, setAddress] = useState(emptyAddress);
   const [errors, setErrors] = useState({});
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -68,7 +70,7 @@ export default function RegisterScreen({ navigation }) {
     if (!form.email.trim()) errs.email = "Email address is required.";
     const phoneErr = validatePhone(form.phone);
     if (phoneErr) errs.phone = phoneErr;
-    if (!form.address.trim()) errs.address = "Address is required.";
+    Object.assign(errs, validateAddress(address));
     if (!form.password) errs.password = "Password is required.";
     else if (form.password.length < 6) errs.password = "Password must be at least 6 characters.";
     if (!form.confirmPassword) errs.confirmPassword = "Please confirm your password.";
@@ -87,6 +89,12 @@ export default function RegisterScreen({ navigation }) {
   function handleChange(field, value) {
     setForm((prev) => ({ ...prev, [field]: value }));
     setSubmitError("");
+  }
+
+  function handleAddressChange(field, value) {
+    setAddress(previous => changeAddress(previous, field, value));
+    setSubmitError('');
+    setErrors(previous => ({ ...previous, [field]: '', ...(field === 'areaCode' ? { cityCode: '', barangayCode: '' } : {}), ...(field === 'cityCode' ? { barangayCode: '' } : {}) }));
   }
 
   // Digits only, capped at 11, so the field cannot hold an invalid number.
@@ -113,7 +121,7 @@ export default function RegisterScreen({ navigation }) {
         email: form.email.trim(),
         password: form.password,
         phone: form.phone,
-        address: form.address.trim(),
+        address: formatAddress(address),
       });
     } catch (e) {
       setSubmitting(false);
@@ -203,19 +211,7 @@ export default function RegisterScreen({ navigation }) {
             <Text className="mt-1 text-right text-[11px] text-gray-400">{form.phone.length}/11</Text>
           </Field>
 
-          <Field label="Address" error={errors.address}>
-            <TextInput
-              className={`${inputClass} min-h-[80px] ${errors.address ? "border-red-300" : "border-gray-200"}`}
-              placeholder="Street, Barangay, City, Province"
-              placeholderTextColor="#9ca3af"
-              value={form.address}
-              onChangeText={(v) => handleChange("address", v)}
-              onBlur={() => handleBlur("address")}
-              multiline
-              textAlignVertical="top"
-              editable={!submitting}
-            />
-          </Field>
+          <AddressFields value={address} onChange={handleAddressChange} onBlur={handleBlur} errors={errors} disabled={submitting} />
 
           <Field label="Password" error={errors.password}>
             <View

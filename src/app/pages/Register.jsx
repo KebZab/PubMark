@@ -4,6 +4,8 @@ import { MapPin, UserPlus, Eye, EyeOff, FileText } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { registerVendor } from "../services/api";
 import { tenantTermsIntro, tenantTermsSections, tenantTermsTitle } from "../content/tenantTerms";
+import AddressFields from '../components/AddressFields';
+import { emptyAddress, changeAddress, validateAddress, formatAddress } from '../../../mobile/src/shared/philippine-address.mjs';
 
 export function Register() {
   const { signIn } = useAuth();
@@ -21,10 +23,10 @@ export function Register() {
     name: "",
     email: "",
     phone: "",
-    address: "",
     password: "",
     confirmPassword: "",
   });
+  const [address, setAddress] = useState(emptyAddress);
   const [errors, setErrors] = useState({});
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -47,7 +49,7 @@ export function Register() {
     if (!form.email.trim()) errs.email = "Email address is required.";
     const phoneErr = validatePhone(form.phone);
     if (phoneErr) errs.phone = phoneErr;
-    if (!form.address.trim()) errs.address = "Address is required.";
+    Object.assign(errs, validateAddress(address));
     if (!form.password) errs.password = "Password is required.";
     else if (form.password.length < 6) errs.password = "Password must be at least 6 characters.";
     if (!form.confirmPassword) errs.confirmPassword = "Please confirm your password.";
@@ -68,7 +70,9 @@ export function Register() {
       "name",
       "email",
       "phone",
-      "address",
+      "areaCode",
+      "cityCode",
+      "barangayCode",
       "password",
       "confirmPassword",
       "acceptedTerms",
@@ -95,6 +99,12 @@ export function Register() {
     setSubmitError("");
   }
 
+  function handleAddressChange(field, value) {
+    setAddress(previous => changeAddress(previous, field, value));
+    setSubmitError('');
+    setErrors(previous => ({ ...previous, [field]: '', ...(field === 'areaCode' ? { cityCode: '', barangayCode: '' } : {}), ...(field === 'cityCode' ? { barangayCode: '' } : {}) }));
+  }
+
   function handleTermsChange(checked) {
     setAcceptedTerms(checked);
     setSubmitError("");
@@ -117,7 +127,7 @@ export function Register() {
         email: form.email,
         password: form.password,
         phone: form.phone,
-        address: form.address,
+        address: formatAddress(address),
       });
       signIn(user);
       localStorage.setItem(
@@ -277,21 +287,7 @@ export function Register() {
             </div>
 
             {/* Address */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Address</label>
-              <textarea
-                ref={(element) => {
-                  fieldRefs.current.address = element;
-                }}
-                value={form.address}
-                onChange={(e) => handleChange("address", e.target.value)}
-                onBlur={() => handleBlur("address")}
-                placeholder="Street, Barangay, City, Province"
-                rows={2}
-                className={`${inputClass("address")} resize-none`}
-              />
-              {errors.address && <p className="text-red-500 text-xs mt-1">{errors.address}</p>}
-            </div>
+            <AddressFields value={address} onChange={handleAddressChange} onBlur={handleBlur} errors={errors} disabled={submitting} fieldRefs={fieldRefs} />
 
             {/* Password */}
             <div>
