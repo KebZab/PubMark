@@ -78,7 +78,7 @@ for (const platform of ['web', 'mobile']) {
     };
     await submit();
     assert.equal(submitted, undefined);
-    assert(address().errors.areaCode);
+    assert.equal(address().errors.areaCode, undefined);
     assert(address().errors.cityCode);
     assert(address().errors.barangayCode);
     const fields = [
@@ -124,8 +124,8 @@ test('mobile picker: search, selection, cancel and Android back dismissal', asyn
   const props = { value: shared.emptyAddress(), onChange: (...args) => { changed = args; }, onBlur: value => { blurred = value; }, errors: {}, disabled: false };
   const tree = fields.render(props);
   const selectors = all(tree).filter(n => typeof n.type === 'function');
+  assert.equal(selectors[0].props.disabled, false);
   assert.equal(selectors[1].props.disabled, true);
-  assert.equal(selectors[2].props.disabled, true);
   // Render the real nested PlaceSelect with an independent hook lifecycle.
   const source = fs.readFileSync(path.join(__dirname, '../src/components/AddressFields.jsx'), 'utf8');
   // Mount supports exported components; expose the private picker only in the in-memory test transform.
@@ -135,16 +135,16 @@ test('mobile picker: search, selection, cancel and Android back dismissal', asyn
   const render = () => picker.render(options);
   find(render(), n => n.type === 'Pressable' && n.props.accessibilityState?.expanded === false).props.onPress();
   assert.equal(find(render(), n => n.type === 'Modal').props.visible, true);
-  find(render(), n => n.type === 'TextInput').props.onChangeText('negros occ');
+  find(render(), n => n.type === 'TextInput').props.onChangeText('murcia');
   const list = find(render(), n => n.type === 'FlatList');
   assert.equal(list.props.data.length, 1);
   list.props.renderItem({ item: list.props.data[0] }).props.onPress();
-  assert.equal(changed[0], 'areaCode');
+  assert.equal(changed[0], 'cityCode');
   assert.equal(find(render(), n => n.type === 'Modal').props.visible, false);
   find(render(), n => n.type === 'Pressable' && n.props.accessibilityState).props.onPress();
   assert.equal(find(render(), n => n.type === 'TextInput').props.value, '');
   find(render(), n => n.type === 'Modal').props.onRequestClose();
-  assert.equal(blurred, 'areaCode');
+  assert.equal(blurred, 'cityCode');
   assert.equal(find(render(), n => n.type === 'Modal').props.visible, false);
   find(render(), n => n.type === 'Pressable' && n.props.accessibilityState).props.onPress();
   find(render(), n => n.props.accessibilityLabel === 'Close address choices').props.onPress();

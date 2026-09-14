@@ -3,6 +3,8 @@ import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 
 import { Ionicons } from "@expo/vector-icons";
 import { completeGoogleSignup } from "../services/api";
 import { tenantTermsIntro, tenantTermsSections, tenantTermsTitle } from "../content/tenantTerms";
+import AddressFields from "../components/AddressFields";
+import { changeAddress, emptyAddress, formatAddress, validateAddress } from "../shared/philippine-address.mjs";
 
 // Shown after a brand-new Google email — mirrors RegisterScreen.jsx's fields
 // and validation, minus email (already known/verified by Google, shown
@@ -35,7 +37,7 @@ function Field({ label, hint, error, children, onLayout }) {
 }
 
 // Order matters here -- it's the order we scroll to on a validation error.
-const FIELD_ORDER = ["name", "phone", "address", "password", "confirmPassword", "acceptedTerms"];
+const FIELD_ORDER = ["name", "phone", "cityCode", "barangayCode", "password", "confirmPassword", "acceptedTerms"];
 
 const inputClass = "rounded-xl border bg-gray-50 px-4 py-3.5 text-base text-gray-900";
 
@@ -62,10 +64,10 @@ export default function GoogleSignupFillUpForm({
   const [form, setForm] = useState({
     name: initialName || "",
     phone: "",
-    address: "",
     password: "",
     confirmPassword: "",
   });
+  const [address, setAddress] = useState(emptyAddress);
   const [errors, setErrors] = useState({});
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -86,7 +88,7 @@ export default function GoogleSignupFillUpForm({
     if (!form.name.trim()) errs.name = "Full name is required.";
     const phoneErr = validatePhone(form.phone);
     if (phoneErr) errs.phone = phoneErr;
-    if (!form.address.trim()) errs.address = "Address is required.";
+    Object.assign(errs, validateAddress(address));
     if (!form.password) errs.password = "Password is required.";
     else if (form.password.length < 6) errs.password = "Password must be at least 6 characters.";
     if (!form.confirmPassword) errs.confirmPassword = "Please confirm your password.";
@@ -105,6 +107,17 @@ export default function GoogleSignupFillUpForm({
   function handleChange(field, value) {
     setForm((prev) => ({ ...prev, [field]: value }));
     setSubmitError("");
+  }
+
+  function handleAddressChange(field, value) {
+    setAddress((previous) => changeAddress(previous, field, value));
+    setSubmitError("");
+    setErrors((previous) => ({
+      ...previous,
+      [field]: "",
+      ...(field === "areaCode" ? { cityCode: "", barangayCode: "" } : {}),
+      ...(field === "cityCode" ? { barangayCode: "" } : {}),
+    }));
   }
 
   function handlePhoneChange(value) {
@@ -133,7 +146,7 @@ export default function GoogleSignupFillUpForm({
       await completeGoogleSignup(credential, {
         name: form.name.trim(),
         phone: form.phone,
-        address: form.address.trim(),
+        address: formatAddress(address),
         password: form.password,
       });
       onDone();
@@ -202,19 +215,15 @@ export default function GoogleSignupFillUpForm({
         <Text className="mt-1 text-right text-[11px] text-gray-400">{form.phone.length}/11</Text>
       </Field>
 
-      <Field label="Address" error={errors.address} onLayout={registerOffset("address")}>
-        <TextInput
-          className={`${inputClass} min-h-[80px] ${errors.address ? "border-red-300" : "border-gray-200"}`}
-          placeholder="Street, Barangay, City, Province"
-          placeholderTextColor="#9ca3af"
-          value={form.address}
-          onChangeText={(v) => handleChange("address", v)}
-          onBlur={() => handleBlur("address")}
-          multiline
-          textAlignVertical="top"
-          editable={!submitting}
+      <View onLayout={registerOffset("cityCode")}>
+        <AddressFields
+          value={address}
+          onChange={handleAddressChange}
+          onBlur={handleBlur}
+          errors={errors}
+          disabled={submitting}
         />
-      </Field>
+      </View>
 
       <Field label="Password" error={errors.password} onLayout={registerOffset("password")}>
         <View

@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { areas, getCities, getBarangays, searchPlaces } from '../shared/philippine-address.mjs';
+import { getCities, getBarangays, searchPlaces } from '../shared/philippine-address.mjs';
 
 function PlaceSelect({ field, label, options, value, onChange, onBlur, error, disabled }) {
   const [open, setOpen] = useState(false);
@@ -60,7 +60,12 @@ export default function AddressFields({ value, onChange, onBlur, errors, disable
   return (
     <View className="mt-5">
       <Text className="text-base font-semibold text-gray-900">Address</Text>
-      <PlaceSelect field="areaCode" label="Province / Area" options={areas} value={value.areaCode} {...{ onChange, onBlur, disabled }} error={errors.areaCode} />
+      <View className="mt-4">
+        <Text className="mb-2 text-sm font-medium text-gray-700">Province</Text>
+        <View className="rounded-xl border border-gray-200 bg-gray-100 px-4 py-3.5">
+          <Text className="text-base text-gray-700">Negros Occidental</Text>
+        </View>
+      </View>
       <PlaceSelect key={`city-${value.areaCode}`} field="cityCode" label="City / Municipality" options={getCities(value.areaCode)} value={value.cityCode} {...{ onChange, onBlur }} disabled={disabled || !value.areaCode} error={errors.cityCode} />
       <PlaceSelect key={`barangay-${value.cityCode}`} field="barangayCode" label="Barangay" options={getBarangays(value.cityCode)} value={value.barangayCode} {...{ onChange, onBlur }} disabled={disabled || !value.cityCode} error={errors.barangayCode} />
       <Text className="mb-2 mt-4 text-sm font-medium text-gray-700">House number / Street / Purok (optional)</Text>

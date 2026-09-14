@@ -2,6 +2,8 @@ import { useRef, useState } from "react";
 import { ArrowLeft, Eye, EyeOff, FileText, UserPlus } from "lucide-react";
 import { completeGoogleSignup } from "../services/api";
 import { tenantTermsIntro, tenantTermsSections, tenantTermsTitle } from "../content/tenantTerms";
+import AddressFields from "../components/AddressFields";
+import { changeAddress, emptyAddress, formatAddress, validateAddress } from "../../../mobile/src/shared/philippine-address.mjs";
 
 // Shown after a brand-new Google email — same fields/validation as
 // Register.jsx, minus email (already known/verified by Google, shown
@@ -12,10 +14,10 @@ export function GoogleSignupFillUpForm({ email, name: initialName, credential, o
   const [form, setForm] = useState({
     name: initialName || "",
     phone: "",
-    address: "",
     password: "",
     confirmPassword: "",
   });
+  const [address, setAddress] = useState(emptyAddress);
   const [errors, setErrors] = useState({});
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -37,7 +39,7 @@ export function GoogleSignupFillUpForm({ email, name: initialName, credential, o
     if (!form.name.trim()) errs.name = "Full name is required.";
     const phoneErr = validatePhone(form.phone);
     if (phoneErr) errs.phone = phoneErr;
-    if (!form.address.trim()) errs.address = "Address is required.";
+    Object.assign(errs, validateAddress(address));
     if (!form.password) errs.password = "Password is required.";
     else if (form.password.length < 6) errs.password = "Password must be at least 6 characters.";
     if (!form.confirmPassword) errs.confirmPassword = "Please confirm your password.";
@@ -52,7 +54,7 @@ export function GoogleSignupFillUpForm({ email, name: initialName, credential, o
   }
 
   function focusFirstError(errs) {
-    const fieldOrder = ["name", "phone", "address", "password", "confirmPassword", "acceptedTerms"];
+    const fieldOrder = ["name", "phone", "cityCode", "barangayCode", "password", "confirmPassword", "acceptedTerms"];
     const firstInvalidField = fieldOrder.find((field) => errs[field]);
     if (!firstInvalidField) return;
     const element = fieldRefs.current[firstInvalidField];
@@ -70,6 +72,17 @@ export function GoogleSignupFillUpForm({ email, name: initialName, credential, o
   function handleChange(field, value) {
     setForm((prev) => ({ ...prev, [field]: value }));
     setSubmitError("");
+  }
+
+  function handleAddressChange(field, value) {
+    setAddress((previous) => changeAddress(previous, field, value));
+    setSubmitError("");
+    setErrors((previous) => ({
+      ...previous,
+      [field]: "",
+      ...(field === "areaCode" ? { cityCode: "", barangayCode: "" } : {}),
+      ...(field === "cityCode" ? { barangayCode: "" } : {}),
+    }));
   }
 
   function handleTermsChange(checked) {
@@ -92,7 +105,7 @@ export function GoogleSignupFillUpForm({ email, name: initialName, credential, o
       await completeGoogleSignup(credential, {
         name: form.name,
         phone: form.phone,
-        address: form.address,
+        address: formatAddress(address),
         password: form.password,
       });
       onDone();
@@ -173,20 +186,14 @@ export function GoogleSignupFillUpForm({ email, name: initialName, credential, o
         </div>
       </div>
 
-      {/* Address */}
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1.5">Address</label>
-        <textarea
-          ref={(element) => { fieldRefs.current.address = element; }}
-          value={form.address}
-          onChange={(e) => handleChange("address", e.target.value)}
-          onBlur={() => handleBlur("address")}
-          placeholder="Street, Barangay, City, Province"
-          rows={2}
-          className={`${inputClass("address")} resize-none`}
-        />
-        {errors.address && <p className="text-red-500 text-xs mt-1">{errors.address}</p>}
-      </div>
+      <AddressFields
+        value={address}
+        onChange={handleAddressChange}
+        onBlur={handleBlur}
+        errors={errors}
+        disabled={submitting}
+        fieldRefs={fieldRefs}
+      />
 
       {/* Password */}
       <div>

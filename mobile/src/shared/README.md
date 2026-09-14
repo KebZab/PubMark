@@ -6,6 +6,12 @@ dependent resets, search, and address formatting. Keeping it inside `mobile/`
 also includes it in standalone Expo/EAS uploads. No location network requests
 are made by either registration form.
 
+Registration currently accepts addresses in **Negros Occidental province only**.
+The complete nationwide source snapshot remains bundled for provenance and future
+regeneration, while the shared lookup module exposes only the province's 31 cities
+and municipalities and their barangays. Bacolod remains excluded because PSGC
+classifies it as an independent city rather than part of the province.
+
 ## Source and attribution
 
 - Publication: **PSA PSGC, first quarter 2026 (31 March 2026)**.

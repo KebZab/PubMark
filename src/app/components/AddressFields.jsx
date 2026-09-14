@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import Autocomplete from '@mui/material/Autocomplete';
 import TextField from '@mui/material/TextField';
-import { areas, getCities, getBarangays, searchPlaces } from '../../../mobile/src/shared/philippine-address.mjs';
+import { getCities, getBarangays, searchPlaces } from '../../../mobile/src/shared/philippine-address.mjs';
 
 function PlaceSelect({ field, label, options, value, onChange, onBlur, error, disabled, fieldRefs }) {
   const [query, setQuery] = useState('');
@@ -34,7 +34,12 @@ export default function AddressFields({ value, onChange, onBlur, errors, disable
   return (
     <fieldset className="space-y-4 min-w-0" disabled={disabled}>
       <legend className="text-sm font-medium text-gray-700 mb-3">Address</legend>
-      <PlaceSelect field="areaCode" label="Province / Area" options={areas} value={value.areaCode} {...{ onChange, onBlur, fieldRefs, disabled }} error={errors.areaCode} />
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1.5">Province</label>
+        <div className="w-full px-4 py-3 bg-gray-100 border border-gray-200 rounded-xl text-sm text-gray-700">
+          Negros Occidental
+        </div>
+      </div>
       <PlaceSelect key={`city-${value.areaCode}`} field="cityCode" label="City / Municipality" options={getCities(value.areaCode)} value={value.cityCode} {...{ onChange, onBlur, fieldRefs }} disabled={disabled || !value.areaCode} error={errors.cityCode} />
       <PlaceSelect key={`barangay-${value.cityCode}`} field="barangayCode" label="Barangay" options={getBarangays(value.cityCode)} value={value.barangayCode} {...{ onChange, onBlur, fieldRefs }} disabled={disabled || !value.cityCode} error={errors.barangayCode} />
       <div>

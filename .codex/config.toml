@@ -1,0 +1,4 @@
+[mcp_servers.supabase]
+url = "https://mcp.supabase.com/mcp?project_ref=mkdkcrjtndqguambmduh&features=database%2Cdebugging%2Cdevelopment%2Cdocs"
+enabled = true
+default_tools_approval_mode = "prompt"

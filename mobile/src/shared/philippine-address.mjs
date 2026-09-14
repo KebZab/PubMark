@@ -1,21 +1,27 @@
 import data from './philippine-address-data.json' with { type: 'json' };
 
 const sort = (items) => items.sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true }));
-export const areas = sort(data.areas);
+export const NEGROS_OCCIDENTAL_CODE = '1804500000';
+export const areas = sort(data.areas.filter(area => area.code === NEGROS_OCCIDENTAL_CODE));
+const allowedCityCodes = new Set(
+  data.cities.filter(city => city.areaCode === NEGROS_OCCIDENTAL_CODE).map(city => city.code),
+);
 const citiesByArea = new Map();
 const barangaysByCity = new Map();
 for (const city of data.cities) {
+  if (!allowedCityCodes.has(city.code)) continue;
   if (!citiesByArea.has(city.areaCode)) citiesByArea.set(city.areaCode, []);
   citiesByArea.get(city.areaCode).push(city);
 }
 for (const [code, name, cityCode] of data.barangays) {
+  if (!allowedCityCodes.has(cityCode)) continue;
   if (!barangaysByCity.has(cityCode)) barangaysByCity.set(cityCode, []);
   barangaysByCity.get(cityCode).push({ code, name });
 }
 for (const list of [...citiesByArea.values(), ...barangaysByCity.values()]) sort(list);
 export const getCities = (areaCode) => citiesByArea.get(areaCode) || [];
 export const getBarangays = (cityCode) => barangaysByCity.get(cityCode) || [];
-export const emptyAddress = () => ({ areaCode: '', cityCode: '', barangayCode: '', street: '' });
+export const emptyAddress = () => ({ areaCode: NEGROS_OCCIDENTAL_CODE, cityCode: '', barangayCode: '', street: '' });
 
 export function changeAddress(address, field, value) {
   const next = { ...address, [field]: value };

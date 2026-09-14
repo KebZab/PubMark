@@ -70,7 +70,6 @@ export function Register() {
       "name",
       "email",
       "phone",
-      "areaCode",
       "cityCode",
       "barangayCode",
       "password",
