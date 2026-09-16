@@ -215,7 +215,7 @@ export function SuperAdminDashboard() {
   async function loadUsers() {
     setUsersLoading(true);
     try {
-      const response = await listUsers();
+      const response = await listUsers(undefined, { activeOnly: true });
       setUsers(
         response.users.map((user) => ({
           id: user.id,
@@ -242,6 +242,7 @@ export function SuperAdminDashboard() {
       const result = await listUsersPage({
         role: roleFilter,
         search: debouncedUserSearch,
+        activeOnly: true,
         sortField,
         sortDir: sortAsc ? "asc" : "desc",
         page: usersPageNum,
@@ -1000,7 +1001,7 @@ export function SuperAdminDashboard() {
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               {[
                 {
-                  label: "Total Users",
+                  label: "Active Users",
                   value: stats.total,
                   icon: Users,
                   color: "bg-purple-50 text-purple-700",

@@ -91,9 +91,10 @@ export async function findUserByEmail(email) {
   return apiFetch(`/auth/users/by-email?${query.toString()}`);
 }
 
-export async function listUsers(role) {
+export async function listUsers(role, { activeOnly = false } = {}) {
   const query = new URLSearchParams();
   if (role) query.set("role", role);
+  if (activeOnly) query.set("activeOnly", "true");
   const suffix = query.toString() ? `?${query.toString()}` : "";
   return apiFetch(`/users${suffix}`);
 }
