@@ -9,7 +9,7 @@ import { resolveApiBaseUrl } from "./apiBaseUrl";
 export class ApiConfigurationError extends Error {
   constructor() {
     super(
-      "Could not work out the API address. In development this is normally automatic; for a production build, set EXPO_PUBLIC_API_BASE_URL in mobile/.env.",
+      "The PubMark cloud API address is unavailable. Check the app configuration.",
     );
   }
 }
