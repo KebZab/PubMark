@@ -82,6 +82,10 @@ export async function getCurrentProfile() {
   return apiFetch("/auth/me");
 }
 
+export async function getPublicStats() {
+  return apiFetch("/public-stats");
+}
+
 export async function findUserByEmail(email) {
   const query = new URLSearchParams({ email: email.trim().toLowerCase() });
   return apiFetch(`/auth/users/by-email?${query.toString()}`);

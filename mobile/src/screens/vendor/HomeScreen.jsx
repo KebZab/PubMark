@@ -231,7 +231,7 @@ export default function HomeScreen({ navigation }) {
         {/* Hero — mirrors the web dashboard's teal gradient banner */}
         <View className="mx-4 mt-4 overflow-hidden rounded-2xl bg-primary-dark p-5">
           <Text className="text-xs font-medium text-primary-light">PubMark — Smart Public Market</Text>
-          <Text className="mt-2 text-lg font-bold leading-snug text-white">Good day, {firstName}! 👋</Text>
+          <Text className="mt-2 text-lg font-bold leading-snug text-white">Good day, {firstName}!</Text>
           <Text className="mt-1 text-xs text-primary-light">Here's a summary of your stall activity.</Text>
         </View>
 

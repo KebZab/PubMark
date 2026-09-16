@@ -1,10 +1,12 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams, Link } from "react-router";
 import { GoogleLogin } from "@react-oauth/google";
 import { MapPin, LogIn, Search, Eye, EyeOff, Mail } from "lucide-react";
-import { login, loginWithGoogle } from "../services/api";
+import { getPublicStats, login, loginWithGoogle } from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import { GoogleSignupFillUpForm } from "./GoogleSignupFillUpForm";
+import { showToast } from "../components/Toast";
 
 const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
@@ -17,6 +19,15 @@ const ROLE_ROUTES = {
 
 export function Login() {
   const { signIn } = useAuth();
+  const {
+    data: publicStats,
+    isLoading: publicStatsLoading,
+    error: publicStatsError,
+  } = useQuery({
+    queryKey: ["publicStats"],
+    queryFn: getPublicStats,
+    staleTime: 5 * 60_000,
+  });
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const stallId = searchParams.get("stallId");
@@ -40,20 +51,27 @@ export function Login() {
   const [googleEmail, setGoogleEmail] = useState("");
   const [googleName, setGoogleName] = useState("");
 
+  const liveStatsAvailable = Boolean(publicStats) && !publicStatsLoading && !publicStatsError;
+  const systemStats = [
+    {
+      n: liveStatsAvailable ? publicStats.userCount.toLocaleString() : "—",
+      l: "Users",
+    },
+    {
+      n: liveStatsAvailable ? publicStats.stallCount.toLocaleString() : "—",
+      l: "Market Stalls",
+    },
+    { n: "24/7", l: "Monitoring" },
+  ];
+
   function redirectAfterAuth(user) {
     signIn(user);
-    localStorage.setItem(
-      "pubmark_pending_toast",
-      JSON.stringify({
-        message: `Welcome back, ${user.name}!`,
-        type: "success",
-      }),
-    );
     if (stallIds.length > 0 && (user.role ?? "vendor") === "vendor") {
       navigate(`/apply/${stallIds[0]}`, { state: { stallIds } });
     } else {
       navigate(ROLE_ROUTES[user.role ?? "vendor"] ?? "/dashboard");
     }
+    showToast(`Welcome back, ${user.name}!`, "success");
   }
 
   const handleLogin = async (e) => {
@@ -160,11 +178,7 @@ export function Login() {
 
           {/* Stats */}
           <div className="relative z-10 grid grid-cols-3 gap-4">
-            {[
-              { n: "5", l: "User Roles" },
-              { n: "500+", l: "Stalls" },
-              { n: "24/7", l: "Monitoring" },
-            ].map((s) => (
+            {systemStats.map((s) => (
               <div
                 key={s.l}
                 className="text-center bg-white/10 rounded-2xl py-3"
@@ -281,11 +295,8 @@ export function Login() {
                 </div>
               )}
 
-              {/* Demo accounts */}
+              {/* Account credential shortcuts */}
               <div className="mt-5">
-                <p className="text-xs text-gray-400 text-center mb-2">
-                  Demo accounts
-                </p>
                 <div className="flex flex-wrap gap-1.5 justify-center">
                   {DEMO_ACCOUNTS.map((a) => (
                     <button

@@ -36,10 +36,10 @@ import "leaflet/dist/leaflet.css";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
 import { useAnnouncements } from "../hooks/useAnnouncements";
+import { useNoticesBadge } from "../hooks/useNoticesBadge";
 import { useMapFacilities } from "../hooks/useMapFacilities";
 import { MapFacilitiesLayer, stallFloaterHtml } from "../components/MapFacilitiesLayer";
 import { registerMapFloater } from "../components/mapFloaterDeclutter";
-import { getSession } from "../components/authStorage";
 import { useAuth } from "../context/AuthContext";
 
 import { showToast } from "../components/Toast";
@@ -280,17 +280,24 @@ function MapTabContent({ navigate }) {
 }
 
 export function UserDashboard() {
-  const { signOut } = useAuth();
+  const { profile, signOut } = useAuth();
   const navigate = useNavigate();
-  const [session, setSession] = useState(null);
+  const session = profile ? { ...profile, userId: profile.id } : null;
   const [activeTab, setActiveTab] = useState("home");
-  const { announcements } = useAnnouncements();
+  const {
+    announcements,
+    loading: announcementsLoading,
+    error: announcementsError,
+    refetch: refetchAnnouncements,
+  } = useAnnouncements();
+  const { unreadCount: unreadAnnouncements, markSeen: markNoticesSeen } = useNoticesBadge();
   const { applications } = useApplications();
   useStalls();
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef(null);
   const [appSortField, setAppSortField] = useState("date");
   const [appSortAsc, setAppSortAsc] = useState(false);
+  const [appFilter, setAppFilter] = useState("all");
 
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [terminateAccountConfirm, setTerminateAccountConfirm] = useState(false);
@@ -307,19 +314,18 @@ export function UserDashboard() {
   const [transferSubmitting, setTransferSubmitting] = useState(false);
 
   useEffect(() => {
-    const s = getSession();
-    if (!s) return;
+    if (!session) return;
     let cancelled = false;
 
     // Transfers come from the API now, so both lists load asynchronously.
     (async () => {
       try {
         const [incoming, outgoing] = await Promise.all([
-          getTransfersByToEmail(s.email),
-          getTransfersByFromUserId(s.userId),
+          getTransfersByToEmail(session.email),
+          getTransfersByFromUserId(session.userId),
         ]);
         if (cancelled) return;
-        setIncomingTransfers(incoming.filter((t) => t.status === "pending"));
+        setIncomingTransfers(incoming);
         setOutgoingTransfers(outgoing);
       } catch {
         if (cancelled) return;
@@ -331,7 +337,7 @@ export function UserDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [activeTab]);
+  }, [activeTab, session?.email, session?.userId]);
 
   useEffect(() => {
     function handleClickOutside(e) {
@@ -344,6 +350,12 @@ export function UserDashboard() {
   }, []);
 
   const userApplications = session ? applications.filter((a) => a.userId === session.userId) : [];
+  const filteredUserApplications = userApplications.filter((application) =>
+    appFilter === "all" ? true : getApplicationDisplayStatus(application) === appFilter,
+  );
+  const pendingIncomingTransfers = incomingTransfers.filter((t) => t.status === "pending");
+  const transferHistory = [...incomingTransfers.filter((t) => t.status !== "pending"), ...outgoingTransfers]
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   const stats = {
     total: userApplications.length,
@@ -363,17 +375,34 @@ export function UserDashboard() {
     (a) => a.status !== "pending" && !seenDecisions.includes(a.id),
   ).length;
 
-  const unreadAnnouncements = announcements.length;
   const pendingPermitUploads = userApplications.filter(
     (a) => a.status === "approved" && !a.permitFileName,
   ).length;
   const totalBadge =
-    unreadDecisions + unreadAnnouncements + incomingTransfers.length + pendingPermitUploads;
+    unreadDecisions + unreadAnnouncements + pendingIncomingTransfers.length + pendingPermitUploads;
 
   const switchTab = (tab) => {
     setActiveTab(tab);
     setShowDropdown(false);
+    if (tab === "announcements") {
+      void refetchAnnouncements();
+      void markNoticesSeen().catch(() => {
+        showToast("Notices opened, but the read status could not be saved.", "error");
+      });
+    }
   };
+
+  const vendorHeader = {
+    applications: { title: "My Applications", subtitle: `${stats.total} total` },
+    transfers: {
+      title: "Transfers",
+      subtitle: pendingIncomingTransfers.length > 0
+        ? `${pendingIncomingTransfers.length} offer(s) awaiting your decision`
+        : "Stall handovers",
+    },
+    announcements: { title: "Notices", subtitle: "Announcements from market administration" },
+    map: { title: "Market Map", subtitle: "Browse available stalls" },
+  }[activeTab];
 
   function sortApplications(apps) {
     const sorted = [...apps];
@@ -444,11 +473,33 @@ export function UserDashboard() {
   async function handleDeclineTransfer(transferId) {
     try {
       await updateTransferStatus(transferId, "declined");
-      setIncomingTransfers((prev) => prev.filter((t) => t.id !== transferId));
+      setIncomingTransfers((prev) =>
+        prev.map((transfer) =>
+          transfer.id === transferId
+            ? { ...transfer, status: "declined", respondedAt: new Date().toISOString() }
+            : transfer,
+        ),
+      );
       showToast("Transfer offer declined.", "success");
     } catch (error) {
       // Don't drop it from the list if the server rejected the change.
       showToast(`Failed to decline: ${error.message}`, "error");
+    }
+  }
+
+  async function handleAcceptTransfer(transferId) {
+    try {
+      await updateTransferStatus(transferId, "accepted");
+      setIncomingTransfers((prev) =>
+        prev.map((transfer) =>
+          transfer.id === transferId
+            ? { ...transfer, status: "accepted", respondedAt: new Date().toISOString() }
+            : transfer,
+        ),
+      );
+      showToast("Transfer accepted. You can apply for the stall from the Map tab.", "success");
+    } catch (error) {
+      showToast(`Failed to accept: ${error.message}`, "error");
     }
   }
 
@@ -467,10 +518,12 @@ export function UserDashboard() {
                 <User className="w-5 h-5 text-white" />
               </div>
               <div className="text-left">
-                <p className="text-xs text-gray-500 leading-none mb-0.5">Welcome back</p>
+                <p className="text-xs text-gray-500 leading-none mb-0.5">
+                  {activeTab === "home" ? "Welcome back" : vendorHeader?.subtitle}
+                </p>
                 <div className="flex items-center gap-1">
                   <p className="text-sm font-bold text-gray-900 leading-none">
-                    {session?.name ?? "..."}
+                    {activeTab === "home" ? (session?.name ?? "...") : vendorHeader?.title}
                   </p>
                   <ChevronDown
                     className={`w-3.5 h-3.5 text-gray-400 transition-transform duration-200 ${showDropdown ? "rotate-180" : ""}`}
@@ -515,18 +568,18 @@ export function UserDashboard() {
             )}
           </div>
 
-          {/* Right — notification bell */}
-          <button
-            onClick={() => switchTab("announcements")}
-            className="relative w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center hover:bg-gray-200 transition-colors"
-          >
-            <Bell className="w-5 h-5 text-gray-600" />
-            {totalBadge > 0 && (
+          {totalBadge > 0 && activeTab === "home" && (
+            <button
+              onClick={() => switchTab("announcements")}
+              className="relative w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center hover:bg-gray-200 transition-colors"
+              aria-label="Open notices"
+            >
+              <Bell className="w-5 h-5 text-gray-600" />
               <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center">
                 <span className="text-[8px] font-bold text-white">{totalBadge}</span>
               </span>
-            )}
-          </button>
+            </button>
+          )}
         </div>
       </div>
 
@@ -547,7 +600,7 @@ export function UserDashboard() {
                   </span>
                 </div>
                 <p className="text-white font-bold text-lg leading-snug">
-                  Good day, {session?.name?.split(" ")[0] ?? ""}! 👋
+                  Good day, {session?.name?.split(" ")[0] ?? ""}!
                 </p>
                 <p className="text-teal-100 text-xs mt-1">
                   Here's a summary of your stall activity.
@@ -576,8 +629,8 @@ export function UserDashboard() {
             </div>
 
             {/* Incoming Transfer Offers */}
-            {incomingTransfers.length > 0 && (
-              <div className="px-4 mt-5">
+            {pendingIncomingTransfers.length > 0 && (
+              <div className="hidden px-4 mt-5">
                 <div className="flex items-center gap-2 mb-3">
                   <div className="w-5 h-5 bg-purple-500 rounded-full flex items-center justify-center flex-shrink-0">
                     <ArrowRightLeft className="w-3 h-3 text-white" />
@@ -585,12 +638,12 @@ export function UserDashboard() {
                   <h2 className="text-sm font-semibold text-gray-800">Ownership Transfer Offers</h2>
                   <span className="ml-auto flex-shrink-0 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center">
                     <span className="text-[9px] font-bold text-white">
-                      {incomingTransfers.length}
+                      {pendingIncomingTransfers.length}
                     </span>
                   </span>
                 </div>
                 <div className="space-y-3">
-                  {incomingTransfers.map((t) => (
+                  {pendingIncomingTransfers.map((t) => (
                     <div
                       key={t.id}
                       className="bg-white rounded-2xl border border-purple-200 shadow-sm overflow-hidden"
@@ -845,6 +898,20 @@ export function UserDashboard() {
               </div>
             </div>
 
+            <div className="flex gap-1 rounded-xl bg-gray-100 p-1">
+              {["all", "pending", "approved", "rejected"].map((filter) => (
+                <button
+                  key={filter}
+                  onClick={() => setAppFilter(filter)}
+                  className={`flex-1 rounded-lg py-2 text-[11px] font-semibold capitalize transition-colors ${
+                    appFilter === filter ? "bg-white text-[#0d9488] shadow-sm" : "text-gray-500"
+                  }`}
+                >
+                  {filter}
+                </button>
+              ))}
+            </div>
+
             {/* Permit upload alert for approved apps missing a permit */}
             {applications
               .filter((a) => a.status === "approved" && !a.permitFileName)
@@ -897,13 +964,13 @@ export function UserDashboard() {
                     Status
                   </button>
                 </div>
-                <span className="text-xs text-gray-400">{applications.length} total</span>
+                <span className="text-xs text-gray-400">{userApplications.length} total</span>
               </div>
             </div>
 
-            {applications.length > 0 ? (
+            {filteredUserApplications.length > 0 ? (
               <div className="space-y-3">
-                {sortApplications(userApplications).map((app) => {
+                {sortApplications(filteredUserApplications).map((app) => {
                   const outgoing = outgoingTransfers.find(
                     (t) => t.originalApplicationId === app.id && t.status === "pending",
                   );
@@ -1006,14 +1073,100 @@ export function UserDashboard() {
                 <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                   <FileText className="w-8 h-8 text-gray-400" />
                 </div>
-                <p className="text-base font-medium text-gray-900 mb-1">No applications yet</p>
-                <p className="text-sm text-gray-500 mb-4">Start by exploring available stalls</p>
+                <p className="text-base font-medium text-gray-900 mb-1">
+                  {appFilter === "all" ? "No applications yet" : `No ${appFilter} applications`}
+                </p>
+                <p className="text-sm text-gray-500 mb-4">
+                  {appFilter === "all" ? "Start by exploring available stalls" : "Try another status filter"}
+                </p>
                 <button
                   onClick={() => navigate("/dashboard/map")}
                   className="px-6 py-3 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl text-sm font-medium hover:scale-105 transition-transform"
                 >
                   Browse Stalls
                 </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Web mirrors Expo's dedicated Transfers tab. */}
+        {activeTab === "transfers" && (
+          <div className="p-4 pb-24">
+            {pendingIncomingTransfers.length > 0 && (
+              <section>
+                <h3 className="mb-3 text-sm font-semibold text-gray-800">Awaiting your decision</h3>
+                <div className="space-y-3">
+                  {pendingIncomingTransfers.map((transfer) => (
+                    <div key={transfer.id} className="overflow-hidden rounded-2xl border border-teal-200 bg-white shadow-sm">
+                      <div className="bg-teal-50 px-4 py-3">
+                        <p className="text-sm font-semibold text-gray-900">{transfer.stallName}</p>
+                        <p className="mt-0.5 text-xs text-gray-500">
+                          From {transfer.fromUserName} · Section {transfer.stallSection}
+                        </p>
+                      </div>
+                      <p className="px-4 py-3 text-xs leading-5 text-gray-600">
+                        {transfer.fromUserName} wants to hand {transfer.stallName} over to you.
+                      </p>
+                      <div className="flex gap-2 px-4 pb-4">
+                        <button
+                          onClick={() => handleDeclineTransfer(transfer.id)}
+                          className="flex-1 rounded-xl bg-gray-100 py-3 text-xs font-semibold text-gray-700"
+                        >
+                          Decline
+                        </button>
+                        <button
+                          onClick={() => handleAcceptTransfer(transfer.id)}
+                          className="flex-[2] rounded-xl bg-[#14B8A6] py-3 text-xs font-semibold text-white"
+                        >
+                          Accept stall
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {transferHistory.length > 0 && (
+              <section className={pendingIncomingTransfers.length > 0 ? "mt-7" : ""}>
+                <h3 className="mb-3 text-sm font-semibold text-gray-800">History</h3>
+                <div className="space-y-3">
+                  {transferHistory.map((transfer) => {
+                    const sentByMe = transfer.fromUserId === session?.userId;
+                    const statusStyle = {
+                      pending: "bg-amber-100 text-amber-700",
+                      accepted: "bg-emerald-100 text-emerald-700",
+                      declined: "bg-gray-200 text-gray-600",
+                    }[transfer.status] ?? "bg-gray-100 text-gray-600";
+                    return (
+                      <div key={transfer.id} className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-semibold text-gray-900">{transfer.stallName}</p>
+                            <p className="mt-0.5 text-xs text-gray-500">
+                              {sentByMe ? `To ${transfer.toUserName}` : `From ${transfer.fromUserName}`}
+                            </p>
+                          </div>
+                          <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize ${statusStyle}`}>
+                            {transfer.status}
+                          </span>
+                        </div>
+                        <p className="mt-3 text-[11px] text-gray-400">
+                          Sent {new Date(transfer.createdAt).toLocaleDateString()}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
+            {pendingIncomingTransfers.length === 0 && transferHistory.length === 0 && (
+              <div className="rounded-2xl border border-gray-200 bg-white px-5 py-12 text-center shadow-sm">
+                <ArrowRightLeft className="mx-auto mb-3 h-8 w-8 text-gray-300" />
+                <p className="text-sm font-semibold text-gray-700">No transfers</p>
+                <p className="mt-1.5 text-xs text-gray-400">Stall handover offers will appear here.</p>
               </div>
             )}
           </div>
@@ -1032,7 +1185,25 @@ export function UserDashboard() {
               </div>
             </div>
 
-            {announcements.length === 0 ? (
+            {announcementsLoading ? (
+              <div className="py-16 text-center">
+                <Loader2 className="mx-auto mb-3 h-7 w-7 animate-spin text-teal-500" />
+                <p className="text-sm text-gray-400">Loading notices…</p>
+              </div>
+            ) : announcementsError ? (
+              <div className="rounded-2xl border border-red-100 bg-white px-5 py-12 text-center shadow-sm">
+                <Bell className="mx-auto mb-3 h-8 w-8 text-red-300" />
+                <p className="text-sm font-semibold text-gray-700">Could not load notices</p>
+                <p className="mt-1.5 text-xs text-gray-400">{announcementsError}</p>
+                <button
+                  type="button"
+                  onClick={() => void refetchAnnouncements()}
+                  className="mt-4 rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : announcements.length === 0 ? (
               <div className="text-center py-16">
                 <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                   <Bell className="w-8 h-8 text-gray-400" />
@@ -1086,6 +1257,35 @@ export function UserDashboard() {
       {/* ── Bottom Nav Bar ──────────────────────────────── */}
       <div className="flex-shrink-0 bg-white border-t border-gray-200 shadow-[0_-4px_12px_rgba(0,0,0,0.05)]">
         <div className="flex pb-safe">
+          {[
+            { id: "home", label: "Home", Icon: LayoutDashboard },
+            { id: "applications", label: "Applications", Icon: FileText },
+            { id: "transfers", label: "Transfers", Icon: ArrowRightLeft },
+            { id: "announcements", label: "Notices", Icon: Bell },
+            { id: "map", label: "Map", Icon: MapPin },
+          ].map(({ id, label, Icon }) => {
+            const badge = id === "transfers" ? pendingIncomingTransfers.length : id === "announcements" ? unreadAnnouncements : 0;
+            return (
+              <button
+                key={id}
+                onClick={() => switchTab(id)}
+                className={`relative flex-1 flex flex-col items-center gap-1 py-3 transition-colors ${
+                  activeTab === id ? "text-[#14B8A6]" : "text-gray-400"
+                }`}
+              >
+                <Icon className="h-5 w-5" />
+                {badge > 0 && (
+                  <span className="absolute top-2 right-[calc(50%-11px)] flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[8px] font-bold text-white">
+                    {badge}
+                  </span>
+                )}
+                <span className="text-[9px] font-medium">{label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="hidden pb-safe">
           <button
             onClick={() => switchTab("home")}
             className={`flex-1 flex flex-col items-center gap-1 py-3 transition-colors ${

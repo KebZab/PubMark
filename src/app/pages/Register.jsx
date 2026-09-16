@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams, Link } from "react-router";
 import { MapPin, UserPlus, Eye, EyeOff, FileText } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { registerVendor } from "../services/api";
+import { showToast } from "../components/Toast";
 import { tenantTermsIntro, tenantTermsSections, tenantTermsTitle } from "../content/tenantTerms";
 import AddressFields from '../components/AddressFields';
 import { emptyAddress, changeAddress, validateAddress, formatAddress } from '../../../mobile/src/shared/philippine-address.mjs';
@@ -129,15 +130,12 @@ export function Register() {
         address: formatAddress(address),
       });
       signIn(user);
-      localStorage.setItem(
-        "pubmark_pending_toast",
-        JSON.stringify({ message: "Account created! Welcome to PubMark.", type: "success" }),
-      );
       if (stallIds.length > 0) {
         navigate(`/apply/${stallIds[0]}`, { state: { stallIds } });
       } else {
         navigate("/dashboard");
       }
+      showToast("Account created! Welcome to PubMark.", "success");
     } catch (err) {
       setSubmitting(false);
       const message = err instanceof Error ? err.message : "Unable to create the account.";

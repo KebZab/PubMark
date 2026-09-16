@@ -25,21 +25,12 @@ export function ToastContainer() {
     return () => window.removeEventListener(TOAST_EVENT, handler);
   }, [remove]);
 
-  // On mount, consume any pending toast written to localStorage by Login/Register
+  // Older builds delayed login/register messages through localStorage. Clear
+  // any leftover value without displaying it, because it may belong to an old
+  // session and could otherwise appear later on the login page.
   useEffect(() => {
-    const raw = localStorage.getItem("pubmark_pending_toast");
-    if (raw) {
-      localStorage.removeItem("pubmark_pending_toast");
-      try {
-        const { message, type } = JSON.parse(raw);
-        const id = `toast_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
-        setToasts((prev) => [...prev, { id, message, type }]);
-        setTimeout(() => remove(id), 4000);
-      } catch {
-        /* ignore */
-      }
-    }
-  }, [remove]);
+    localStorage.removeItem("pubmark_pending_toast");
+  }, []);
 
   if (toasts.length === 0) return null;
 

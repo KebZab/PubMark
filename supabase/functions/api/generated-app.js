@@ -942,6 +942,23 @@ app.get("/api/auth/me", requireAuth, async (req, res, next) => {
   try { const { rows } = await db.query("SELECT id, email, name, role, address, phone, department FROM profiles WHERE id = $1", [req.auth.sub]); if (!rows[0]) return res.status(401).json({ message: "Account not found." }); res.json({ profile: profile(rows[0]) }); } catch (error) { next(error); }
 });
 
+// Login-page totals. This intentionally exposes aggregate counts only; user
+// records and other account details remain behind the protected /api/users
+// endpoint.
+app.get("/api/public-stats", async (_req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM profiles WHERE is_archived = false) AS user_count,
+         (SELECT COUNT(*)::int FROM stalls) AS stall_count`
+    );
+    res.json({
+      userCount: Number(rows[0].user_count),
+      stallCount: Number(rows[0].stall_count),
+    });
+  } catch (error) { next(error); }
+});
+
 // Per-account "last seen" watermarks for notification badges (mobile
 // Notices tab, and any future badge type — keyed generically by
 // `tracker_key` rather than one column per notification type). Any

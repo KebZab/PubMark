@@ -17,7 +17,7 @@ import {
   ChevronDown,
   Settings,
   LogOut,
-  Bell,
+  Megaphone,
   Receipt as ReceiptIcon,
 } from "lucide-react";
 import {
@@ -33,7 +33,8 @@ import {
 } from "../components/violationRequestStore";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
-import { getSession } from "../components/authStorage";
+import { useAnnouncements } from "../hooks/useAnnouncements";
+import { useNoticesBadge } from "../hooks/useNoticesBadge";
 import { useAuth } from "../context/AuthContext";
 import { OfficerMapView } from "../components/OfficerMapView";
 import { showToast } from "../components/Toast";
@@ -70,6 +71,13 @@ const CATEGORY_COLORS = {
   "Improper Waste Disposal": "bg-teal-100 text-teal-700",
   "Permit Expired": "bg-purple-100 text-purple-700",
   Other: "bg-gray-100 text-gray-600",
+};
+
+const ANNOUNCEMENT_STYLES = {
+  info: { bar: "bg-blue-400", badge: "bg-blue-100 text-blue-700", label: "Info" },
+  success: { bar: "bg-emerald-400", badge: "bg-emerald-100 text-emerald-700", label: "Update" },
+  warning: { bar: "bg-amber-400", badge: "bg-amber-100 text-amber-700", label: "Notice" },
+  urgent: { bar: "bg-red-400", badge: "bg-red-100 text-red-700", label: "Urgent" },
 };
 
 function formatDate(iso) {
@@ -132,14 +140,25 @@ async function loadOfficerCheckRequests(officerId, officerName) {
 }
 
 export function OfficerDashboard() {
-  const { signOut } = useAuth();
+  const { profile, signOut } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const { stalls, loading: stallsLoading } = useStalls();
   const { applications, loading: applicationsLoading } = useApplications();
-  const [session, setSession] = useState(null);
+  const {
+    announcements,
+    loading: announcementsLoading,
+    error: announcementsError,
+    refetch: refetchAnnouncements,
+  } = useAnnouncements();
+  const { unreadCount: unreadNotices, markSeen: markNoticesSeen } = useNoticesBadge();
+  const session = profile ? { ...profile, userId: profile.id } : null;
   const [activeTab, setActiveTab] = useState(
-    location.pathname === "/officer/receipts" ? "receipts" : "dashboard",
+    location.pathname === "/officer/receipts"
+      ? "receipts"
+      : location.pathname === "/officer/map"
+        ? "map"
+        : "log",
   );
   const [violations, setViolations] = useState([]);
   const [violationsLoading, setViolationsLoading] = useState(true);
@@ -167,7 +186,8 @@ export function OfficerDashboard() {
   const [checkRequests, setCheckRequests] = useState([]);
   const [reqSearch, setReqSearch] = useState("");
   const [reqStatusFilter, setReqStatusFilter] = useState("all");
-  const [logSubTab, setLogSubTab] = useState("requests");
+  const [logSubTab, setLogSubTab] = useState("reports");
+  const [violationFilter, setViolationFilter] = useState("all");
   const [expandedReport, setExpandedReport] = useState(null);
   const [completeModal, setCompleteModal] = useState(null);
   const [completeSummary, setCompleteSummary] = useState("");
@@ -236,7 +256,6 @@ export function OfficerDashboard() {
   }
 
   useEffect(() => {
-    const s = getSession();
     setViolationsLoading(true);
     void getViolations()
       .then(setViolations)
@@ -244,16 +263,16 @@ export function OfficerDashboard() {
         showToast(`Failed to load violations: ${error.message}`, "error");
       })
       .finally(() => setViolationsLoading(false));
-    if (s) {
+    if (session) {
       setCheckRequestsLoading(true);
-      void loadOfficerCheckRequests(s.userId, s.name)
+      void loadOfficerCheckRequests(session.userId, session.name)
         .then(setCheckRequests)
         .catch((error) => {
           showToast(`Failed to load check requests: ${error.message}`, "error");
         })
         .finally(() => setCheckRequestsLoading(false));
     }
-  }, [activeTab]);
+  }, [activeTab, session?.name, session?.userId]);
 
   useEffect(() => {
     function handleClickOutside(e) {
@@ -271,6 +290,9 @@ export function OfficerDashboard() {
     resolved: violations.filter((v) => v.status === "resolved").length,
     dismissed: violations.filter((v) => v.status === "dismissed").length,
   };
+  const filteredViolations = violations.filter((violation) =>
+    violationFilter === "all" ? true : violation.status === violationFilter,
+  );
 
   // Reads picked files so the real photo is stored, not just its name.
   // Anything oversized or of the wrong type is reported and skipped, rather
@@ -385,38 +407,62 @@ export function OfficerDashboard() {
   const switchTab = (tab) => {
     setActiveTab(tab);
     setShowDropdown(false);
+    if (tab === "notices") {
+      void refetchAnnouncements();
+      void markNoticesSeen().catch(() => {
+        showToast("Notices opened, but the read status could not be saved.", "error");
+      });
+    }
   };
+
+  const officerHeader = {
+    log: { title: "Violations", subtitle: `${stats.open} open · ${violations.length} total` },
+    requests: {
+      title: "Check Requests",
+      subtitle: `${checkRequests.filter((request) => request.status === "pending").length} awaiting inspection`,
+    },
+    map: { title: "Market Map", subtitle: "Stalls and market facilities" },
+    receipts: { title: "Payment Receipts", subtitle: "Submit proof of payment" },
+    notices: { title: "Notices", subtitle: "Announcements from market administration" },
+  }[activeTab] ?? { title: "Officer", subtitle: "PubMark market enforcement" };
 
   return (
     <div className="size-full flex flex-col bg-gray-50 max-w-md mx-auto relative overflow-hidden">
       {/* ── Top Header ─────────────────────────────────── */}
       <div className="bg-white border-b border-gray-200 shadow-sm flex-shrink-0">
         <div className="flex items-center justify-between px-4 pt-10 pb-3">
-          {/* Left — user dropdown trigger */}
-          <div className="relative" ref={dropdownRef}>
+          <div className="flex min-w-0 items-center gap-2.5">
+            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-amber-500">
+              <AlertTriangle className="h-4 w-4 text-white" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="truncate text-lg font-semibold leading-tight text-gray-900">{officerHeader.title}</h1>
+              <p className="truncate text-xs text-gray-500">{officerHeader.subtitle}</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {activeTab === "log" && (
+              <button
+                onClick={() => setShowNewForm(true)}
+                className="flex h-9 items-center gap-1 rounded-xl bg-amber-500 px-3 text-xs font-semibold text-white"
+              >
+                <span className="hidden min-[360px]:inline">Report</span>
+                <span className="text-base leading-none">+</span>
+              </button>
+            )}
+            <div className="relative" ref={dropdownRef}>
             <button
               onClick={() => setShowDropdown(!showDropdown)}
-              className="flex items-center gap-2.5 group"
+              className="flex h-9 items-center gap-1 rounded-full bg-gray-100 pl-2.5 pr-2"
+              aria-label="Open officer profile menu"
             >
-              <div className="w-10 h-10 bg-gradient-to-br from-amber-500 to-amber-600 rounded-xl flex items-center justify-center shadow-md flex-shrink-0">
-                <User className="w-5 h-5 text-white" />
-              </div>
-              <div className="text-left">
-                <p className="text-xs text-gray-500 leading-none mb-0.5">Officer</p>
-                <div className="flex items-center gap-1">
-                  <p className="text-sm font-bold text-gray-900 leading-none">
-                    {session?.name ?? "..."}
-                  </p>
-                  <ChevronDown
-                    className={`w-3.5 h-3.5 text-gray-400 transition-transform duration-200 ${showDropdown ? "rotate-180" : ""}`}
-                  />
-                </div>
-              </div>
+              <User className="h-4 w-4 text-gray-600" />
+              <ChevronDown className={`h-3.5 w-3.5 text-gray-400 transition-transform ${showDropdown ? "rotate-180" : ""}`} />
             </button>
 
-            {/* Dropdown menu */}
             {showDropdown && (
-              <div className="absolute top-full left-0 mt-2 w-52 bg-white rounded-2xl shadow-2xl border border-gray-100 py-2 z-50">
+              <div className="absolute right-0 top-full z-50 mt-2 w-52 rounded-2xl border border-gray-100 bg-white py-2 shadow-2xl">
                 <div className="px-4 py-2.5 border-b border-gray-100 mb-1">
                   <p className="text-xs font-semibold text-gray-900">{session?.name ?? ""}</p>
                   <p className="text-[11px] text-gray-400 mt-0.5">{session?.email ?? ""}</p>
@@ -445,24 +491,15 @@ export function OfficerDashboard() {
                 </button>
               </div>
             )}
+            </div>
           </div>
-
-          {/* Right — notification bell */}
-          <button className="relative w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center hover:bg-gray-200 transition-colors">
-            <Bell className="w-5 h-5 text-gray-600" />
-            {stats.open > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center">
-                <span className="text-[8px] font-bold text-white">{stats.open}</span>
-              </span>
-            )}
-          </button>
         </div>
       </div>
 
       {/* ── Scrollable Content ──────────────────────────── */}
       <div className="flex-1 overflow-y-auto">
         {/* ── DASHBOARD TAB ─────────────────────────────────── */}
-        {activeTab === "dashboard" && (
+        {false && (
           <div className="pb-24">
             {/* Hero banner */}
             <div className="mx-4 mt-4 bg-gradient-to-r from-amber-500 to-amber-600 rounded-2xl p-5 shadow-lg shadow-amber-500/20 relative overflow-hidden">
@@ -609,8 +646,8 @@ export function OfficerDashboard() {
         {/* ── REQUESTS TAB ────────────────────────────── */}
         {activeTab === "requests" && (
           <div className="p-4 space-y-4 pb-24">
-            <div className="flex gap-2">
-              <div className="relative flex-1">
+            <div className="space-y-3">
+              <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                 <input
                   type="text"
@@ -620,16 +657,19 @@ export function OfficerDashboard() {
                   className="w-full pl-9 pr-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
                 />
               </div>
-              <select
-                value={reqStatusFilter}
-                onChange={(e) => setReqStatusFilter(e.target.value)}
-                className="px-3 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-              >
-                <option value="all">All</option>
-                <option value="pending">Pending</option>
-                <option value="completed">Completed</option>
-                <option value="cancelled">Cancelled</option>
-              </select>
+              <div className="flex gap-1 rounded-xl bg-gray-100 p-1">
+                {["pending", "completed", "cancelled", "all"].map((filter) => (
+                  <button
+                    key={filter}
+                    onClick={() => setReqStatusFilter(filter)}
+                    className={`flex-1 rounded-lg py-2 text-[11px] font-semibold capitalize transition-colors ${
+                      reqStatusFilter === filter ? "bg-white text-amber-600 shadow-sm" : "text-gray-500"
+                    }`}
+                  >
+                    {filter}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="space-y-2.5">
@@ -747,7 +787,7 @@ export function OfficerDashboard() {
         {activeTab === "log" && (
           <div className="pb-24">
             {/* Sub-tab pills */}
-            <div className="px-4 pt-4 pb-3">
+            <div className="hidden px-4 pt-4 pb-3">
               <div className="flex gap-1 bg-gray-100 p-1 rounded-xl">
                 <button
                   onClick={() => setLogSubTab("requests")}
@@ -867,24 +907,39 @@ export function OfficerDashboard() {
 
             {/* ── Reports sub-tab ── */}
             {logSubTab === "reports" && (
-              <div className="px-4 space-y-2.5">
+              <div className="space-y-2.5 px-4 pt-4">
+                <div className="flex gap-1 overflow-x-auto rounded-xl bg-gray-100 p-1">
+                  {["all", "open", "reviewed", "resolved", "dismissed"].map((filter) => (
+                    <button
+                      key={filter}
+                      onClick={() => setViolationFilter(filter)}
+                      className={`min-w-fit flex-1 rounded-lg px-3 py-2 text-[11px] font-semibold capitalize transition-colors ${
+                        violationFilter === filter ? "bg-white text-amber-600 shadow-sm" : "text-gray-500"
+                      }`}
+                    >
+                      {filter}
+                    </button>
+                  ))}
+                </div>
                 {violationsLoading ? (
                   <div className="text-center py-16">
                     <div className="w-7 h-7 border-2 border-gray-200 border-t-amber-500 rounded-full animate-spin mx-auto mb-3" />
                     <p className="text-sm text-gray-400">Loading reports…</p>
                   </div>
-                ) : violations.length === 0 ? (
+                ) : filteredViolations.length === 0 ? (
                   <div className="text-center py-16">
                     <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                       <AlertTriangle className="w-8 h-8 text-gray-400" />
                     </div>
-                    <p className="text-sm font-medium text-gray-900 mb-1">No reports yet</p>
+                    <p className="text-sm font-medium text-gray-900 mb-1">
+                      {violationFilter === "all" ? "No reports yet" : `No ${violationFilter} violations`}
+                    </p>
                     <p className="text-xs text-gray-500">
                       Violation reports you file will appear here
                     </p>
                   </div>
                 ) : (
-                  violations
+                  filteredViolations
                     .slice()
                     .reverse()
                     .map((v) => {
@@ -1007,17 +1062,66 @@ export function OfficerDashboard() {
           </div>
         )}
 
+        {/* Expo parity: officers receive the same administration notices as
+            vendors, presented as a first-class mobile-web tab. */}
+        {activeTab === "notices" && (
+          <div className="p-4 pb-24">
+            {announcementsLoading ? (
+              <div className="py-16 text-center">
+                <div className="mx-auto mb-3 h-7 w-7 animate-spin rounded-full border-2 border-gray-200 border-t-amber-500" />
+                <p className="text-sm text-gray-400">Loading notices…</p>
+              </div>
+            ) : announcementsError ? (
+              <div className="rounded-2xl border border-red-100 bg-white px-5 py-12 text-center shadow-sm">
+                <Megaphone className="mx-auto mb-3 h-8 w-8 text-red-300" />
+                <p className="text-sm font-semibold text-gray-700">Could not load notices</p>
+                <p className="mt-1.5 text-xs text-gray-400">{announcementsError}</p>
+                <button
+                  type="button"
+                  onClick={() => void refetchAnnouncements()}
+                  className="mt-4 rounded-lg bg-amber-500 px-4 py-2 text-xs font-semibold text-white"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : announcements.length === 0 ? (
+              <div className="rounded-2xl border border-gray-200 bg-white px-5 py-12 text-center shadow-sm">
+                <Megaphone className="mx-auto mb-3 h-8 w-8 text-gray-300" />
+                <p className="text-sm font-semibold text-gray-700">No notices yet</p>
+                <p className="mt-1.5 text-xs text-gray-400">Announcements from the market office will appear here.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {announcements.map((announcement) => {
+                  const style = ANNOUNCEMENT_STYLES[announcement.type] ?? ANNOUNCEMENT_STYLES.info;
+                  return (
+                    <article key={announcement.id} className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+                      <div className="flex">
+                        <div className={`w-1 ${style.bar}`} />
+                        <div className="min-w-0 flex-1 p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <h3 className="min-w-0 flex-1 text-sm font-semibold text-gray-900">{announcement.title}</h3>
+                            <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${style.badge}`}>
+                              {style.label}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-xs leading-5 text-gray-600">{announcement.message}</p>
+                          <p className="mt-3 text-[11px] text-gray-400">
+                            {announcement.author} · {new Date(announcement.createdAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ── RECEIPTS TAB ──────────────────────────────────── */}
         {activeTab === "receipts" && (
           <div className="p-4 space-y-4 pb-24">
-            <div>
-              <h2 className="text-lg font-bold text-gray-900">Payment Receipts</h2>
-              <p className="text-xs text-gray-500 mt-0.5">
-                Submit proof of payment for a vendor who needs help (elderly or unfamiliar with the
-                app).
-              </p>
-            </div>
-
             <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 space-y-3">
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1.5">Stall *</label>
@@ -1191,6 +1295,72 @@ export function OfficerDashboard() {
       {/* ── Bottom Nav Bar ──────────────────────────────── */}
       <div className="flex-shrink-0 bg-white border-t border-gray-200 shadow-[0_-4px_12px_rgba(0,0,0,0.05)]">
         <div className="flex pb-safe">
+          <button
+            onClick={() => {
+              setLogSubTab("reports");
+              switchTab("log");
+            }}
+            className={`relative flex-1 flex flex-col items-center gap-1 py-3 transition-colors ${
+              activeTab === "log" && logSubTab === "reports" ? "text-amber-500" : "text-gray-400"
+            }`}
+          >
+            <AlertTriangle className="h-5 w-5" />
+            {stats.open > 0 && (
+              <span className="absolute top-2 right-[calc(50%-11px)] flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[8px] font-bold text-white">
+                {stats.open}
+              </span>
+            )}
+            <span className="text-[9px] font-medium">Violations</span>
+          </button>
+          <button
+            onClick={() => switchTab("requests")}
+            className={`relative flex-1 flex flex-col items-center gap-1 py-3 transition-colors ${
+              activeTab === "requests" ? "text-amber-500" : "text-gray-400"
+            }`}
+          >
+            <ClipboardList className="h-5 w-5" />
+            {checkRequests.filter((request) => request.status === "pending").length > 0 && (
+              <span className="absolute top-2 right-[calc(50%-11px)] flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[8px] font-bold text-white">
+                {checkRequests.filter((request) => request.status === "pending").length}
+              </span>
+            )}
+            <span className="text-[9px] font-medium">Checks</span>
+          </button>
+          <button
+            onClick={() => switchTab("map")}
+            className={`flex-1 flex flex-col items-center gap-1 py-3 transition-colors ${
+              activeTab === "map" ? "text-amber-500" : "text-gray-400"
+            }`}
+          >
+            <Map className="h-5 w-5" />
+            <span className="text-[9px] font-medium">Map</span>
+          </button>
+          <button
+            onClick={() => switchTab("receipts")}
+            className={`flex-1 flex flex-col items-center gap-1 py-3 transition-colors ${
+              activeTab === "receipts" ? "text-amber-500" : "text-gray-400"
+            }`}
+          >
+            <ReceiptIcon className="h-5 w-5" />
+            <span className="text-[9px] font-medium">Receipts</span>
+          </button>
+          <button
+            onClick={() => switchTab("notices")}
+            className={`relative flex-1 flex flex-col items-center gap-1 py-3 transition-colors ${
+              activeTab === "notices" ? "text-amber-500" : "text-gray-400"
+            }`}
+          >
+            <Megaphone className="h-5 w-5" />
+            {unreadNotices > 0 && (
+              <span className="absolute top-2 right-[calc(50%-11px)] flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[8px] font-bold text-white">
+                {unreadNotices}
+              </span>
+            )}
+            <span className="text-[9px] font-medium">Notices</span>
+          </button>
+        </div>
+
+        <div className="hidden pb-safe">
           <button
             onClick={() => switchTab("dashboard")}
             className={`flex-1 flex flex-col items-center gap-1 py-3 transition-colors ${
@@ -1722,9 +1892,10 @@ export function OfficerDashboard() {
                     if (activeRequest.requestSource === "violation") {
                       await completeViolationRequest(completeModal);
                     }
-                    const s = getSession();
-                    if (s) {
-                      setCheckRequests(await loadOfficerCheckRequests(s.userId, s.name));
+                    if (session) {
+                      setCheckRequests(
+                        await loadOfficerCheckRequests(session.userId, session.name),
+                      );
                     }
                     setCompleteModal(null);
                     setCompleteSummary("");
