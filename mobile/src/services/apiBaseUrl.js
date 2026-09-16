@@ -13,6 +13,8 @@ import { Platform } from "react-native";
 // EXPO_PUBLIC_API_BASE_URL, which is where the real deployed API URL belongs.
 
 const API_PORT = 4000;
+const DEFAULT_CLOUD_API_BASE_URL =
+  "https://mkdkcrjtndqguambmduh.supabase.co/functions/v1/api";
 
 function hostFromExpo() {
   // hostUri looks like "192.168.1.8:8081" (device) or "localhost:8081" (web).
@@ -44,6 +46,11 @@ function apiUrlFromBrowser() {
 export function resolveApiBaseUrl() {
   const explicit = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
 
+  // An explicit address always wins, including in development. This makes it
+  // possible to test the exact cloud path used by an installed APK without a
+  // local API process running.
+  if (explicit) return explicit.replace(/\/$/, "");
+
   // Development: follow whatever host Expo is being served from.
   if (__DEV__) {
     const browserUrl = apiUrlFromBrowser();
@@ -53,8 +60,7 @@ export function resolveApiBaseUrl() {
     if (host) return `http://${host}:${API_PORT}/api`;
   }
 
-  // Production build, or Expo could not tell us the host.
-  if (explicit) return explicit.replace(/\/$/, "");
-
-  return null;
+  // Production builds have no Metro host. Use the permanent Edge API so the
+  // installed app never depends on a development computer being online.
+  return DEFAULT_CLOUD_API_BASE_URL;
 }

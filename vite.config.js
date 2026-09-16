@@ -32,16 +32,14 @@ export default defineConfig({
 
   // Bind to all network interfaces so other devices on the LAN can reach
   // the dev server (e.g. http://<your-machine-ip>:5173). Port is fixed
-  // (not auto-bumped) so the tunnel script always targets the right port.
+  // (not auto-bumped) so local development uses a predictable address.
   // API calls are proxied to the backend so only this one port needs to be
-  // exposed (LAN or via the dev:tunnel script) — no CORS or second tunnel needed.
+  // used by clients configured with VITE_API_BASE_URL=/api.
   server: {
     host: true,
     port: 5173,
     strictPort: true,
-    // The Cloudflare quick tunnel (dev:tunnel script) fronts this server with a
-    // random *.trycloudflare.com host each run, which Vite's Host-header check
-    // would otherwise reject as an unrecognized host.
+    // Retained for the existing VS Code port-forwarding workflow.
     allowedHosts: true,
     proxy: {
       "/api": {

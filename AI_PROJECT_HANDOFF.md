@@ -2,6 +2,16 @@
 
 Reviewed: September 10, 2026.
 
+September 16 update: Cloudflare launcher integration has been removed. Root
+`npm run dev` starts web and API only; server `npm run dev` runs Node with watch.
+The Supabase Auth identity mapping, 40 legacy Auth accounts, and the cloud Edge
+API are now deployed. Mobile production defaults to that API, so it no longer
+requires a local Node process. A signed replacement preview APK was built on
+EAS and downloaded under `mobile/builds/`. The direct Data API/RLS cutover
+remains incomplete. See
+[CLOUD_MIGRATION_AUDIT.md](CLOUD_MIGRATION_AUDIT.md) for dependencies and blockers.
+This update supersedes the historical tunnel descriptions below.
+
 ## Read this first
 
 PubMark manages a public market in Murcia, Negros Occidental. It has a React web application, an Express API using PostgreSQL, an Expo mobile application, and a separate browser-only stall-map editor.

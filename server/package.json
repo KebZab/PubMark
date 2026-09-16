@@ -3,9 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node start-with-tunnel.js",
+    "dev": "node --watch src/index.js",
     "dev:no-tunnel": "node --watch src/index.js",
     "start": "node src/index.js",
+    "migrate:auth": "node scripts/migrate-profiles-to-supabase-auth.mjs",
     "seed": "node seed-demo-users.js"
   },
   "dependencies": {
