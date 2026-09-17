@@ -17,3 +17,5 @@ dist/
 web-build/
 dist-web/
 .expo/
+
+.vercel
