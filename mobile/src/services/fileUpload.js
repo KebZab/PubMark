@@ -34,15 +34,21 @@ export function formatFileSize(bytes) {
 }
 
 // Pickers do not always report a MIME type, so fall back to the extension.
-function guessMimeType(name, provided) {
-  const given = String(provided || "").toLowerCase();
-  if (ACCEPTED_MIME_TYPES.includes(given)) return given;
-  const ext = String(name || "").toLowerCase().split(".").pop();
+// iOS can label a HEIC camera asset as image/jpeg while retaining its .HEIC
+// filename, so HEIC/HEIF extensions deliberately take precedence.
+function guessMimeType(name, provided, uri, originalFileName) {
+  const extension = [name, originalFileName, uri]
+    .map((value) => String(value || "").toLowerCase().match(/\.([a-z0-9]+)(?:[?#].*)?$/)?.[1])
+    .find(Boolean);
   const byExtension = {
     jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png",
     webp: "image/webp", heic: "image/heic", heif: "image/heif", pdf: "application/pdf",
   };
-  return byExtension[ext] || given || "application/octet-stream";
+  const extensionType = byExtension[extension];
+  if (extensionType === "image/heic" || extensionType === "image/heif") return extensionType;
+  const given = String(provided || "").toLowerCase();
+  if (ACCEPTED_MIME_TYPES.includes(given)) return given;
+  return extensionType || given || "application/octet-stream";
 }
 
 /**
@@ -96,9 +102,9 @@ export async function readAssetForUpload(asset) {
   if (!asset?.uri && !asset?.base64) throw new Error("That file could not be read.");
 
   const name = asset.name || asset.fileName || `attachment-${Date.now()}.jpg`;
-  const type = guessMimeType(name, asset.mimeType || asset.type);
+  const type = guessMimeType(name, asset.mimeType || asset.type, asset.uri, asset.fileName);
   if (!ACCEPTED_MIME_TYPES.includes(type)) {
-    throw new Error(`"${name}" is not an accepted file type. Attach a JPEG, PNG, WebP or HEIC image, or a PDF.`);
+    throw new Error(`"${name}" is not an accepted file type. Attach a JPEG, PNG, WebP, HEIC or HEIF image, or a PDF.`);
   }
 
   let size = Number(asset.size ?? asset.fileSize) || 0;

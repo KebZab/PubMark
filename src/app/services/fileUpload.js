@@ -22,8 +22,34 @@ export const ACCEPTED_MIME_TYPES = [
   "application/pdf",
 ];
 
+const MIME_BY_EXTENSION = {
+  heic: "image/heic",
+  heif: "image/heif",
+};
+
 /** Value for an <input type="file"> accept attribute. */
-export const FILE_ACCEPT_ATTRIBUTE = ACCEPTED_MIME_TYPES.join(",");
+export const FILE_ACCEPT_ATTRIBUTE = [...ACCEPTED_MIME_TYPES, ".heic", ".heif"].join(",");
+
+/** Image-only value for pickers such as stall photos. */
+export const IMAGE_ACCEPT_ATTRIBUTE = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+  ".heic",
+  ".heif",
+].join(",");
+
+// Safari and iOS file pickers occasionally omit File.type for HEIC/HEIF
+// photos. The extension is an intentional fallback; the server repeats the
+// same allowlist and size check before a file reaches private Storage.
+function acceptedMimeTypeFor(file) {
+  const declared = String(file?.type || "").trim().toLowerCase();
+  if (ACCEPTED_MIME_TYPES.includes(declared)) return declared;
+  const extension = String(file?.name || "").toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  return MIME_BY_EXTENSION[extension] || declared;
+}
 
 export function formatFileSize(bytes) {
   const value = Number(bytes) || 0;
@@ -38,9 +64,9 @@ export function formatFileSize(bytes) {
  */
 export function describeFileProblem(file) {
   if (!file) return "No file selected.";
-  const type = file.type || "";
+  const type = acceptedMimeTypeFor(file);
   if (!ACCEPTED_MIME_TYPES.includes(type)) {
-    return `"${file.name}" is not an accepted file type. Upload a JPEG, PNG, WebP or HEIC image, or a PDF.`;
+    return `"${file.name}" is not an accepted file type. Upload a JPEG, PNG, WebP, HEIC or HEIF image, or a PDF.`;
   }
   if (file.size > MAX_ATTACHMENT_BYTES) {
     return `"${file.name}" is ${formatFileSize(file.size)}. The limit is ${formatFileSize(MAX_ATTACHMENT_BYTES)} per file.`;
@@ -66,9 +92,9 @@ function fileToBase64(file) {
 export async function readFileForUpload(file) {
   if (!file) throw new Error("No file selected.");
 
-  const type = file.type || "application/octet-stream";
+  const type = acceptedMimeTypeFor(file) || "application/octet-stream";
   if (!ACCEPTED_MIME_TYPES.includes(type)) {
-    throw new Error(`"${file.name}" is not an accepted file type. Upload a JPEG, PNG, WebP or HEIC image, or a PDF.`);
+    throw new Error(`"${file.name}" is not an accepted file type. Upload a JPEG, PNG, WebP, HEIC or HEIF image, or a PDF.`);
   }
   if (file.size > MAX_ATTACHMENT_BYTES) {
     throw new Error(
@@ -97,17 +123,18 @@ export async function uploadFileDirect(file, purpose) {
   if (!file) throw new Error("No file selected.");
   const problem = describeFileProblem(file);
   if (problem) throw new Error(problem);
+  const mimeType = acceptedMimeTypeFor(file);
 
   const { signedUrl, path } = await signUpload({
     purpose,
     fileName: file.name,
-    mimeType: file.type,
+    mimeType,
     fileSize: file.size,
   });
 
   const response = await fetch(signedUrl, {
     method: "PUT",
-    headers: { "Content-Type": file.type },
+    headers: { "Content-Type": mimeType },
     body: file,
   });
   if (!response.ok) {
@@ -117,10 +144,10 @@ export async function uploadFileDirect(file, purpose) {
   return {
     path,
     fileName: file.name,
-    mimeType: file.type,
+    mimeType,
     fileSize: file.size,
     name: file.name,
-    type: file.type,
+    type: mimeType,
     // Local-only preview so the picker can show a thumbnail before saving —
     // never sent to the server, which only ever sees `path`.
     previewUrl: URL.createObjectURL(file),

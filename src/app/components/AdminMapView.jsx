@@ -43,11 +43,11 @@ import {
 import { showToast } from "./Toast";
 import { AttachmentLink } from "./AttachmentLink";
 import { ImageViewerModal } from "./ImageViewerModal";
-import { uploadFileDirect, describeFileProblem, MAX_ATTACHMENT_BYTES, formatFileSize } from "../services/fileUpload";
+import { uploadFileDirect, describeFileProblem, MAX_ATTACHMENT_BYTES, formatFileSize, IMAGE_ACCEPT_ATTRIBUTE } from "../services/fileUpload";
 
 // Stall photos only — a PDF wouldn't make sense as a photo of the stall,
 // even though the shared attachment allowlist also accepts one.
-const STALL_IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/heic,image/heif";
+const STALL_IMAGE_ACCEPT = IMAGE_ACCEPT_ATTRIBUTE;
 
 // Every active (non-rejected) application on a stall, oldest first. A stall
 // stays open to further applications until one is approved, so more than one

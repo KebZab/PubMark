@@ -42,6 +42,10 @@ const SIGNED_URL_TTL_SECONDS = 600;
 const ALLOWED_ATTACHMENT_MIME = new Set([
   "image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "application/pdf",
 ]);
+const ATTACHMENT_MIME_BY_EXTENSION = {
+  heic: "image/heic",
+  heif: "image/heif",
+};
 // Marks rows recorded before real uploads existed: a file name with no file.
 const VIRTUAL_PATH_PREFIX = "virtual://";
 
@@ -136,6 +140,16 @@ function sanitizeFileName(name) {
   return (cleaned || "attachment").slice(0, 120);
 }
 
+// iOS/Safari can supply an empty or generic MIME type for a .HEIC/.HEIF
+// image. This fallback is limited to the same allowlist and is repeated here
+// rather than trusting browser or Expo validation alone.
+function attachmentMimeType(name, suppliedType) {
+  const mimeType = String(suppliedType || "").trim().toLowerCase();
+  if (ALLOWED_ATTACHMENT_MIME.has(mimeType)) return mimeType;
+  const extension = String(name || "").toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  return ATTACHMENT_MIME_BY_EXTENSION[extension] || mimeType;
+}
+
 /**
  * Uploads one base64 attachment and returns its storage path.
  * Size is measured from the decoded bytes, never from a client-supplied
@@ -145,9 +159,9 @@ async function uploadAttachment(prefix, ownerId, file) {
   // The uploader's own mistakes are reported first: telling someone their
   // file is too large is more useful than a server-configuration error they
   // cannot act on.
-  const mimeType = String(file?.type || "").toLowerCase();
+  const mimeType = attachmentMimeType(file?.name, file?.type);
   if (!ALLOWED_ATTACHMENT_MIME.has(mimeType)) {
-    throw new AttachmentError(`"${file?.name || "file"}" is not an accepted file type. Upload a JPEG, PNG, WebP, HEIC image or a PDF.`);
+    throw new AttachmentError(`"${file?.name || "file"}" is not an accepted file type. Upload a JPEG, PNG, WebP, HEIC or HEIF image, or a PDF.`);
   }
   const buffer = Buffer.from(String(file?.base64 || ""), "base64");
   if (buffer.length === 0) throw new AttachmentError("The uploaded file is empty.");
@@ -2096,13 +2110,13 @@ app.post("/api/uploads/sign", requireAuth, async (req, res, next) => {
   try {
     const purpose = String(req.body.purpose || "");
     const fileName = String(req.body.fileName || "").trim();
-    const mimeType = String(req.body.mimeType || "").toLowerCase();
+    const mimeType = attachmentMimeType(fileName, req.body.mimeType);
     const fileSize = Number(req.body.fileSize) || 0;
     if (!UPLOAD_PURPOSES.has(purpose)) return res.status(400).json({ message: "Invalid upload purpose." });
     if (!canSignUploadFor(req.auth.role, purpose)) return res.status(403).json({ message: "You cannot upload this type of file." });
     if (!fileName) return res.status(400).json({ message: "A file name is required." });
     if (!ALLOWED_ATTACHMENT_MIME.has(mimeType)) {
-      return res.status(400).json({ message: `"${fileName}" is not an accepted file type. Upload a JPEG, PNG, WebP, HEIC image or a PDF.` });
+      return res.status(400).json({ message: `"${fileName}" is not an accepted file type. Upload a JPEG, PNG, WebP, HEIC or HEIF image, or a PDF.` });
     }
     if (fileSize <= 0 || fileSize > MAX_ATTACHMENT_BYTES) {
       return res.status(400).json({ message: `"${fileName}" must be under ${humanSize(MAX_ATTACHMENT_BYTES)}.` });
