@@ -12,6 +12,7 @@ import { showToast } from "./Toast";
 import { useMapFacilities } from "../hooks/useMapFacilities";
 import { MapFacilitiesLayer, MapFacilitiesLegend, stallFloaterHtml } from "./MapFacilitiesLayer";
 import { registerMapFloater } from "./mapFloaterDeclutter";
+import { NotifyVendorChoice } from "./NotifyVendorChoice";
 
 // The one application that represents a stall's current state: the approved
 // tenant if there is one, otherwise whoever applied first — matches how
@@ -105,6 +106,8 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
   const [reason, setReason] = useState("");
   const [customReason, setCustomReason] = useState("");
   const [notes, setNotes] = useState("");
+  const [notifyVendor, setNotifyVendor] = useState(null);
+  const [vendorNoticeMessage, setVendorNoticeMessage] = useState("");
   const [assignedOfficer, setAssignedOfficer] = useState("");
   const [officers, setOfficers] = useState([]);
   const [submitting, setSubmitting] = useState(false);
@@ -140,6 +143,8 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
     setReason("");
     setCustomReason("");
     setNotes("");
+    setNotifyVendor(null);
+    setVendorNoticeMessage("");
     setPriority("normal");
     setAssignedOfficer(officers[0]?.id ?? "");
     setSubmitting(false);
@@ -157,6 +162,10 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
       );
       return;
     }
+    if (notifyVendor === null) {
+      showToast("Choose whether to notify the vendor.", "error");
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -170,6 +179,8 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
         priority,
         reason: finalReason,
         notes: notes.trim(),
+        notifyVendor,
+        vendorNoticeMessage,
         status: "pending",
         completionNotes: "",
       });
@@ -352,6 +363,15 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
                   className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
                 />
               </div>
+
+              <NotifyVendorChoice
+                notifyVendor={notifyVendor}
+                vendorNoticeMessage={vendorNoticeMessage}
+                onChange={(patch) => {
+                  if (patch.notifyVendor !== undefined) setNotifyVendor(patch.notifyVendor);
+                  if (patch.vendorNoticeMessage !== undefined) setVendorNoticeMessage(patch.vendorNoticeMessage);
+                }}
+              />
             </div>
 
             <div className="px-6 py-4 border-t border-gray-100 flex gap-3">
@@ -367,7 +387,7 @@ export function AdminCheckRequestMap({ userId, userName, onRequestCreated }) {
               </button>
               <button
                 onClick={handleSubmit}
-                disabled={submitting}
+                disabled={submitting || notifyVendor === null}
                 className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {submitting ? (

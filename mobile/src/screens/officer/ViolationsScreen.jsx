@@ -22,6 +22,7 @@ import { useStalls } from "../../hooks/useStalls";
 import { useApplications } from "../../hooks/useApplications";
 import { createViolation, getViolations } from "../../services/api";
 import { Attachments, Card, EmptyState, ErrorState, LoadingState, OfficerHeader, buttonShadow, formatDate } from "../../components/ui";
+import NotifyVendorChoice from "../../components/NotifyVendorChoice";
 
 // Same eight categories the web officer dashboard offers.
 const CATEGORIES = [
@@ -65,6 +66,8 @@ export default function ViolationsScreen() {
   const STALL_PAGE_SIZE = 5;
   const [stallPage, setStallPage] = useState(1);
   const [category, setCategory] = useState("Health Violation");
+  const [notifyVendor, setNotifyVendor] = useState(null);
+  const [vendorNoticeMessage, setVendorNoticeMessage] = useState("");
   const [description, setDescription] = useState("");
   const [evidence, setEvidence] = useState([]);
   const [submitting, setSubmitting] = useState(false);
@@ -153,6 +156,8 @@ export default function ViolationsScreen() {
     setStallSearch("");
     setStallPage(1);
     setCategory("Health Violation");
+    setNotifyVendor(null);
+    setVendorNoticeMessage("");
     setDescription("");
     setEvidence([]);
     setFormError("");
@@ -167,12 +172,18 @@ export default function ViolationsScreen() {
       setFormError("Describe what you observed.");
       return;
     }
+    if (notifyVendor === null) {
+      setFormError("Choose Yes or No for notifying the vendor.");
+      return;
+    }
     setFormError("");
     setSubmitting(true);
     try {
       await createViolation({
         stallId,
         category,
+        notifyVendor,
+        vendorNoticeMessage,
         description: description.trim(),
         // Whole object, so the photo contents reach the server.
         evidence,
@@ -195,7 +206,10 @@ export default function ViolationsScreen() {
         subtitle={`${openCount} open · ${violations.length} total`}
         right={
           <Pressable
-            onPress={() => setReportOpen(true)}
+            onPress={() => {
+              resetForm();
+              setReportOpen(true);
+            }}
             className="flex-row items-center rounded-xl bg-amber-500 px-3 py-2.5"
           >
             <Ionicons name="add" size={16} color="#ffffff" />
@@ -452,6 +466,17 @@ export default function ViolationsScreen() {
                 textAlignVertical="top"
               />
             </Card>
+
+            <NotifyVendorChoice
+              notifyVendor={notifyVendor}
+              vendorNoticeMessage={vendorNoticeMessage}
+              onChange={(patch) => {
+                if (patch.notifyVendor !== undefined) setNotifyVendor(patch.notifyVendor);
+                if (patch.vendorNoticeMessage !== undefined) setVendorNoticeMessage(patch.vendorNoticeMessage);
+                setFormError("");
+              }}
+              disabled={submitting}
+            />
 
             <Card className="mt-4 p-4">
               <Text className="mb-1 text-sm font-medium text-gray-700">Photo evidence</Text>

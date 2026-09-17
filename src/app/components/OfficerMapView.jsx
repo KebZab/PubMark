@@ -12,6 +12,7 @@ import { ImageViewerModal } from "./ImageViewerModal";
 import { useMapFacilities } from "../hooks/useMapFacilities";
 import { MapFacilitiesLayer, MapFacilitiesLegend, stallFloaterHtml } from "./MapFacilitiesLayer";
 import { registerMapFloater } from "./mapFloaterDeclutter";
+import { NotifyVendorChoice } from "./NotifyVendorChoice";
 import {
   describeFileProblem,
   readFileForUpload,
@@ -122,6 +123,8 @@ export function OfficerMapView({ officerId, officerName }) {
   const [form, setForm] = useState({
     vendorName: "",
     category: "Health Violation",
+    notifyVendor: null,
+    vendorNoticeMessage: "",
     description: "",
     remarks: "",
   });
@@ -143,12 +146,21 @@ export function OfficerMapView({ officerId, officerName }) {
   );
 
   function handleReportViolation() {
+    setForm((current) => ({
+      ...current,
+      notifyVendor: null,
+      vendorNoticeMessage: "",
+    }));
     setShowReportModal(true);
   }
 
   async function handleSubmitViolation() {
     if (!selectedStallId || !form.description.trim()) {
       showToast("Please fill in all required fields.", "error");
+      return;
+    }
+    if (form.notifyVendor === null) {
+      showToast("Please choose Yes or No for notifying the vendor.", "error");
       return;
     }
     const stall = stalls.find((s) => s.id === selectedStallId);
@@ -160,6 +172,8 @@ export function OfficerMapView({ officerId, officerName }) {
         officerId,
         officerName,
         category: form.category,
+        notifyVendor: form.notifyVendor,
+        vendorNoticeMessage: form.vendorNoticeMessage,
         description: form.description,
         status: "open",
         evidence,
@@ -168,7 +182,14 @@ export function OfficerMapView({ officerId, officerName }) {
       showToast("Violation reported successfully.", "success");
       setShowReportModal(false);
       setSelectedStallId(null);
-      setForm({ vendorName: "", category: "Health Violation", description: "", remarks: "" });
+      setForm({
+        vendorName: "",
+        category: "Health Violation",
+        notifyVendor: null,
+        vendorNoticeMessage: "",
+        description: "",
+        remarks: "",
+      });
       setEvidence([]);
     } catch (error) {
       showToast(`Failed to report violation: ${error.message}`, "error");
@@ -380,6 +401,11 @@ export function OfficerMapView({ officerId, officerName }) {
                   className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none"
                 />
               </div>
+              <NotifyVendorChoice
+                notifyVendor={form.notifyVendor}
+                vendorNoticeMessage={form.vendorNoticeMessage}
+                onChange={(patch) => setForm((current) => ({ ...current, ...patch }))}
+              />
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1.5">
                   Remarks / Notes

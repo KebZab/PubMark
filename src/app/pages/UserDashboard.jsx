@@ -35,7 +35,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
-import { useAnnouncements } from "../hooks/useAnnouncements";
+import { useNotices } from "../hooks/useNotices";
 import { useNoticesBadge } from "../hooks/useNoticesBadge";
 import { useMapFacilities } from "../hooks/useMapFacilities";
 import { MapFacilitiesLayer, stallFloaterHtml } from "../components/MapFacilitiesLayer";
@@ -285,11 +285,11 @@ export function UserDashboard() {
   const session = profile ? { ...profile, userId: profile.id } : null;
   const [activeTab, setActiveTab] = useState("home");
   const {
-    announcements,
+    notices: announcements,
     loading: announcementsLoading,
     error: announcementsError,
     refetch: refetchAnnouncements,
-  } = useAnnouncements();
+  } = useNotices();
   const { unreadCount: unreadAnnouncements, markSeen: markNoticesSeen } = useNoticesBadge();
   const { applications } = useApplications();
   useStalls();
@@ -400,7 +400,7 @@ export function UserDashboard() {
         ? `${pendingIncomingTransfers.length} offer(s) awaiting your decision`
         : "Stall handovers",
     },
-    announcements: { title: "Notices", subtitle: "Announcements from market administration" },
+    announcements: { title: "Notices", subtitle: "Announcements and private vendor notices" },
     map: { title: "Market Map", subtitle: "Browse available stalls" },
   }[activeTab];
 
@@ -718,12 +718,12 @@ export function UserDashboard() {
               </button>
             </div>
 
-            {/* Recent Announcements */}
+            {/* Recent Notices */}
             <div className="px-4 mt-5">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <Megaphone className="w-4 h-4 text-[#14B8A6]" />
-                  <h2 className="text-sm font-semibold text-gray-800">Recent Announcements</h2>
+                  <h2 className="text-sm font-semibold text-gray-800">Recent Notices</h2>
                 </div>
                 <button
                   onClick={() => switchTab("announcements")}
@@ -735,7 +735,7 @@ export function UserDashboard() {
               {announcements.length === 0 ? (
                 <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
                   <Bell className="w-6 h-6 text-gray-300 mx-auto mb-1" />
-                  <p className="text-xs text-gray-400">No announcements yet</p>
+                  <p className="text-xs text-gray-400">No notices yet</p>
                 </div>
               ) : (
                 <div className="space-y-2.5">
@@ -766,7 +766,9 @@ export function UserDashboard() {
                           </span>
                         </div>
                         <div className="px-4 py-2.5">
-                          <p className="text-xs text-gray-500 line-clamp-2">{item.message}</p>
+                          {item.message ? (
+                            <p className="text-xs text-gray-500 line-clamp-2">{item.message}</p>
+                          ) : null}
                         </div>
                       </div>
                     );
@@ -776,7 +778,7 @@ export function UserDashboard() {
                       onClick={() => switchTab("announcements")}
                       className="w-full py-2 text-xs text-[#14B8A6] font-medium bg-teal-50/60 rounded-xl border border-teal-100 hover:bg-teal-50 transition-colors"
                     >
-                      +{announcements.length - 2} more announcements
+                      +{announcements.length - 2} more notices
                     </button>
                   )}
                 </div>
@@ -1177,8 +1179,8 @@ export function UserDashboard() {
           <div className="p-4 space-y-4 pb-24">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-sm font-semibold text-gray-700">Admin Announcements</h2>
-                <p className="text-xs text-gray-400">{announcements.length} announcements</p>
+                <h2 className="text-sm font-semibold text-gray-700">Notices</h2>
+                <p className="text-xs text-gray-400">{announcements.length} notices</p>
               </div>
               <div className="w-8 h-8 bg-gradient-to-br from-[#14B8A6] to-[#0d9488] rounded-xl flex items-center justify-center shadow-sm">
                 <Megaphone className="w-4 h-4 text-white" />
@@ -1208,8 +1210,8 @@ export function UserDashboard() {
                 <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                   <Bell className="w-8 h-8 text-gray-400" />
                 </div>
-                <p className="text-base font-medium text-gray-900 mb-1">No announcements yet</p>
-                <p className="text-sm text-gray-500">Check back later for updates from admin</p>
+                <p className="text-base font-medium text-gray-900 mb-1">No notices yet</p>
+                <p className="text-sm text-gray-500">Announcements and private notices will appear here</p>
               </div>
             ) : (
               <div className="space-y-3">
@@ -1239,9 +1241,11 @@ export function UserDashboard() {
                           {cfg.label}
                         </span>
                       </div>
-                      <div className="px-4 py-3">
-                        <p className="text-sm text-gray-600 leading-relaxed">{item.message}</p>
-                      </div>
+                      {item.message ? (
+                        <div className="px-4 py-3">
+                          <p className="text-sm text-gray-600 leading-relaxed">{item.message}</p>
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })}

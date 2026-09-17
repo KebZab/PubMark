@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { RefreshControl, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
-import { useAnnouncements } from "../../hooks/useAnnouncements";
+import { useNotices } from "../../hooks/useNotices";
 import { useNoticesBadge } from "../../hooks/useNoticesBadge";
 import { Card, EmptyState, ErrorState, LoadingState, OfficerHeader, formatDate } from "../../components/ui";
 
@@ -21,9 +21,9 @@ const TYPE_STYLES = {
 };
 
 export default function NoticesScreen() {
-  const { data, loading, error, refetch } = useAnnouncements();
+  const { data, loading, error, refetch } = useNotices();
   const { markSeen } = useNoticesBadge();
-  const announcements = data?.announcements ?? [];
+  const announcements = data?.notices ?? [];
 
   useFocusEffect(
     useCallback(() => {

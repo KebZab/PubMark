@@ -57,6 +57,7 @@ export async function apiFetch(path, init = {}) {
     }
     const thrown = new Error(error.message || "Unable to complete the request.");
     thrown.code = error.code;
+    thrown.status = response.status;
     throw thrown;
   }
   return response.json();
@@ -125,6 +126,18 @@ export async function getStallReservations() {
 
 export async function getAnnouncements() {
   return apiFetch("/announcements");
+}
+
+export async function getNotices() {
+  try {
+    return await apiFetch("/notices");
+  } catch (error) {
+    // Preserve the original announcements while the private vendor-notice
+    // endpoint and its migration are not available yet.
+    if (error?.status !== 404 && !(error?.status >= 500)) throw error;
+    const result = await getAnnouncements();
+    return { notices: result.announcements ?? [] };
+  }
 }
 
 // Per-account "last seen" watermarks behind notification badges (e.g. the

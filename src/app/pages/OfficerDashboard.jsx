@@ -33,7 +33,7 @@ import {
 } from "../components/violationRequestStore";
 import { useStalls } from "../hooks/useStalls";
 import { useApplications } from "../hooks/useApplications";
-import { useAnnouncements } from "../hooks/useAnnouncements";
+import { useNotices } from "../hooks/useNotices";
 import { useNoticesBadge } from "../hooks/useNoticesBadge";
 import { useAuth } from "../context/AuthContext";
 import { OfficerMapView } from "../components/OfficerMapView";
@@ -43,6 +43,7 @@ import { getReceipts, submitReceipt } from "../services/receiptsApi";
 import { formatFileSize } from "../components/applicationsStorage";
 import { describeFileProblem, readFileForUpload, FILE_ACCEPT_ATTRIBUTE } from "../services/fileUpload";
 import { AttachmentLink } from "../components/AttachmentLink";
+import { NotifyVendorChoice } from "../components/NotifyVendorChoice";
 
 const CATEGORIES = [
   "Illegal Vending",
@@ -146,11 +147,11 @@ export function OfficerDashboard() {
   const { stalls, loading: stallsLoading } = useStalls();
   const { applications, loading: applicationsLoading } = useApplications();
   const {
-    announcements,
+    notices: announcements,
     loading: announcementsLoading,
     error: announcementsError,
     refetch: refetchAnnouncements,
-  } = useAnnouncements();
+  } = useNotices();
   const { unreadCount: unreadNotices, markSeen: markNoticesSeen } = useNoticesBadge();
   const session = profile ? { ...profile, userId: profile.id } : null;
   const [activeTab, setActiveTab] = useState(
@@ -179,6 +180,8 @@ export function OfficerDashboard() {
     stallId: "",
     vendorName: "",
     category: "Health Violation",
+    notifyVendor: null,
+    vendorNoticeMessage: "",
     description: "",
     remarks: "",
   });
@@ -196,7 +199,12 @@ export function OfficerDashboard() {
 
   // Report violation from a check request
   const [reqViolationModal, setReqViolationModal] = useState(null);
-  const [reqViolationForm, setReqViolationForm] = useState({ category: "Other", description: "" });
+  const [reqViolationForm, setReqViolationForm] = useState({
+    category: "Other",
+    notifyVendor: null,
+    vendorNoticeMessage: "",
+    description: "",
+  });
   const reqViolEvidenceRef = useRef(null);
   const [reqViolEvidence, setReqViolEvidence] = useState([]);
 
@@ -327,6 +335,10 @@ export function OfficerDashboard() {
       showToast("Please fill in all required fields.", "error");
       return;
     }
+    if (newForm.notifyVendor === null) {
+      showToast("Please choose Yes or No for notifying the vendor.", "error");
+      return;
+    }
     const stall = stalls.find((s) => s.id === newForm.stallId);
     try {
       await saveViolation({
@@ -336,6 +348,8 @@ export function OfficerDashboard() {
         officerId: session.userId,
         officerName: session.name,
         category: newForm.category,
+        notifyVendor: newForm.notifyVendor,
+        vendorNoticeMessage: newForm.vendorNoticeMessage,
         description: newForm.description,
         status: "open",
         evidence: newEvidence,
@@ -347,6 +361,8 @@ export function OfficerDashboard() {
         stallId: "",
         vendorName: "",
         category: "Health Violation",
+        notifyVendor: null,
+        vendorNoticeMessage: "",
         description: "",
         remarks: "",
       });
@@ -444,7 +460,14 @@ export function OfficerDashboard() {
           <div className="flex items-center gap-2">
             {activeTab === "log" && (
               <button
-                onClick={() => setShowNewForm(true)}
+                onClick={() => {
+                  setNewForm((current) => ({
+                    ...current,
+                    notifyVendor: null,
+                    vendorNoticeMessage: "",
+                  }));
+                  setShowNewForm(true);
+                }}
                 className="flex h-9 items-center gap-1 rounded-xl bg-amber-500 px-3 text-xs font-semibold text-white"
               >
                 <span className="hidden min-[360px]:inline">Report</span>
@@ -738,6 +761,11 @@ export function OfficerDashboard() {
                         <div className="flex gap-2">
                           <button
                             onClick={() => {
+                              setReqViolationForm((current) => ({
+                                ...current,
+                                notifyVendor: null,
+                                vendorNoticeMessage: "",
+                              }));
                               setReqViolationModal({ stallId: r.stallId, stallName: r.stallName });
                               setReqViolationForm({ category: "Other", description: "" });
                               setReqViolEvidence([]);
@@ -874,6 +902,11 @@ export function OfficerDashboard() {
                           <div className="flex gap-2">
                             <button
                               onClick={() => {
+                                setReqViolationForm((current) => ({
+                                  ...current,
+                                  notifyVendor: null,
+                                  vendorNoticeMessage: "",
+                                }));
                                 setReqViolationModal({
                                   stallId: r.stallId,
                                   stallName: r.stallName,
@@ -1469,6 +1502,11 @@ export function OfficerDashboard() {
                   className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none"
                 />
               </div>
+              <NotifyVendorChoice
+                notifyVendor={reqViolationForm.notifyVendor}
+                vendorNoticeMessage={reqViolationForm.vendorNoticeMessage}
+                onChange={(patch) => setReqViolationForm((current) => ({ ...current, ...patch }))}
+              />
               <div>
                 <input
                   type="file"
@@ -1527,6 +1565,10 @@ export function OfficerDashboard() {
                     showToast("Please describe the violation.", "error");
                     return;
                   }
+                  if (reqViolationForm.notifyVendor === null) {
+                    showToast("Please choose Yes or No for notifying the vendor.", "error");
+                    return;
+                  }
                   try {
                     await saveViolation({
                       stallId: reqViolationModal.stallId,
@@ -1535,6 +1577,8 @@ export function OfficerDashboard() {
                       officerId: session.userId,
                       officerName: session.name,
                       category: reqViolationForm.category,
+                      notifyVendor: reqViolationForm.notifyVendor,
+                      vendorNoticeMessage: reqViolationForm.vendorNoticeMessage,
                       description: reqViolationForm.description,
                       status: "open",
                       evidence: reqViolEvidence,
@@ -1542,7 +1586,12 @@ export function OfficerDashboard() {
                     });
                     setViolations(await getViolations());
                     setReqViolationModal(null);
-                    setReqViolationForm({ category: "Other", description: "" });
+                    setReqViolationForm({
+                      category: "Other",
+                      notifyVendor: null,
+                      vendorNoticeMessage: "",
+                      description: "",
+                    });
                     setReqViolEvidence([]);
                     showToast("Violation reported successfully.", "success");
                   } catch (error) {
@@ -1626,6 +1675,11 @@ export function OfficerDashboard() {
                   className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none"
                 />
               </div>
+              <NotifyVendorChoice
+                notifyVendor={newForm.notifyVendor}
+                vendorNoticeMessage={newForm.vendorNoticeMessage}
+                onChange={(patch) => setNewForm((current) => ({ ...current, ...patch }))}
+              />
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1.5">Evidence</label>
                 <input

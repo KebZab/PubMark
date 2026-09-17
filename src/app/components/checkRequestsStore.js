@@ -14,6 +14,8 @@ export async function saveCheckRequest(data) {
       priority: data.priority,
       reason: data.reason,
       notes: data.notes,
+      notifyVendor: data.notifyVendor,
+      vendorNoticeMessage: data.vendorNoticeMessage,
     }),
   });
   return response.request;

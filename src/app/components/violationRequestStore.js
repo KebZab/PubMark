@@ -13,6 +13,8 @@ export async function createViolationRequest(data) {
       reason: data.reason,
       category: data.category ?? null,
       violationId: data.violationId ?? null,
+      notifyVendor: data.notifyVendor,
+      vendorNoticeMessage: data.vendorNoticeMessage,
     }),
   });
   return response.request;

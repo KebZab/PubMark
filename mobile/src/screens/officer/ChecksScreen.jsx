@@ -21,6 +21,7 @@ import { readAssetForUpload, formatFileSize, DOCUMENT_PICKER_TYPES } from "../..
 import { useApiData } from "../../hooks/useApiData";
 import { getCheckRequests, updateCheckRequest, createViolation } from "../../services/api";
 import { Attachments, Card, EmptyState, ErrorState, LoadingState, OfficerHeader, buttonShadow, formatDate } from "../../components/ui";
+import NotifyVendorChoice from "../../components/NotifyVendorChoice";
 
 const PRIORITY_STYLE = {
   urgent: { bg: "bg-red-100", text: "text-red-700" },
@@ -72,6 +73,8 @@ export default function ChecksScreen() {
   // the request to go find the stall again on the Violations tab.
   const [violationTarget, setViolationTarget] = useState(null);
   const [violationCategory, setViolationCategory] = useState("Health Violation");
+  const [violationNotifyVendor, setViolationNotifyVendor] = useState(null);
+  const [violationVendorMessage, setViolationVendorMessage] = useState("");
   const [violationDescription, setViolationDescription] = useState("");
   const [violationEvidence, setViolationEvidence] = useState([]);
   const [violationSubmitting, setViolationSubmitting] = useState(false);
@@ -149,6 +152,8 @@ export default function ChecksScreen() {
   const openViolationReport = (r) => {
     setViolationTarget(r);
     setViolationCategory("Health Violation");
+    setViolationNotifyVendor(null);
+    setViolationVendorMessage("");
     setViolationDescription("");
     setViolationEvidence([]);
     setViolationError("");
@@ -202,12 +207,18 @@ export default function ChecksScreen() {
       setViolationError("Describe what you observed.");
       return;
     }
+    if (violationNotifyVendor === null) {
+      setViolationError("Choose Yes or No for notifying the vendor.");
+      return;
+    }
     setViolationError("");
     setViolationSubmitting(true);
     try {
       await createViolation({
         stallId: violationTarget.stallId,
         category: violationCategory,
+        notifyVendor: violationNotifyVendor,
+        vendorNoticeMessage: violationVendorMessage,
         description: violationDescription.trim(),
         evidence: violationEvidence,
       });
@@ -533,6 +544,17 @@ export default function ChecksScreen() {
                 textAlignVertical="top"
               />
             </Card>
+
+            <NotifyVendorChoice
+              notifyVendor={violationNotifyVendor}
+              vendorNoticeMessage={violationVendorMessage}
+              onChange={(patch) => {
+                if (patch.notifyVendor !== undefined) setViolationNotifyVendor(patch.notifyVendor);
+                if (patch.vendorNoticeMessage !== undefined) setViolationVendorMessage(patch.vendorNoticeMessage);
+                setViolationError("");
+              }}
+              disabled={violationSubmitting}
+            />
 
             <Card className="mt-4 p-4">
               <Text className="mb-1 text-sm font-medium text-gray-700">Photo evidence</Text>

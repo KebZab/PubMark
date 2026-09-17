@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { RefreshControl, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
-import { useAnnouncements } from "../../hooks/useAnnouncements";
+import { useNotices } from "../../hooks/useNotices";
 import { useNoticesBadge } from "../../hooks/useNoticesBadge";
 import { Card, EmptyState, ErrorState, LoadingState, ScreenHeader, formatDate } from "../../components/ui";
 
@@ -19,9 +19,9 @@ const TYPE_STYLES = {
 };
 
 export default function NoticesScreen() {
-  const { data, loading, error, refetch } = useAnnouncements();
+  const { data, loading, error, refetch } = useNotices();
   const { markSeen } = useNoticesBadge();
-  const announcements = data?.announcements ?? [];
+  const announcements = data?.notices ?? [];
 
   useFocusEffect(
     useCallback(() => {
@@ -33,7 +33,7 @@ export default function NoticesScreen() {
 
   return (
     <SafeAreaView className="flex-1 bg-gray-50" edges={["top"]}>
-      <ScreenHeader title="Notices" subtitle="Announcements from market administration" />
+      <ScreenHeader title="Notices" subtitle="Announcements and private vendor notices" />
 
       <ScrollView
         className="flex-1"
@@ -45,7 +45,7 @@ export default function NoticesScreen() {
         ) : error ? (
           <ErrorState message={error} />
         ) : announcements.length === 0 ? (
-          <EmptyState title="No notices yet" note="Announcements from the market office will appear here." />
+          <EmptyState title="No notices yet" note="Announcements and private notices will appear here." />
         ) : (
           <View className="gap-3 px-4 pt-4">
             {announcements.map((a) => {
@@ -63,7 +63,9 @@ export default function NoticesScreen() {
                           </Text>
                         </View>
                       </View>
-                      <Text className="mt-2 text-xs leading-5 text-gray-600">{a.message}</Text>
+                      {a.message ? (
+                        <Text className="mt-2 text-xs leading-5 text-gray-600">{a.message}</Text>
+                      ) : null}
                       <Text className="mt-3 text-[11px] text-gray-400">
                         {a.author} · {formatDate(a.createdAt)}
                       </Text>

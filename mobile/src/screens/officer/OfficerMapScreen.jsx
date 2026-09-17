@@ -25,6 +25,7 @@ import { readAssetForUpload, formatFileSize, DOCUMENT_PICKER_TYPES } from "../..
 import { Card, ErrorState, LoadingState, OfficerHeader, buttonShadow, iosShadow } from "../../components/ui";
 import StallMap from "../../components/StallMap";
 import ImageViewerModal from "../../components/ImageViewerModal";
+import NotifyVendorChoice from "../../components/NotifyVendorChoice";
 
 const FLOORS = ["1", "2"];
 
@@ -76,6 +77,8 @@ export default function OfficerMapScreen() {
 
   const [reportStall, setReportStall] = useState(null);
   const [category, setCategory] = useState("Health Violation");
+  const [notifyVendor, setNotifyVendor] = useState(null);
+  const [vendorNoticeMessage, setVendorNoticeMessage] = useState("");
   const [description, setDescription] = useState("");
   const [evidence, setEvidence] = useState([]);
   const [submitting, setSubmitting] = useState(false);
@@ -172,6 +175,8 @@ export default function OfficerMapScreen() {
   const openReport = (stall) => {
     setReportStall(stall);
     setCategory("Health Violation");
+    setNotifyVendor(null);
+    setVendorNoticeMessage("");
     setDescription("");
     setEvidence([]);
     setFormError("");
@@ -182,12 +187,18 @@ export default function OfficerMapScreen() {
       setFormError("Describe what you observed.");
       return;
     }
+    if (notifyVendor === null) {
+      setFormError("Choose Yes or No for notifying the vendor.");
+      return;
+    }
     setFormError("");
     setSubmitting(true);
     try {
       await createViolation({
         stallId: reportStall.id,
         category,
+        notifyVendor,
+        vendorNoticeMessage,
         description: description.trim(),
         // Whole object, so the photo contents reach the server.
         evidence,
@@ -391,6 +402,17 @@ export default function OfficerMapScreen() {
                 textAlignVertical="top"
               />
             </Card>
+
+            <NotifyVendorChoice
+              notifyVendor={notifyVendor}
+              vendorNoticeMessage={vendorNoticeMessage}
+              onChange={(patch) => {
+                if (patch.notifyVendor !== undefined) setNotifyVendor(patch.notifyVendor);
+                if (patch.vendorNoticeMessage !== undefined) setVendorNoticeMessage(patch.vendorNoticeMessage);
+                setFormError("");
+              }}
+              disabled={submitting}
+            />
 
             <Card className="mt-4 p-4">
               <Text className="mb-1 text-sm font-medium text-gray-700">Photo evidence</Text>

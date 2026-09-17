@@ -72,6 +72,7 @@ import { showToast } from "../components/Toast";
 import { buildPermitDeadlineRemarks, parsePermitDeadlineMeta } from "../components/permitDeadline";
 import { AttachmentLink } from "../components/AttachmentLink";
 import { FilePreviewLink } from "../components/FilePreviewLink";
+import { NotifyVendorChoice } from "../components/NotifyVendorChoice";
 
 const ROLE_COLORS = {
   super_admin: "bg-purple-100 text-purple-700",
@@ -149,6 +150,8 @@ export function SuperAdminDashboard() {
   const [expandedMapReq, setExpandedMapReq] = useState(null);
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [requestReason, setRequestReason] = useState("");
+  const [requestNotifyVendor, setRequestNotifyVendor] = useState(null);
+  const [requestVendorNoticeMessage, setRequestVendorNoticeMessage] = useState("");
   const [selectedStallForRequest, setSelectedStallForRequest] = useState(null);
   // True when the modal was opened from a specific violation ("Send Req"),
   // which already fixes the stall — the picker only makes sense for the
@@ -792,6 +795,10 @@ export function SuperAdminDashboard() {
       showToast("Please select a stall and provide a reason.", "error");
       return;
     }
+    if (requestNotifyVendor === null) {
+      showToast("Choose whether to notify the vendor.", "error");
+      return;
+    }
     const stall = stalls.find((s) => s.id === selectedStallForRequest);
     if (!stall) return;
     try {
@@ -803,11 +810,15 @@ export function SuperAdminDashboard() {
         reason: requestReason,
         category: requestViolationCategory || null,
         violationId: requestViolationId,
+        notifyVendor: requestNotifyVendor,
+        vendorNoticeMessage: requestVendorNoticeMessage,
       });
       await loadRequestData();
       setShowRequestModal(false);
       setSelectedStallForRequest(null);
       setRequestReason("");
+      setRequestNotifyVendor(null);
+      setRequestVendorNoticeMessage("");
       setRequestStallLocked(false);
       setRequestViolationCategory("");
       setRequestViolationId(null);
@@ -3000,6 +3011,14 @@ export function SuperAdminDashboard() {
                   className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none"
                 />
               </div>
+              <NotifyVendorChoice
+                notifyVendor={requestNotifyVendor}
+                vendorNoticeMessage={requestVendorNoticeMessage}
+                onChange={(patch) => {
+                  if (patch.notifyVendor !== undefined) setRequestNotifyVendor(patch.notifyVendor);
+                  if (patch.vendorNoticeMessage !== undefined) setRequestVendorNoticeMessage(patch.vendorNoticeMessage);
+                }}
+              />
             </div>
             <div className="px-6 py-4 border-t border-gray-100 flex gap-3">
               <button
@@ -3007,6 +3026,8 @@ export function SuperAdminDashboard() {
                   setShowRequestModal(false);
                   setSelectedStallForRequest(null);
                   setRequestReason("");
+                  setRequestNotifyVendor(null);
+                  setRequestVendorNoticeMessage("");
                   setRequestStallLocked(false);
                   setRequestViolationCategory("");
                   setRequestViolationId(null);
@@ -3017,7 +3038,8 @@ export function SuperAdminDashboard() {
               </button>
               <button
                 onClick={handleCreateRequest}
-                className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2"
+                disabled={!selectedStallForRequest || !requestReason.trim() || requestNotifyVendor === null}
+                className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <CheckCircle className="w-4 h-4" />
                 Create Request

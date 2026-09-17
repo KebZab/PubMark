@@ -618,6 +618,8 @@ function mapViolationRow(row, evidenceMap = new Map()) {
     status: row.status,
     evidence: evidenceMap.get(row.id) || [],
     remarks: row.remarks || "",
+    vendorNotifiedAt: row.vendor_notified_at || null,
+    vendorNoticeMessage: row.vendor_notice_message || "",
     createdAt: row.created_at,
     resolvedAt: row.resolved_at,
   };
@@ -661,7 +663,8 @@ async function listViolationsInternal(vendorId = null, { includeArchived = !!ven
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const { rows } = await db.query(`
     SELECT
-      v.id, v.stall_id, v.vendor_id, v.officer_id, v.category, v.description, v.status, v.remarks, v.created_at, v.resolved_at,
+      v.id, v.stall_id, v.vendor_id, v.officer_id, v.category, v.description, v.status, v.remarks,
+      v.vendor_notified_at, v.vendor_notice_message, v.created_at, v.resolved_at,
       s.stall_name,
       vp.name AS vendor_name,
       op.name AS officer_name
@@ -1207,6 +1210,76 @@ app.get("/api/announcements", requireAuth, async (_req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// Role-aware feed used by the web and mobile Notices screens. Broadcast
+// announcements remain visible to every authenticated role. Private violation
+// and inspection-request notices are added only for their captured vendor;
+// internal report/request details never enter this response.
+app.get("/api/notices", requireAuth, async (req, res, next) => {
+  try {
+    const { rows: announcementRows } = await db.query(`
+      SELECT a.id, a.title, a.message, a.type, a.category, a.author_id, a.created_at, p.name AS author_name
+      FROM announcements a
+      LEFT JOIN profiles p ON p.id = a.author_id
+    `);
+    const notices = announcementRows.map((row) => ({
+      ...mapAnnouncementRow(row),
+      id: `announcement:${row.id}`,
+      source: "announcement",
+    }));
+
+    if (req.auth.role === "vendor") {
+      const { rows: violationRows } = await db.query(
+        `SELECT v.id, v.category, v.vendor_notice_message, v.vendor_notified_at,
+                v.officer_id, p.name AS officer_name
+         FROM violations v
+         LEFT JOIN profiles p ON p.id = v.officer_id
+         WHERE v.vendor_id = $1
+           AND v.vendor_notified_at IS NOT NULL`,
+        [req.auth.sub]
+      );
+      for (const row of violationRows) {
+        notices.push({
+          id: `violation:${row.id}`,
+          source: "violation",
+          title: row.category,
+          message: row.vendor_notice_message || "",
+          type: "warning",
+          category: row.category,
+          createdAt: row.vendor_notified_at,
+          author: row.officer_name || "Officer",
+          authorId: row.officer_id,
+        });
+      }
+
+      const { rows: checkRequestRows } = await db.query(
+        `SELECT cr.id, cr.vendor_notice_message, cr.vendor_notified_at,
+                cr.requested_by, p.name AS requested_by_name
+         FROM check_requests cr
+         LEFT JOIN profiles p ON p.id = cr.requested_by
+         WHERE cr.vendor_notified_vendor_id = $1
+           AND cr.vendor_notified_at IS NOT NULL`,
+        [req.auth.sub]
+      );
+      for (const row of checkRequestRows) {
+        notices.push({
+          id: `check-request:${row.id}`,
+          source: "check_request",
+          title: "Officer inspection requested",
+          message: row.vendor_notice_message || "",
+          type: "info",
+          category: "Inspection Request",
+          createdAt: row.vendor_notified_at,
+          author: row.requested_by_name || "Market administration",
+          authorId: row.requested_by,
+        });
+      }
+    }
+
+    notices.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    res.json({ notices });
+  } catch (error) { next(error); }
+});
+
 app.post("/api/announcements", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try {
     const title = String(req.body.title || "").trim();
@@ -1278,6 +1351,21 @@ app.get("/api/check-requests", requireAuth, requireRole("admin", "super_admin", 
   } catch (error) { next(error); }
 });
 
+async function findActiveVendorForStall(stallId) {
+  const { rows } = await db.query(
+    `SELECT a.user_id
+     FROM applications a
+     JOIN profiles p ON p.id = a.user_id
+     WHERE a.stall_id = $1
+       AND a.status = 'approved'
+       AND p.is_archived = false
+     ORDER BY a.date_applied DESC
+     LIMIT 1`,
+    [stallId]
+  );
+  return rows[0]?.user_id ?? null;
+}
+
 app.post("/api/check-requests", requireAuth, requireRole("admin", "super_admin"), async (req, res, next) => {
   try {
     const stallId = String(req.body.stallId || "").trim();
@@ -1291,9 +1379,20 @@ app.post("/api/check-requests", requireAuth, requireRole("admin", "super_admin")
     const completionSummary = String(req.body.completionSummary || "");
     const createdAt = req.body.createdAt ? new Date(req.body.createdAt) : new Date();
     const completedAt = req.body.completedAt ? new Date(req.body.completedAt) : (status === "pending" ? null : new Date());
+    if (req.body.notifyVendor !== undefined && typeof req.body.notifyVendor !== "boolean") {
+      return res.status(400).json({ message: "Notify vendor must be selected." });
+    }
+    const notifyVendor = req.body.notifyVendor === true;
+    const vendorNoticeMessage = notifyVendor
+      ? String(req.body.vendorNoticeMessage || "").trim() || null
+      : null;
     if (!stallId || !reason) return res.status(400).json({ message: "Stall and reason are required." });
     if (!["low", "normal", "high", "urgent"].includes(priority)) return res.status(400).json({ message: "Invalid priority." });
     if (!["pending", "completed", "cancelled"].includes(status)) return res.status(400).json({ message: "Invalid status." });
+    const notifiedVendorId = notifyVendor ? await findActiveVendorForStall(stallId) : null;
+    if (notifyVendor && !notifiedVendorId) {
+      return res.status(409).json({ message: "This stall has no active vendor to notify. Choose the X option to send the request without a vendor notice." });
+    }
 
     const id = crypto.randomUUID();
     const storedFiles = await storeAttachments("checks", id, req.body.completionFiles, req.auth.sub);
@@ -1302,8 +1401,16 @@ app.post("/api/check-requests", requireAuth, requireRole("admin", "super_admin")
     try {
       await conn.query("BEGIN");
       await conn.query(
-        "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
-        [id, stallId, requestedBy, assignedTo, priority, reason, notes || null, status, createdAt, completedAt, completionNotes, completionSummary]
+        `INSERT INTO check_requests
+          (id, stall_id, requested_by, assigned_to, priority, reason, notes, status,
+           vendor_notified_vendor_id, vendor_notified_at, vendor_notice_message,
+           created_at, completed_at, completion_notes, completion_summary)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+        [
+          id, stallId, requestedBy, assignedTo, priority, reason, notes || null, status,
+          notifiedVendorId, notifyVendor ? new Date() : null, vendorNoticeMessage,
+          createdAt, completedAt, completionNotes, completionSummary,
+        ]
       );
       for (const file of storedFiles) {
         await conn.query(
@@ -1476,8 +1583,19 @@ app.post("/api/violation-requests", requireAuth, requireRole("admin", "super_adm
     const status = String(req.body.status || (assignedOfficerId ? "assigned" : "pending"));
     const createdAt = req.body.createdAt ? new Date(req.body.createdAt) : new Date();
     const completedAt = req.body.completedAt ? new Date(req.body.completedAt) : (status === "completed" ? new Date() : null);
+    if (req.body.notifyVendor !== undefined && typeof req.body.notifyVendor !== "boolean") {
+      return res.status(400).json({ message: "Notify vendor must be selected." });
+    }
+    const notifyVendor = req.body.notifyVendor === true;
+    const vendorNoticeMessage = notifyVendor
+      ? String(req.body.vendorNoticeMessage || "").trim() || null
+      : null;
     if (!stallId || !reason) return res.status(400).json({ message: "Stall and reason are required." });
     if (!["pending", "assigned", "completed"].includes(status)) return res.status(400).json({ message: "Invalid status." });
+    const notifiedVendorId = notifyVendor ? await findActiveVendorForStall(stallId) : null;
+    if (notifyVendor && !notifiedVendorId) {
+      return res.status(409).json({ message: "This stall has no active vendor to notify. Choose the X option to send the request without a vendor notice." });
+    }
 
     const id = crypto.randomUUID();
     const conn = await db.connect();
@@ -1488,7 +1606,11 @@ app.post("/api/violation-requests", requireAuth, requireRole("admin", "super_adm
         [id, stallId, requestedBy, reason, category, violationId, status, assignedOfficerId, createdAt, completedAt]
       );
       await conn.query(
-        "INSERT INTO check_requests (id, stall_id, requested_by, assigned_to, priority, reason, category, notes, status, created_at, completed_at, completion_notes, completion_summary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+        `INSERT INTO check_requests
+          (id, stall_id, requested_by, assigned_to, priority, reason, category, notes, status,
+           vendor_notified_vendor_id, vendor_notified_at, vendor_notice_message,
+           created_at, completed_at, completion_notes, completion_summary)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
         [
           id,
           stallId,
@@ -1499,6 +1621,9 @@ app.post("/api/violation-requests", requireAuth, requireRole("admin", "super_adm
           category,
           "Generated from violation request.",
           status === "completed" ? "completed" : "pending",
+          notifiedVendorId,
+          notifyVendor ? new Date() : null,
+          vendorNoticeMessage,
           createdAt,
           status === "completed" ? completedAt || new Date() : null,
           "",
@@ -1571,23 +1696,21 @@ app.patch("/api/violation-requests/:id", requireAuth, requireRole("admin", "supe
   } catch (error) { next(error); }
 });
 
-app.get("/api/violations", requireAuth, requireRole("admin", "super_admin", "officer", "vendor"), async (req, res, next) => {
+app.get("/api/violations", requireAuth, requireRole("admin", "super_admin", "officer"), async (req, res, next) => {
   try {
-    const vendorId = req.auth.role === "vendor" ? req.auth.sub : null;
     // Staff working lists (Reports & Requests) want archived violations
     // hidden by default; a true historical count (e.g. Analytics) needs to
     // opt back in explicitly, since archiving never deletes the row.
-    const includeArchived = vendorId ? true : req.query.includeArchived === "true";
+    const includeArchived = req.query.includeArchived === "true";
     const { limit, offset } = parsePagination(req);
     if (limit == null) {
-      return res.json({ violations: await listViolationsInternal(vendorId, { includeArchived }) });
+      return res.json({ violations: await listViolationsInternal(null, { includeArchived }) });
     }
     // Paginated path queries directly instead of the shared "fetch every
     // row" internal helper (still used, unpaginated, by mutation responses
     // that need to return one just-changed row).
     const values = [];
     const conditions = [];
-    if (vendorId) { values.push(vendorId); conditions.push(`v.vendor_id = $${values.length}`); }
     if (!includeArchived) conditions.push("v.is_archived = false");
     const whereSql = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
     const total = Number((await db.query(`SELECT COUNT(*) FROM violations v${whereSql}`, values)).rows[0].count);
@@ -1595,7 +1718,8 @@ app.get("/api/violations", requireAuth, requireRole("admin", "super_admin", "off
     values.push(offset); const offsetParam = values.length;
     const { rows } = await db.query(`
       SELECT
-        v.id, v.stall_id, v.vendor_id, v.officer_id, v.category, v.description, v.status, v.remarks, v.created_at, v.resolved_at,
+        v.id, v.stall_id, v.vendor_id, v.officer_id, v.category, v.description, v.status, v.remarks,
+        v.vendor_notified_at, v.vendor_notice_message, v.created_at, v.resolved_at,
         s.stall_name, vp.name AS vendor_name, op.name AS officer_name
       FROM violations v
       LEFT JOIN stalls s ON s.id = v.stall_id
@@ -1613,18 +1737,42 @@ app.get("/api/violations", requireAuth, requireRole("admin", "super_admin", "off
 app.post("/api/violations", requireAuth, requireRole("admin", "super_admin", "officer", "vendor"), async (req, res, next) => {
   try {
     const stallId = String(req.body.stallId || "").trim();
+    if (req.body.notifyVendor !== undefined && typeof req.body.notifyVendor !== "boolean") {
+      return res.status(400).json({ message: "Notify vendor must be Yes or No." });
+    }
+    const notifyVendor = req.body.notifyVendor === true;
+    if (notifyVendor && req.auth.role !== "officer") {
+      return res.status(403).json({ message: "Only officers can notify a vendor about a violation." });
+    }
+    const vendorNoticeMessage = notifyVendor
+      ? String(req.body.vendorNoticeMessage || "").trim() || null
+      : null;
     // The client (mobile in particular) never actually sends this — resolve
     // it from whoever currently holds the stall, so the report shows a real
     // vendor name instead of always falling back to "Unknown".
-    let vendorId = req.body.vendorId ? String(req.body.vendorId).trim() : null;
-    if (!vendorId && stallId) {
+    let vendorId = null;
+    if (stallId) {
       const { rows: occupantRows } = await db.query(
-        "SELECT user_id FROM applications WHERE stall_id = $1 AND status = 'approved' ORDER BY date_applied DESC LIMIT 1",
+        `SELECT a.user_id
+         FROM applications a
+         JOIN profiles p ON p.id = a.user_id
+         WHERE a.stall_id = $1
+           AND a.status = 'approved'
+           AND p.is_archived = false
+         ORDER BY a.date_applied DESC
+         LIMIT 1`,
         [stallId]
       );
       vendorId = occupantRows[0]?.user_id ?? null;
     }
-    const officerId = req.body.officerId ? String(req.body.officerId).trim() : (req.auth.role === "officer" ? req.auth.sub : "44444444-4444-4444-8444-444444444444");
+    if (notifyVendor && !vendorId) {
+      return res.status(409).json({ message: "This stall has no active vendor to notify. Choose No to submit the report privately." });
+    }
+    const officerId = req.auth.role === "officer"
+      ? req.auth.sub
+      : req.body.officerId
+        ? String(req.body.officerId).trim()
+        : "44444444-4444-4444-8444-444444444444";
     const category = String(req.body.category || "").trim();
     const description = String(req.body.description || "").trim();
     const status = String(req.body.status || "open");
@@ -1644,8 +1792,14 @@ app.post("/api/violations", requireAuth, requireRole("admin", "super_admin", "of
     try {
       await conn.query("BEGIN");
       await conn.query(
-        "INSERT INTO violations (id, stall_id, vendor_id, officer_id, category, description, status, remarks, created_at, resolved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-        [id, stallId, vendorId, officerId, category, description, status, remarks || null, createdAt, resolvedAt]
+        `INSERT INTO violations
+          (id, stall_id, vendor_id, officer_id, category, description, status, remarks,
+           vendor_notified_at, vendor_notice_message, created_at, resolved_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [
+          id, stallId, vendorId, officerId, category, description, status, remarks || null,
+          notifyVendor ? new Date() : null, vendorNoticeMessage, createdAt, resolvedAt,
+        ]
       );
       for (const file of storedEvidence) {
         await conn.query(

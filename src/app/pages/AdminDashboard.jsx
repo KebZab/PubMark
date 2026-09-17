@@ -65,6 +65,7 @@ import { ContractRenewalsPanel } from "../components/ContractRenewalsPanel";
 import { showToast } from "../components/Toast";
 import { AttachmentLink } from "../components/AttachmentLink";
 import { FilePreviewLink } from "../components/FilePreviewLink";
+import { NotifyVendorChoice } from "../components/NotifyVendorChoice";
 import {
   buildPermitDeadlineRemarks,
   formatPermitDeadline,
@@ -223,6 +224,8 @@ export function AdminDashboard() {
   // that violation automatically.
   const [requestViolationId, setRequestViolationId] = useState(null);
   const [requestReason, setRequestReason] = useState("");
+  const [requestNotifyVendor, setRequestNotifyVendor] = useState(null);
+  const [requestVendorNoticeMessage, setRequestVendorNoticeMessage] = useState("");
   const [assigningRequest, setAssigningRequest] = useState(null);
   const [requestOfficers, setRequestOfficers] = useState([]);
   const [allViolations, setAllViolations] = useState([]);
@@ -742,6 +745,10 @@ export function AdminDashboard() {
 
   async function handleCreateCheckRequest() {
     if (!selectedStallForRequest || !requestReason.trim()) return;
+    if (requestNotifyVendor === null) {
+      showToast("Choose whether to notify the vendor.", "error");
+      return;
+    }
     try {
       await createViolationRequest({
         stallId: selectedStallForRequest.id,
@@ -751,12 +758,16 @@ export function AdminDashboard() {
         reason: requestReason.trim(),
         category: requestViolationCategory || null,
         violationId: requestViolationId,
+        notifyVendor: requestNotifyVendor,
+        vendorNoticeMessage: requestVendorNoticeMessage,
       });
 
       showToast("Violation check request created.", "success");
       setShowRequestModal(false);
       setSelectedStallForRequest(null);
       setRequestReason("");
+      setRequestNotifyVendor(null);
+      setRequestVendorNoticeMessage("");
       setRequestStallLocked(false);
       setRequestViolationId(null);
       setRequestViolationCategory("");
@@ -3175,12 +3186,23 @@ export function AdminDashboard() {
                 />
               </div>
 
+              <NotifyVendorChoice
+                notifyVendor={requestNotifyVendor}
+                vendorNoticeMessage={requestVendorNoticeMessage}
+                onChange={(patch) => {
+                  if (patch.notifyVendor !== undefined) setRequestNotifyVendor(patch.notifyVendor);
+                  if (patch.vendorNoticeMessage !== undefined) setRequestVendorNoticeMessage(patch.vendorNoticeMessage);
+                }}
+              />
+
               <div className="flex gap-3 pt-2">
                 <button
                   onClick={() => {
                     setShowRequestModal(false);
                     setSelectedStallForRequest(null);
                     setRequestReason("");
+                    setRequestNotifyVendor(null);
+                    setRequestVendorNoticeMessage("");
                     setRequestStallLocked(false);
                     setRequestViolationCategory("");
                     setRequestViolationId(null);
@@ -3191,7 +3213,7 @@ export function AdminDashboard() {
                 </button>
                 <button
                   onClick={handleCreateCheckRequest}
-                  disabled={!selectedStallForRequest || !requestReason.trim()}
+                  disabled={!selectedStallForRequest || !requestReason.trim() || requestNotifyVendor === null}
                   className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#14B8A6] to-[#0d9488] text-white rounded-xl text-sm font-medium hover:shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
                   <Plus className="w-4 h-4" />

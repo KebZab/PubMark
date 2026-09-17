@@ -21,6 +21,8 @@ export async function saveViolation(data) {
       status: data.status,
       evidence: data.evidence,
       remarks: data.remarks,
+      notifyVendor: data.notifyVendor,
+      vendorNoticeMessage: data.vendorNoticeMessage,
     }),
   });
   return response.violation;
