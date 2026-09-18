@@ -3,7 +3,7 @@
 .env
 .env.*
 !.env.example
-!.env.local
+mcpenv.txt
 server/.env
 server/.env.*
 !server/.env.example
@@ -18,4 +18,4 @@ web-build/
 dist-web/
 .expo/
 
-.vercel
+.vercel/
