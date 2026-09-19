@@ -114,33 +114,6 @@ export function Login() {
     setError("");
   }
 
-  const DEMO_ACCOUNTS = [
-    {
-      label: "Super Admin",
-      email: "superadmin@pubmark.com",
-      password: "super123",
-      color: "bg-purple-100 text-purple-700",
-    },
-    {
-      label: "Admin",
-      email: "admin@pubmark.com",
-      password: "admin123",
-      color: "bg-blue-100 text-blue-700",
-    },
-    {
-      label: "Vendor",
-      email: "juan@example.com",
-      password: "user123",
-      color: "bg-teal-100 text-teal-700",
-    },
-    {
-      label: "Officer",
-      email: "officer@pubmark.com",
-      password: "officer123",
-      color: "bg-amber-100 text-amber-700",
-    },
-  ];
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-teal-50 via-white to-cyan-50 flex items-center justify-center p-4">
       <div className="w-full max-w-5xl bg-white rounded-3xl shadow-2xl overflow-hidden grid lg:grid-cols-2">
@@ -294,25 +267,6 @@ export function Login() {
                   </div>
                 </div>
               )}
-
-              {/* Account credential shortcuts */}
-              <div className="mt-5">
-                <div className="flex flex-wrap gap-1.5 justify-center">
-                  {DEMO_ACCOUNTS.map((a) => (
-                    <button
-                      key={a.label}
-                      type="button"
-                      onClick={() => {
-                        setEmail(a.email);
-                        setPassword(a.password);
-                      }}
-                      className={`text-[10px] font-semibold px-2.5 py-1 rounded-full transition-all hover:scale-105 ${a.color}`}
-                    >
-                      {a.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
 
               <div className="mt-5 flex items-center justify-between">
                 <button
