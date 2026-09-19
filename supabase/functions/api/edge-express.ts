@@ -111,7 +111,8 @@ export default function express() {
       let body: any = {};
       if (!["GET", "HEAD"].includes(request.method)) {
         const text = await request.text();
-        if (text.length > 10 * 1024 * 1024) return Response.json({ message: "Request body is too large." }, { status: 413, headers: corsHeaders });
+        // Match Express: allow two 5 MB documents plus base64/JSON overhead.
+        if (new TextEncoder().encode(text).byteLength > 15 * 1024 * 1024) return Response.json({ message: "The combined attachments are too large. Please submit fewer or smaller files." }, { status: 413, headers: corsHeaders });
         if (text) {
           try { body = JSON.parse(text); }
           catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400, headers: corsHeaders }); }

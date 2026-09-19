@@ -1,8 +1,9 @@
 import { clearSession } from "../components/authStorage";
 
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "");
-const DEFAULT_CLOUD_API_BASE_URL =
-  "https://mkdkcrjtndqguambmduh.supabase.co/functions/v1/api";
+// Vercel forwards /api to the cloud backend. Keeping browser requests on
+// the site's origin avoids CORS failures and preserves session cookies.
+const DEFAULT_PRODUCTION_API_BASE_URL = "/api";
 // A configured URL pointing at "localhost" only works on the machine running
 // the backend. When the app is loaded from another device on the LAN (via
 // the host machine's IP), derive the API URL from that same host instead,
@@ -12,7 +13,7 @@ const API_BASE_URL =
     ? configuredApiBaseUrl
     : import.meta.env.DEV && typeof window !== "undefined"
       ? `${window.location.protocol}//${window.location.hostname}:4000/api`
-      : DEFAULT_CLOUD_API_BASE_URL;
+      : DEFAULT_PRODUCTION_API_BASE_URL;
 
 export class ApiConfigurationError extends Error {
   constructor() {

@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import pg from "pg";
 import crypto from "node:crypto";
+import { Buffer } from "node:buffer";
 import { importStallRows } from './stallImport.js';
 import nodemailer from "nodemailer";
 import { OAuth2Client } from "google-auth-library";
@@ -302,7 +303,9 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json({ limit: "10mb" }));
+// Two 5 MB application documents become about 13.4 MB when base64 encoded.
+// Individual decoded files remain limited to 5 MB by uploadAttachment.
+app.use(express.json({ limit: "15mb" }));
 
 function cookieOptions() { return { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", maxAge: 8 * 60 * 60 * 1000 }; }
 // Sets the session cookie (used by the web app) and returns the same token so

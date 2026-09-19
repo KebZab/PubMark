@@ -194,7 +194,8 @@ export function ApplicationForm() {
       const failed = results.length - succeeded.length;
 
       if (succeeded.length === 0) {
-        showToast("Failed to submit any applications. Please try again.", "error");
+        const error = results.find((result) => result.status === "rejected")?.reason;
+        showToast(error?.message || "Failed to submit any applications. Please try again.", "error");
         setSubmitting(false);
         return;
       }
